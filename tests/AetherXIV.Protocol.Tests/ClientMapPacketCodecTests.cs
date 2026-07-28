@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using AetherXIV.Protocol;
 
 namespace AetherXIV.Protocol.Tests;
@@ -144,5 +159,27 @@ public sealed class ClientMapPacketCodecTests
         Assert.Equal(new ClientLanguageCodePacket(1), new ClientLanguageCodePacketCodec().Decode(language));
         Assert.Equal(new ClientZoneInCompletePacket(55, -1), new ClientZoneInCompletePacketCodec().Decode(zoneIn));
         Assert.Equal(new ClientGroupCreatedPacket(99, "playerWork"), new ClientGroupCreatedPacketCodec().Decode(group));
+    }
+
+    [Fact]
+    public void ClientListObjectLifecycleAcknowledgeMatchesObservedSpawnAck()
+    {
+        ClientListObjectLifecycleAcknowledgePacket expected = new(
+            0x18,
+            ClientListObjectLifecycleAcknowledgePacket.ActorListType,
+            0,
+            0);
+        ClientListObjectLifecycleAcknowledgePacketCodec codec = new();
+
+        SubPacket encoded = codec.Encode(0x18, expected);
+        ClientListObjectLifecycleAcknowledgePacket decoded = codec.Decode(encoded);
+
+        Assert.Equal((ushort)0x0130, (ushort)encoded.Header.Opcode);
+        Assert.Equal((ushort)PacketOpcode.RunEventFunction, (ushort)encoded.Header.Opcode);
+        Assert.Equal(
+            "18000000112700000000000000000000",
+            Convert.ToHexString(encoded.Payload.Span));
+        Assert.Equal(expected, decoded);
+        Assert.True(decoded.IsCanonicalActorListAcknowledge);
     }
 }

@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Aether.Umbra.PluginApi;
@@ -28,6 +43,8 @@ internal struct UmbraNativeRenderEvent
     public bool IsPluginManagerOpen => (Reserved & 1u) != 0;
 
     public bool IsPluginManagerSettingsRequested => (Reserved & 2u) != 0;
+
+    public bool IsPluginManagerUpdatesRequested => (Reserved & 4u) != 0;
 }
 
 public sealed class UmbraRenderBridge
@@ -35,6 +52,7 @@ public sealed class UmbraRenderBridge
     private readonly UmbraRuntime runtime;
     private int renderThreadId;
     private int deviceGeneration;
+    private int publishedPluginUpdateCount = -1;
     private long frameCount;
 
     internal UmbraRenderBridge(UmbraRuntime runtime)
@@ -95,12 +113,19 @@ public sealed class UmbraRenderBridge
 
         TimeSpan delta = TimeSpan.FromSeconds(Math.Clamp(renderEvent.DeltaSeconds, 0.0f, 0.25f));
         runtime.SynchronizePluginManagerOpen(renderEvent.IsPluginManagerOpen);
-        if (renderEvent.IsPluginManagerSettingsRequested
+        if (renderEvent.IsPluginManagerUpdatesRequested
+            && runtime.PluginManager.ActiveTab != UmbraPluginManagerTab.Updates)
+        {
+            runtime.SetPluginManagerTab(UmbraPluginManagerTab.Updates);
+            runtime.Log.Info("umbra_plugin_manager_updates_requested=true");
+        }
+        else if (renderEvent.IsPluginManagerSettingsRequested
             && runtime.PluginManager.ActiveTab != UmbraPluginManagerTab.Settings)
         {
             runtime.SetPluginManagerTab(UmbraPluginManagerTab.Settings);
             runtime.Log.Info("umbra_plugin_manager_settings_requested=true");
         }
+        PublishPluginUpdateCount();
         ulong frameNumber = renderEvent.FrameNumber;
         Interlocked.Exchange(ref frameCount, renderEvent.FrameNumber);
 
@@ -116,6 +141,25 @@ public sealed class UmbraRenderBridge
         runtime.Plugins.Update(delta);
         runtime.Draw(context);
         return 0;
+    }
+
+    private void PublishPluginUpdateCount()
+    {
+        int updateCount = runtime.PluginManager.Updates.Count;
+        if (Interlocked.Exchange(ref publishedPluginUpdateCount, updateCount) == updateCount
+            || !OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            UmbraNativeUi.SetPluginUpdateCount(updateCount);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        {
+            runtime.Log.Warning($"umbra_plugin_update_notification_unavailable error={ex.Message}");
+        }
     }
 }
 

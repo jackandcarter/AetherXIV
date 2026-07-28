@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using AetherXIV.Data;
 using MySqlConnector;
 using System.Security.Cryptography;
@@ -27,7 +42,7 @@ public static class AetherXivDatabaseCompatibility
     public const string CompatibilityId = "aetherxiv-direct-core-v2";
     public const string BaselineId = "20260716_000001_ffxiv_server_v2_baseline";
     public const string GuildleveContentMigration = "20260716_000005_guildleve_content_contract.sql";
-    public const string LatestDirectCoreMigration = "20260723_000026_class_job_progression.sql";
+    public const string LatestDirectCoreMigration = "20260724_000028_social_state_persistence.sql";
     public static readonly IReadOnlyList<string> RequiredDirectCoreMigrations =
     [
         "20260627_battlenpc_spawn_audit_pins.sql",
@@ -57,7 +72,9 @@ public static class AetherXivDatabaseCompatibility
         "20260722_000023_gridania_man0g1_escort_boundary.sql",
         "20260722_000024_gridania_man0g1_escort_boundary_polarity.sql",
         "20260722_000025_gridania_man0g1_escort_actor_presentation.sql",
-        "20260723_000026_class_job_progression.sql"
+        "20260723_000026_class_job_progression.sql",
+        "20260724_000027_correct_1x_player_baselines.sql",
+        "20260724_000028_social_state_persistence.sql"
     ];
     public const string NpcServiceCatalogId = "zone-service-npcs-1.23b";
     public const string NpcServiceCatalogVersion = "2026.07.19.1";

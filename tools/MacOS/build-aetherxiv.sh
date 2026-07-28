@@ -9,6 +9,16 @@ fi
 
 CONFIGURATION="${AETHERXIV_BUILD_CONFIGURATION:-Release}"
 BUILD_NUMBER="$(tr -d '[:space:]' < "${ROOT_DIR}/build-number.txt")"
+grep -Fq "public const int BuildNumber = ${BUILD_NUMBER};" \
+  "${ROOT_DIR}/src/AetherXIV.Core/AetherXivBuildInfo.cs" || {
+  echo "Build identity mismatch: build-number.txt and AetherXivBuildInfo.cs must agree." >&2
+  exit 3
+}
+grep -Fq "<AetherXivBuildNumber>${BUILD_NUMBER}</AetherXivBuildNumber>" \
+  "${ROOT_DIR}/Directory.Build.props" || {
+  echo "Build identity mismatch: build-number.txt and Directory.Build.props must agree." >&2
+  exit 3
+}
 if (($# > 0)); then
   CONFIGURATION="$1"
   shift
@@ -311,6 +321,10 @@ create_core_app_bundle
 python3 "${ROOT_DIR}/tools/Universal/create-direct-core-database-package.py" \
   --repo-root "${ROOT_DIR}" \
   --output-dir "${OUTPUT_ROOT}/Database"
+cp "${ROOT_DIR}/LICENSE" "${OUTPUT_ROOT}/LICENSE"
+cp "${ROOT_DIR}/THIRD_PARTY_NOTICES.md" "${OUTPUT_ROOT}/THIRD_PARTY_NOTICES.md"
+cp "${ROOT_DIR}/MODIFICATIONS.md" "${OUTPUT_ROOT}/MODIFICATIONS.md"
+cp "${ROOT_DIR}/TRADEMARKS.md" "${OUTPUT_ROOT}/TRADEMARKS.md"
 write_build_manifest
 cleanup_staging
 cleanup_release_work

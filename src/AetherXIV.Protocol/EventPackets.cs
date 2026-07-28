@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using System.Text;
 
 namespace AetherXIV.Protocol;
@@ -269,7 +284,7 @@ public readonly record struct RunEventFunctionPacket(
 
 public sealed class RunEventFunctionPacketCodec : IPacketCodec<RunEventFunctionPacket>
 {
-    public const int PayloadSize = 0x2B8 - 0x20;
+    public const int PayloadSize = 0xB0 - 0x20;
 
     public PacketOpcode Opcode => PacketOpcode.RunEventFunction;
 
@@ -301,7 +316,13 @@ public sealed class RunEventFunctionPacketCodec : IPacketCodec<RunEventFunctionP
         payload[8] = packet.EventType;
         EventStartPacketCodec.WriteFixedString(payload.AsSpan(9), 0x20, packet.EventName);
         EventStartPacketCodec.WriteFixedString(payload.AsSpan(0x29), 0x20, packet.FunctionName);
-        LuaParameterCodec.Encode(packet.Parameters).CopyTo(payload.AsSpan(0x49));
+        byte[] encodedParameters = LuaParameterCodec.Encode(packet.Parameters);
+        if (encodedParameters.Length > payload.Length - 0x49)
+            throw new ArgumentException(
+                $"Run event function parameters exceed the 0x{PayloadSize + 0x20:X} packet contract.",
+                nameof(packet));
+
+        encodedParameters.CopyTo(payload.AsSpan(0x49));
         return SubPacket.Create(Opcode, sourceActorId, payload);
     }
 }

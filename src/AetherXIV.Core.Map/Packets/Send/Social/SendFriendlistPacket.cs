@@ -9,33 +9,33 @@ namespace AetherXIV.Core.Map.packets.send.social
     class SendFriendlistPacket
     {
         public const ushort OPCODE = 0x01CE;
-        public const uint PACKET_SIZE = 0x686;
+        public const uint PACKET_SIZE = 0x348;
+        public const int MAX_ENTRIES = 20;
+        public const int NAME_SIZE = 0x20;
+        public const int ENTRY_SIZE = 0x28;
 
-        public static SubPacket BuildPacket(uint sourceActorId, Tuple<long, string>[] friends, ref int offset)
+        public static SubPacket BuildPacket(uint sourceActorId, uint pageIndex, Tuple<long, string>[] friends)
         {
             byte[] data = new byte[PACKET_SIZE - 0x20];
 
             using (MemoryStream mem = new MemoryStream(data))
             {
                 using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {                    
-                    binWriter.Write((UInt32)0);
-                    int max;
+                {
+                    binWriter.Write(pageIndex);
+                    int start = checked((int)pageIndex * MAX_ENTRIES);
+                    int count = Math.Max(0, Math.Min(MAX_ENTRIES, friends.Length - start));
+                    binWriter.Write((UInt32)count);
 
-                    if (friends.Length - offset <= 0x32)
-                        max = friends.Length - offset;
-                    else
-                        max = 0x32;
-
-                    binWriter.Write((UInt32)max);
-
-                    for (int i = 0; i < max; i++)
+                    for (int i = 0; i < count; i++)
                     {
-                        binWriter.Write(Encoding.ASCII.GetBytes(friends[i].Item2), 0, Encoding.ASCII.GetByteCount(friends[i].Item2) >= 0x20 ? 0x20 : Encoding.ASCII.GetByteCount(friends[i].Item2));
-                        binWriter.Write((UInt64)friends[i].Item1);
+                        Tuple<long, string> friend = friends[start + i];
+                        byte[] encoded = Encoding.ASCII.GetBytes(friend.Item2 ?? "");
+                        binWriter.Write(encoded, 0, Math.Min(encoded.Length, NAME_SIZE));
+                        binWriter.BaseStream.Position = 0x08 + (i * ENTRY_SIZE) + NAME_SIZE;
+                        binWriter.Write((UInt64)friend.Item1);
+                        binWriter.BaseStream.Position = 0x08 + ((i + 1) * ENTRY_SIZE);
                     }
-
-                    offset += max;
                 }
             }
 

@@ -1,3 +1,17 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using Avalonia;
@@ -30,6 +44,7 @@ public sealed partial class MainWindow : Window
     private CancellationTokenSource? patchCancellation;
     private bool runtimeBusy;
     private LauncherConfig? launcherConfig;
+    private LauncherConfig? umbraDevUnitConfig;
     private RuntimeArtifact? selectedRuntimeArtifact;
     private ManagedRuntimeInstall? managedRuntimeInstall;
     private UmbraFrameworkCatalog? umbraFrameworkCatalog;
@@ -58,6 +73,7 @@ public sealed partial class MainWindow : Window
     private const int ServerPresetDemiDevUnit = 1;
     private const int ServerPresetCustom = 2;
     private const string DiscordInviteUrl = "https://discord.gg/9w4Bjqu3Tj";
+    private const string SourceRepositoryUrl = "https://github.com/jackandcarter/AetherXIV";
     private const int HomeReelIntervalSeconds = 7;
     private const string HomeBackgroundAsset = "avares://AetherXIV.Launcher.App/Image/back.jpg";
     private const string HomeReelAssetFolder = "avares://AetherXIV.Launcher.App/Image/Reels/";
@@ -83,6 +99,7 @@ public sealed partial class MainWindow : Window
         RefreshInstalledUmbraFrameworkStatus();
         ValidateClientIfSelected();
         UpdateHomeState();
+        AboutVersionText.Text = $"{AetherXivBuildInfo.VersionText} · {AetherXivBuildInfo.BuildText}";
         ApplyWindowSizeForSelectedTab();
         Closing += (_, _) =>
         {
@@ -338,6 +355,25 @@ public sealed partial class MainWindow : Window
         catch (Exception ex)
         {
             AppendLog($"Discord invite failed to open: {ex.Message}");
+        }
+    }
+
+    private void OpenSourceRepository_Click(
+        object? sender,
+        Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = SourceRepositoryUrl,
+                UseShellExecute = true
+            });
+            AppendLog("AetherXIV source repository opened.");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"AetherXIV source repository failed to open: {ex.Message}");
         }
     }
 
@@ -1402,6 +1438,19 @@ public sealed partial class MainWindow : Window
     private async void InstallUmbra_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         await RefreshUmbraFrameworkCatalogAsync();
+        if (selectedUmbraFrameworkArtifact is null)
+            return;
+
+        UmbraFrameworkInstall? current = UmbraInstallStore.FindInstalled(selectedUmbraFrameworkArtifact);
+        if (current is not null)
+        {
+            umbraFrameworkInstall = current;
+            AppendLog($"Umbra framework is current: {current.Name} {current.Version}.");
+            UpdateUmbraUiState();
+            return;
+        }
+
+        AppendLog($"Umbra framework update available: {selectedUmbraFrameworkArtifact.Version}.");
         await InstallSelectedUmbraFrameworkAsync();
     }
 
@@ -1825,10 +1874,14 @@ public sealed partial class MainWindow : Window
         AppendLog($"Umbra enabled for launch: {install.Name} {install.Version}");
         AppendLog($"Umbra log: {logPath}");
 
+        IReadOnlyList<string> officialCatalogUrls =
+            umbraDevUnitConfig?.PluginCatalogUrls is { Count: > 0 } configuredCatalogs
+                ? configuredCatalogs
+                : new[] { "umbra/plugin-catalog" };
         IReadOnlyList<UmbraRepositorySource> repositorySources = UmbraRepositoryOptions.BuildEffectiveRepositorySources(
             settings,
-            launcherConfig?.PluginCatalogUrls ?? Array.Empty<string>(),
-            LauncherServiceUrlBox.Text);
+            officialCatalogUrls,
+            LauncherProfile.DemiDevUnitLauncherServiceUrl);
 
         return new UmbraLaunchOptions(
             true,
@@ -2140,20 +2193,16 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshUmbraFrameworkCatalogAsync(CancellationToken cancellationToken = default)
     {
-        string serviceUrl = LauncherServiceUrlBox.Text ?? "";
-        if (string.IsNullOrWhiteSpace(serviceUrl))
-        {
-            RefreshInstalledUmbraFrameworkStatus();
-            return;
-        }
-
         try
         {
-            AppendLog("Umbra framework package check started.");
-            LauncherApiClient client = new(httpClient, serviceUrl);
+            AppendLog("Umbra framework package check started against Demi Dev Unit.");
+            LauncherApiClient client = new(
+                httpClient,
+                LauncherProfile.DemiDevUnitLauncherServiceUrl);
+            umbraDevUnitConfig = await client.GetConfigAsync(cancellationToken);
             umbraFrameworkCatalog = await client.GetUmbraFrameworkCatalogAsync(
                 "win-x86",
-                launcherConfig?.ClientPluginFrameworkCatalogUrl,
+                umbraDevUnitConfig?.ClientPluginFrameworkCatalogUrl,
                 cancellationToken);
             selectedUmbraFrameworkArtifact = umbraFrameworkCatalog?.SelectDefault();
 
@@ -2591,6 +2640,7 @@ public sealed partial class MainWindow : Window
     {
         UmbraSettings normalized = settings.Normalize();
         UmbraEnabledBox.IsChecked = normalized.Enabled;
+        UmbraSafeModeBox.IsChecked = normalized.SafeMode;
     }
 
     private void SaveCurrentProfile()
@@ -2624,7 +2674,7 @@ public sealed partial class MainWindow : Window
         {
             Enabled = UmbraEnabledBox.IsChecked == true,
             PluginDirectory = UmbraInstallStore.PluginsRoot,
-            SafeMode = false,
+            SafeMode = UmbraSafeModeBox.IsChecked == true,
             LoadDelayMilliseconds = UmbraSettings.DefaultLoadDelayMilliseconds,
             UseOfficialRepository = true,
             CustomRepositoryUrls = Array.Empty<string>()
@@ -2807,6 +2857,7 @@ public sealed partial class MainWindow : Window
     {
         InstallUmbraButton.IsEnabled = !isBusy;
         UmbraEnabledBox.IsEnabled = !isBusy;
+        UmbraSafeModeBox.IsEnabled = !isBusy;
     }
 
     private void UpdateRuntimeUiState()
@@ -2853,6 +2904,7 @@ public sealed partial class MainWindow : Window
         bool isBusy = umbraCancellation is not null;
         InstallUmbraButton.IsEnabled = !isBusy;
         UmbraEnabledBox.IsEnabled = !isBusy;
+        UmbraSafeModeBox.IsEnabled = !isBusy;
     }
 
     private static string FormatUmbraFrameworkArtifact(UmbraFrameworkArtifact artifact)

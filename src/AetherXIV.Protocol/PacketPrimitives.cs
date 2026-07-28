@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using System.Buffers.Binary;
 
 namespace AetherXIV.Protocol;
@@ -26,6 +41,7 @@ public enum PacketOpcode : ushort
     DeleteAllActors = 0x0007,
     ServerZoneInstanceEnd = 0x0007,
     ServerZoneInstanceActors = 0x0008,
+    ServerZoneInstanceKeepActorsX32 = 0x000A,
     LobbyAccountList = 0x000C,
     SetMusic = 0x000C,
     SetWeather = 0x000D,
@@ -51,6 +67,7 @@ public enum PacketOpcode : ushort
     MoveActorToPosition = 0x00CF,
     ClientCountdownRequest = 0x00CF,
     SetActorSpeed = 0x00D0,
+    SetActorEventTarget = 0x00D2,
     ZoneTransitionState = 0x00E2,
     SetActorQuestGraphic = 0x00E3,
     StartCountdown = 0x00E5,
@@ -65,6 +82,7 @@ public enum PacketOpcode : ushort
     SetTalkEventCondition = 0x012E,
     ClientParameterDataRequest = 0x012F,
     KickEvent = 0x012F,
+    ClientListObjectLifecycleAcknowledge = 0x0130,
     RunEventFunction = 0x0130,
     ClientUpdateItemPackage = 0x0131,
     EndEvent = 0x0131,

@@ -87,6 +87,10 @@ for configuration in "${configurations[@]}"; do
     platform_root="${configuration_root}/${platform}"
     [[ -d "${platform_root}" ]] || continue
     verify_file "${platform_root}/build-manifest.txt"
+    verify_file "${platform_root}/LICENSE"
+    verify_file "${platform_root}/THIRD_PARTY_NOTICES.md"
+    verify_file "${platform_root}/MODIFICATIONS.md"
+    verify_file "${platform_root}/TRADEMARKS.md"
     grep -Fxq 'product_version=2.0' "${platform_root}/build-manifest.txt" || {
       echo "Build manifest has the wrong product version: ${platform_root}" >&2
       exit 9

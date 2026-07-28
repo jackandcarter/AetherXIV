@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using System.Text.Json;
 using System.Text;
 using AetherXIV.Protocol;
@@ -207,6 +222,7 @@ public sealed class OfficialTraceFixtureCodecTests
         WireLegacySubPacket endSubPacket = Assert.Single(endDecoded.SubPackets);
         Assert.Equal(PacketOpcode.RunEventFunction, runSubPacket.Opcode);
         Assert.Equal(PacketOpcode.EndEvent, endSubPacket.Opcode);
+        Assert.Equal(0xB0, runSubPacket.Payload.Length + 0x20);
 
         RunEventFunctionPacket run = new RunEventFunctionPacketCodec().Decode(runSubPacket.ToSubPacket());
         Assert.Equal(0x029B2941u, run.TriggerActorId);
@@ -230,6 +246,29 @@ public sealed class OfficialTraceFixtureCodecTests
         Assert.Equal(0x029B2941u, end.SourcePlayerActorId);
         Assert.Equal(1, end.EventType);
         Assert.Equal("talkDefault", end.EventName);
+    }
+
+    [Fact]
+    public void WorldSmallTalkFixtureSetsAndClearsTheEventTarget()
+    {
+        IReadOnlyList<FixtureFrame> frames = LoadFixtureFrames(
+            "world-small-talk-louisoix-observed.json",
+            "small_talk_louisoix.pcapng");
+        IReadOnlyList<WireLegacySubPacket> startPackets = DecodeTcpSegment(
+            frames.Single(item => item.FrameIndex == 25).PayloadHex);
+        IReadOnlyList<WireLegacySubPacket> clearPackets = DecodeTcpSegment(
+            frames.Single(item => item.FrameIndex == 68).PayloadHex);
+
+        SetActorEventTargetPacket start = new SetActorEventTargetPacketCodec().Decode(
+            Assert.Single(startPackets, packet => packet.Opcode == PacketOpcode.SetActorEventTarget).ToSubPacket());
+        SetActorEventTargetPacket clear = new SetActorEventTargetPacketCodec().Decode(
+            Assert.Single(clearPackets, packet => packet.Opcode == PacketOpcode.SetActorEventTarget).ToSubPacket());
+
+        Assert.Equal(0x46700082u, start.TargetActorId);
+        Assert.Equal(SetActorEventTargetPacket.InvalidActorId, clear.TargetActorId);
+        Assert.True(
+            startPackets.ToList().FindIndex(packet => packet.Opcode == PacketOpcode.SetActorEventTarget)
+            < startPackets.ToList().FindIndex(packet => packet.Opcode == PacketOpcode.RunEventFunction));
     }
 
     [Fact]
@@ -428,6 +467,98 @@ public sealed class OfficialTraceFixtureCodecTests
     }
 
     [Fact]
+    public void WorldRoomExitClosesTalkBeforeExitStateAndFinishesWithRetailReadyAck()
+    {
+        IReadOnlyList<FixtureFrame> frames = LoadFixtureFrames(
+            "world-room-exit-observed.json",
+            "move_out_of_room.pcapng");
+        IReadOnlyList<WireLegacySubPacket> exit = DecodeTcpSegment(
+            frames.Single(frame => frame.FrameIndex == 49).PayloadHex);
+
+        int endEventIndex = exit.ToList().FindIndex(packet =>
+            packet.Opcode == PacketOpcode.EndEvent);
+        int transitionIndex = exit.ToList().FindIndex(packet =>
+            packet.Opcode == PacketOpcode.ZoneTransitionState);
+
+        Assert.InRange(endEventIndex, 0, transitionIndex - 1);
+        Assert.Equal(
+            0x0F,
+            new ZoneTransitionStatePacketCodec()
+                .Decode(exit[transitionIndex].ToSubPacket())
+                .State);
+
+        IReadOnlyList<WireLegacySubPacket> bootstrap = DecodeCompleteTcpSegment(
+            frames.Single(frame => frame.FrameIndex == 117).PayloadHex);
+        int beginIndex = bootstrap.ToList().FindIndex(packet =>
+            packet.Opcode == PacketOpcode.ServerZoneInstanceBegin);
+        int keepActorsX32Index = bootstrap.ToList().FindIndex(packet =>
+            packet.Opcode == PacketOpcode.ServerZoneInstanceKeepActorsX32);
+        int firstKeepActorsX08Index = bootstrap.ToList().FindIndex(packet =>
+            packet.Opcode == PacketOpcode.ServerZoneInstanceActors);
+        int endIndex = bootstrap.ToList().FindIndex(packet =>
+            packet.Opcode == PacketOpcode.ServerZoneInstanceEnd);
+
+        Assert.InRange(beginIndex, 0, keepActorsX32Index - 1);
+        Assert.InRange(keepActorsX32Index, beginIndex + 1, firstKeepActorsX08Index - 1);
+        Assert.InRange(firstKeepActorsX08Index, keepActorsX32Index + 1, endIndex - 1);
+
+        ServerZoneInstanceKeepActorsX32Packet keepActorsX32 =
+            new ServerZoneInstanceKeepActorsX32PacketCodec().Decode(
+                bootstrap[keepActorsX32Index].ToSubPacket());
+        Assert.Equal(
+            [
+                0x5FF80001u, 0x44D80002u, 0x5FF80002u, 0x44D80004u,
+                0x44D80001u, 0x44D80007u, 0x44D80009u, 0x44D8000Au,
+                0x44D8000Bu, 0x44D8000Cu, 0x44D8000Du, 0x44D80008u,
+                0x44D8000Eu, 0x44D8000Fu, 0x44D80010u, 0x44D80011u,
+                0x44D80013u, 0x44D80014u, 0x44D80012u, 0x44D80016u,
+                0x44D80017u, 0x44D80018u, 0x44D80015u, 0x44D8001Du,
+                0x44D8001Fu, 0x44D80020u, 0x44D80021u, 0x44D80022u,
+                0x44D80023u, 0x44D80024u, 0x44D80026u, 0x44D80027u
+            ],
+            keepActorsX32.ActorIds);
+
+        ServerZoneInstanceActorsPacket[] keepActorsX08 = bootstrap
+            .Where(packet => packet.Opcode == PacketOpcode.ServerZoneInstanceActors)
+            .Select(packet => new ServerZoneInstanceActorsPacketCodec().Decode(packet.ToSubPacket()))
+            .ToArray();
+        Assert.Equal([8, 5], keepActorsX08.Select(packet => packet.ActorIds.Count).ToArray());
+        Assert.Equal(0x029B2941u, keepActorsX08[^1].ActorIds[^1]);
+        Assert.Equal(45, keepActorsX32.ActorIds.Count + keepActorsX08.Sum(packet => packet.ActorIds.Count));
+
+        WireLegacySubPacket ready = Assert.Single(DecodeTcpSegment(
+            frames.Single(frame => frame.FrameIndex == 225).PayloadHex));
+        ClientZoneInCompletePacket completion =
+            new ClientZoneInCompletePacketCodec().Decode(ready.ToSubPacket());
+
+        Assert.Equal(PacketOpcode.ClientZoneInComplete, ready.Opcode);
+        Assert.Equal(-1, completion.Unknown);
+        Assert.Equal([49, 117, 225], frames.Select(frame => frame.FrameIndex).ToArray());
+
+        string fixturePath = FindFixturePath(Path.Combine(
+            "tests",
+            "fixtures",
+            "trace-evidence",
+            "world-room-exit-observed.json"));
+        using JsonDocument fixtureDocument =
+            JsonDocument.Parse(File.ReadAllBytes(fixturePath));
+        JsonElement timing = fixtureDocument.RootElement
+            .GetProperty("captures")[0]
+            .GetProperty("timingEvidence");
+        Assert.Equal(
+            6059.397,
+            timing.GetProperty("firstDestinationAddActorDelayMilliseconds")
+                .GetDouble(),
+            precision: 3);
+        Assert.Equal(
+            1269.541,
+            timing.GetProperty("destinationBootstrapDurationMilliseconds")
+                .GetDouble(),
+            precision: 3);
+        Assert.Equal(8, timing.GetProperty("observedActorBatchMaximum").GetInt32());
+    }
+
+    [Fact]
     public void WorldCutsceneFixtureConfirmsDirectionSpecificStatePacketWithoutServerResponseContract()
     {
         string fixturePath = FindFixturePath(Path.Combine(
@@ -535,6 +666,19 @@ public sealed class OfficialTraceFixtureCodecTests
             "party_battle_leve.pcapng");
         IReadOnlyList<WireLegacySubPacket> accepted = DecodeTcpSegment(
             fixtures.Single(frame => frame.FrameIndex == 5123).PayloadHex);
+        WireLegacySubPacket observedMultiResult = Assert.Single(
+            accepted,
+            packet => packet.Opcode == PacketOpcode.CommandResultX10);
+        CommandResultX10Packet decodedMultiResult = new CommandResultX10PacketCodec().Decode(
+            observedMultiResult.ToSubPacket());
+        SubPacket reencodedMultiResult = new CommandResultX10PacketCodec().Encode(
+            observedMultiResult.SourceActorId,
+            decodedMultiResult);
+
+        Assert.Equal(0xD8 - 0x20, observedMultiResult.ToSubPacket().Payload.Length);
+        Assert.Equal(
+            observedMultiResult.ToSubPacket().Payload.ToArray(),
+            reencodedMultiResult.Payload.ToArray());
 
         int castStateIndex = accepted.ToList().FindIndex(packet =>
             packet.Opcode == PacketOpcode.SetActorProperty

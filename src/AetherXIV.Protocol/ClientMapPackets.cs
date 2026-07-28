@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using System.Text;
 using static AetherXIV.Protocol.ClientMapPacketCodecHelpers;
 
@@ -344,6 +359,52 @@ public sealed class ClientParameterDataRequestPacketCodec : IPacketCodec<ClientP
         byte[] payload = new byte[0x28];
         PacketBinary.WriteUInt32LittleEndian(payload, packet.ActorId);
         WriteNullTerminatedAscii(payload.AsSpan(4), 0x20, packet.ParameterName);
+        return SubPacket.Create(Opcode, sourceActorId, payload);
+    }
+}
+
+public readonly record struct ClientListObjectLifecycleAcknowledgePacket(
+    uint ActorId,
+    uint ListType,
+    uint Reserved0,
+    uint Reserved1)
+{
+    public const uint ActorListType = 0x2711;
+
+    public bool IsCanonicalActorListAcknowledge =>
+        ListType == ActorListType && Reserved0 == 0 && Reserved1 == 0;
+}
+
+public sealed class ClientListObjectLifecycleAcknowledgePacketCodec
+    : IPacketCodec<ClientListObjectLifecycleAcknowledgePacket>
+{
+    public const int PayloadSize = 0x10;
+
+    public PacketOpcode Opcode => PacketOpcode.ClientListObjectLifecycleAcknowledge;
+
+    public Type PacketType => typeof(ClientListObjectLifecycleAcknowledgePacket);
+
+    public ClientListObjectLifecycleAcknowledgePacket Decode(SubPacket packet)
+    {
+        EnsureOpcode(packet, Opcode);
+        ReadOnlySpan<byte> payload = packet.Payload.Span;
+        RequirePayload(payload, PayloadSize, "client list-object lifecycle acknowledge");
+        return new ClientListObjectLifecycleAcknowledgePacket(
+            PacketBinary.ReadUInt32LittleEndian(payload),
+            PacketBinary.ReadUInt32LittleEndian(payload[4..]),
+            PacketBinary.ReadUInt32LittleEndian(payload[8..]),
+            PacketBinary.ReadUInt32LittleEndian(payload[12..]));
+    }
+
+    public SubPacket Encode(
+        uint sourceActorId,
+        ClientListObjectLifecycleAcknowledgePacket packet)
+    {
+        byte[] payload = new byte[PayloadSize];
+        PacketBinary.WriteUInt32LittleEndian(payload, packet.ActorId);
+        PacketBinary.WriteUInt32LittleEndian(payload.AsSpan(4), packet.ListType);
+        PacketBinary.WriteUInt32LittleEndian(payload.AsSpan(8), packet.Reserved0);
+        PacketBinary.WriteUInt32LittleEndian(payload.AsSpan(12), packet.Reserved1);
         return SubPacket.Create(Opcode, sourceActorId, payload);
     }
 }

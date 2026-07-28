@@ -40,3 +40,13 @@ written beneath the ignored `bin/build/Release` directory.
 AetherXIV does not distribute the Final Fantasy XIV client, patches, or Square
 Enix assets. Each user must provide a legally obtained Final Fantasy XIV 1.23b
 client and any required patch library.
+
+## License and attribution
+
+AetherXIV is free software licensed under the
+[GNU Affero General Public License, version 3 or later](LICENSE).
+
+- [Development and modification notice](MODIFICATIONS.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [Contribution policy](CONTRIBUTING.md)
+- [Name and branding policy](TRADEMARKS.md)

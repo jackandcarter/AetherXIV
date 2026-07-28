@@ -8,9 +8,10 @@ namespace AetherXIV.Core.Map.packets.send.social
     class FriendStatusPacket
     {
         public const ushort OPCODE = 0x01CF;
-        public const uint PACKET_SIZE = 0x686;
+        public const uint PACKET_SIZE = 0x668;
+        public const int MAX_ENTRIES = 100;
 
-        public static SubPacket BuildPacket(uint sourceActorId, Tuple<long, bool>[] friendStatus)
+        public static SubPacket BuildPacket(uint sourceActorId, uint pageIndex, Tuple<long, bool>[] friendStatus)
         {
             byte[] data = new byte[PACKET_SIZE - 0x20];
 
@@ -18,15 +19,13 @@ namespace AetherXIV.Core.Map.packets.send.social
             {
                 using (BinaryWriter binWriter = new BinaryWriter(mem))
                 {
-                    binWriter.Write((UInt32)0);
+                    binWriter.Write(pageIndex);
+                    int start = checked((int)pageIndex * MAX_ENTRIES);
                     int max;
 
                     if (friendStatus != null)
                     {
-                        if (friendStatus.Length <= 200)
-                            max = friendStatus.Length;
-                        else
-                            max = 200;
+                        max = Math.Max(0, Math.Min(MAX_ENTRIES, friendStatus.Length - start));
                     }
                     else
                         max = 0;
@@ -35,8 +34,8 @@ namespace AetherXIV.Core.Map.packets.send.social
 
                     for (int i = 0; i < max; i++)
                     {
-                        binWriter.Write((UInt64)friendStatus[i].Item1);
-                        binWriter.Write((UInt64)(friendStatus[i].Item2 ? 1 : 0));
+                        binWriter.Write((UInt64)friendStatus[start + i].Item1);
+                        binWriter.Write((UInt64)(friendStatus[start + i].Item2 ? 1 : 0));
                     }
 
                 }

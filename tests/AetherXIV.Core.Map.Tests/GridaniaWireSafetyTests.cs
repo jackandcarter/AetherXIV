@@ -1,9 +1,26 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+using AetherXIV.Core.Common;
 using AetherXIV.Core.Map.Actors;
 using AetherXIV.Core.Map.Actors.Chara;
 using AetherXIV.Core.Map.actors.group;
 using AetherXIV.Core.Map.lua;
 using AetherXIV.Core.Map.packets.send.actor;
 using AetherXIV.Core.Map.packets.send.actor.battle;
+using AetherXIV.Core.Map.packets.send.events;
 using AetherXIV.Core.Map.packets.send.group;
 using MoonSharp.Interpreter;
 using MoonSharp.Interpreter.Interop;
@@ -12,6 +29,36 @@ namespace AetherXIV.Core.Map.Tests;
 
 public sealed class GridaniaWireSafetyTests
 {
+    [Fact]
+    public void OrdinaryRunEventFunctionUsesCompactRetailEnvelope()
+    {
+        SubPacket packet = RunEventFunctionPacket.BuildPacket(
+            0x10001,
+            0x20002,
+            "talkDefault",
+            1,
+            "delegateEvent",
+            LuaUtils.CreateLuaParamList(0x10001u, 0xA0F1ADB6u, "processEvent110"));
+
+        Assert.Equal(0xB0, packet.header.subpacketSize);
+        Assert.Equal(0xB0 - 0x20, packet.data.Length);
+    }
+
+    [Fact]
+    public void DirectorNoticeRunEventFunctionUsesCompactRetailEnvelope()
+    {
+        SubPacket packet = RunEventFunctionPacket.BuildPacket(
+            0x10001,
+            0x4530000B,
+            "noticeEvent",
+            5,
+            "delegateEvent",
+            LuaUtils.CreateLuaParamList(0x10001u, 0xA0F1ADB6u, "processEventTu_001"));
+
+        Assert.Equal(0xB0, packet.header.subpacketSize);
+        Assert.Equal(0xB0 - 0x20, packet.data.Length);
+    }
+
     [Fact]
     public void QuestRuntimeExposesSequenceAndFourPersistentCounters()
     {
@@ -86,7 +133,7 @@ public sealed class GridaniaWireSafetyTests
     }
 
     [Fact]
-    public void GridaniaPostWarpDirectorRunsTutorialAndAlwaysClosesTheNotice()
+    public void GridaniaPostWarpDirectorWaitsForClientUpdateBeforeClosingNotice()
     {
         string path = Path.Combine(
             FindRepositoryRoot(),
@@ -97,41 +144,69 @@ public sealed class GridaniaWireSafetyTests
         Script script = new();
         DynValue result = script.DoString(source + """
 
-            local calls = { ended = 0, run = nil }
+            local calls = { ended = 0, run = nil, order = {} }
             local quest = {
                 GetSequence = function(self)
                     return 5
                 end
             }
             local player = {
+                RunEventFunction = function(self, functionName, delegatedPlayer, eventQuest, eventName)
+                    table.insert(calls.order, "call")
+                    calls.run = { functionName, delegatedPlayer, eventQuest, eventName }
+                end,
                 HasQuest = function(self, questId)
                     return questId == 110006
                 end,
                 GetQuest = function(self, questId)
                     return quest
                 end,
-                RunEventFunction = function(self, functionName, eventPlayer, eventQuest, eventName)
-                    calls.run = { functionName, eventPlayer, eventQuest, eventName }
-                end,
                 EndEvent = function(self)
+                    table.insert(calls.order, "end")
                     calls.ended = calls.ended + 1
                 end
             }
 
-            onEventStarted(player, {}, "noticeEvent", true)
-            return calls.ended,
+            callClientFunction = function(waitingPlayer, functionName, ...)
+                waitingPlayer:RunEventFunction(functionName, ...)
+                return coroutine.yield("_WAIT_EVENT")
+            end
+
+            local transaction = coroutine.create(function()
+                onEventStarted(player, {}, "noticeEvent", true)
+            end)
+            local started, waitKind = coroutine.resume(transaction)
+            local endedWhileWaiting = calls.ended
+            local statusWhileWaiting = coroutine.status(transaction)
+            local resumed = coroutine.resume(transaction)
+
+            return started,
+                waitKind,
+                endedWhileWaiting,
+                statusWhileWaiting,
+                resumed,
+                calls.ended,
                 calls.run[1],
                 calls.run[2] == player,
                 calls.run[3] == quest,
-                calls.run[4]
+                calls.run[4],
+                calls.order[1],
+                calls.order[2]
             """);
 
         Assert.Equal(DataType.Tuple, result.Type);
-        Assert.Equal(1d, result.Tuple[0].Number);
-        Assert.Equal("delegateEvent", result.Tuple[1].String);
-        Assert.True(result.Tuple[2].Boolean);
-        Assert.True(result.Tuple[3].Boolean);
-        Assert.Equal("processEventTu_001", result.Tuple[4].String);
+        Assert.True(result.Tuple[0].Boolean);
+        Assert.Equal("_WAIT_EVENT", result.Tuple[1].String);
+        Assert.Equal(0d, result.Tuple[2].Number);
+        Assert.Equal("suspended", result.Tuple[3].String);
+        Assert.True(result.Tuple[4].Boolean);
+        Assert.Equal(1d, result.Tuple[5].Number);
+        Assert.Equal("delegateEvent", result.Tuple[6].String);
+        Assert.True(result.Tuple[7].Boolean);
+        Assert.True(result.Tuple[8].Boolean);
+        Assert.Equal("processEventTu_001", result.Tuple[9].String);
+        Assert.Equal("call", result.Tuple[10].String);
+        Assert.Equal("end", result.Tuple[11].String);
     }
 
     [Fact]
@@ -339,12 +414,38 @@ public sealed class GridaniaWireSafetyTests
     }
 
     [Fact]
+    public void PopulatedZoneKeepActorsX32BodyMatchesRetailWireShape()
+    {
+        const uint playerId = 0x029B2941;
+        uint[] actors = Enumerable.Range(1, ServerZoneInstanceKeepActorsX32Packet.MAXIMUM_ACTORS)
+            .Select(index => 0x44D80000u + (uint)index)
+            .ToArray();
+
+        AetherXIV.Core.Common.SubPacket packet =
+            ServerZoneInstanceKeepActorsX32Packet.BuildPacket(playerId, actors);
+
+        Assert.Equal((ushort)0x0003, packet.header.type);
+        Assert.Equal((ushort)0x000A, packet.gameMessage.opcode);
+        Assert.Equal(0xC0, packet.header.subpacketSize);
+        Assert.Equal(
+            actors,
+            Enumerable.Range(0, actors.Length)
+                .Select(index => BitConverter.ToUInt32(packet.data, index * sizeof(uint)))
+                .ToArray());
+        Assert.All(packet.data.Skip(actors.Length * sizeof(uint)), value => Assert.Equal(0, value));
+    }
+
+    [Fact]
     public void ZoneInstanceActorPacketRejectsInvalidChunks()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             ServerZoneInstanceActorsPacket.BuildPacket(1, Array.Empty<uint>()));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             ServerZoneInstanceActorsPacket.BuildPacket(1, Enumerable.Range(1, 9).Select(id => (uint)id).ToArray()));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ServerZoneInstanceKeepActorsX32Packet.BuildPacket(
+                1,
+                Enumerable.Range(1, 31).Select(id => (uint)id).ToArray()));
     }
 
     [Fact]

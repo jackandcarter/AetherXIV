@@ -78,6 +78,28 @@ namespace AetherXIV.Core.Common
                 "payloadLength", subpacket.data == null ? 0 : subpacket.data.Length);
         }
 
+        public static void TraceUnknownSubPacket(string context, SubPacket subpacket)
+        {
+            if (!Enabled || subpacket == null)
+                return;
+
+            byte[] payload = subpacket.data ?? Array.Empty<byte>();
+            int previewLength = Math.Min(payload.Length, 128);
+            Trace(
+                "packet.unknown",
+                "context", context,
+                "type", FormatHex(subpacket.header.type),
+                "opcode", FormatHex(subpacket.gameMessage.opcode),
+                "source", FormatHex(subpacket.header.sourceId),
+                "target", FormatHex(subpacket.header.targetId),
+                "size", subpacket.header.subpacketSize,
+                "payloadLength", payload.Length,
+                "payloadHex", previewLength == 0
+                    ? String.Empty
+                    : Convert.ToHexString(payload, 0, previewLength),
+                "payloadTruncated", previewLength < payload.Length);
+        }
+
         private static string BuildJsonLine(string category, object[] keyValues)
         {
             StringBuilder builder = new StringBuilder();

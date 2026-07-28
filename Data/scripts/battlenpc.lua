@@ -68,6 +68,7 @@ function onLogin(player)
 		
 		initClassItems(player);
 		initRaceItems(player);	
+		player:RecalculateStats("starter-equipment");
 
 		player:SavePlayTime();		
 	end	

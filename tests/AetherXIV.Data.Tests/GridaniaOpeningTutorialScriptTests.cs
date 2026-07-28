@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 namespace AetherXIV.Data.Tests;
 
 public sealed class GridaniaOpeningTutorialScriptTests
@@ -96,26 +111,29 @@ public sealed class GridaniaOpeningTutorialScriptTests
         AssertOrdered(script,
             "\"processEvent100\"",
             "player:ReplaceQuest(110005, 110006)",
+            "player:SendGameMessage(man0g1Quest, 353, 0x20)",
+            "player:SendGameMessage(man0g1Quest, 354, 0x20)",
             "player:EndEvent()",
             "DoZoneChange(player, 155, \"PrivateAreaMasterPast\", 2");
         Assert.DoesNotContain("NewNpcLsMsg", script, StringComparison.Ordinal);
         Assert.DoesNotContain("NextPhase", script, StringComparison.Ordinal);
         Assert.DoesNotContain("StartSequence", script, StringComparison.Ordinal);
         Assert.DoesNotContain("AfterQuestWarpDirector", script, StringComparison.Ordinal);
-        Assert.DoesNotContain("SendGameMessage", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"processEvent100_1\"", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"processEvent110\"", script, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void FirstMiounneConversationGrantsTheLinkpearlThenStartsItsTutorial()
+    public void FirstMiounneConversationGrantsLinkpearlThenStagesPostWarpTutorial()
     {
         string script = ReadDataScript(
             "unique", "fst0Town01", "PrivateArea", "PrivateAreaMasterPast_2",
             "PopulaceStandard", "miounne.lua");
 
         Assert.Contains("man0g1Quest:GetSequence() == 0", script, StringComparison.Ordinal);
-        Assert.Contains("man0g1Quest:GetSequence() == 5", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("man0g1Quest:GetSequence() == 5", script, StringComparison.Ordinal);
         AssertOrdered(script,
-            "\"processEvent100_1\"",
+            "\"processEvent110\"",
             "man0g1Quest:NewNpcLsMsg(1)",
             "man0g1Quest:StartSequence(5)",
             "player:EndEvent()",
@@ -126,14 +144,18 @@ public sealed class GridaniaOpeningTutorialScriptTests
             "player:DeferContentKickEvent(director, \"noticeEvent\", true)",
             "man0g1Quest:UpdateENPCs()",
             "DoZoneChange(player, 155, nil, 0");
+        Assert.DoesNotContain("\"processEvent100_1\"", script, StringComparison.Ordinal);
 
         string director = ReadDataScript("directors", "AfterQuestWarpDirector.lua");
         Assert.Contains("/Director/AfterQuestWarpDirector", director, StringComparison.Ordinal);
-        Assert.DoesNotContain("quest:OnNotice(player)", director, StringComparison.Ordinal);
+        Assert.Contains(
+            "callClientFunction(player, \"delegateEvent\", player, quest, \"processEventTu_001\")",
+            director,
+            StringComparison.Ordinal);
     }
 
     [Fact]
-    public void PostWarpDirectorRunsAndClosesTheSynchronousTutorialWithoutNestedLuaDispatch()
+    public void PostWarpDirectorRunsTutorialWithinTheDestinationNotice()
     {
         string director = ReadDataScript("directors", "AfterQuestWarpDirector.lua");
         string quest = ReadDataScript("quests", "man", "man0g1.lua");
@@ -144,9 +166,17 @@ public sealed class GridaniaOpeningTutorialScriptTests
             "player:HasQuest(110006)",
             "player:GetQuest(110006)",
             "quest:GetSequence() == 5",
+            "callClientFunction(player, \"delegateEvent\", player, quest, \"processEventTu_001\")",
+            "player:EndEvent()",
+            "return");
+        Assert.DoesNotContain("processEvent100_1", director, StringComparison.Ordinal);
+        Assert.DoesNotContain("EndEventForClient", director, StringComparison.Ordinal);
+        Assert.DoesNotContain(
             "player:RunEventFunction(\"delegateEvent\", player, quest, \"processEventTu_001\")",
-            "player:EndEvent()");
-        Assert.DoesNotContain("quest:OnNotice(player);", director, StringComparison.Ordinal);
+            director,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("SendDataPacket", director, StringComparison.Ordinal);
+        Assert.DoesNotContain("quest:OnNotice(player)", director, StringComparison.Ordinal);
         Assert.DoesNotContain("function onNotice", quest, StringComparison.Ordinal);
         Assert.Contains("MESSAGE_TYPE_NPC_LINKSHELL  = 39", globals, StringComparison.Ordinal);
         Assert.Contains("function onNpcLS", quest, StringComparison.Ordinal);
@@ -160,32 +190,54 @@ public sealed class GridaniaOpeningTutorialScriptTests
         string repositoryRoot = FindRepositoryRoot();
         string processor = File.ReadAllText(Path.Combine(repositoryRoot, "src", "AetherXIV.Core.Map", "PacketProcessor.cs"));
         string player = File.ReadAllText(Path.Combine(repositoryRoot, "src", "AetherXIV.Core.Map", "Actors", "Chara", "Player", "Player.cs"));
+        string luaEngine = File.ReadAllText(Path.Combine(repositoryRoot, "src", "AetherXIV.Core.Map", "Lua", "LuaEngine.cs"));
         Assert.Contains("eventStart.ownerActorID == 0xA0F05E95", processor, StringComparison.Ordinal);
         Assert.Contains("StartNpcLinkshellEvent", player, StringComparison.Ordinal);
         Assert.Contains("25118", player, StringComparison.Ordinal);
         Assert.Contains("!wasOwned && (isCalling || isExtra)", player, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"ignore-detached-ack\"", luaEngine, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void PrematureBuild21987LinkpearlIsHiddenUntilMiounneIsSpokenTo()
+    public void ResponseBearingClientFunctionsDoNotBypassTheEventWaiter()
+    {
+        string scriptsRoot = Path.Combine(FindRepositoryRoot(), "Data", "scripts");
+        string globalPath = Path.Combine(scriptsRoot, "global.lua");
+        string[] scripts = Directory.GetFiles(scriptsRoot, "*.lua", SearchOption.AllDirectories);
+
+        foreach (string path in scripts)
+        {
+            if (String.Equals(path, globalPath, StringComparison.Ordinal))
+                continue;
+
+            string[] lines = File.ReadAllLines(path);
+            Assert.DoesNotContain(lines, line =>
+            {
+                string trimmed = line.TrimStart();
+                return !trimmed.StartsWith("--", StringComparison.Ordinal)
+                    && trimmed.Contains(":RunEventFunction(", StringComparison.Ordinal);
+            });
+        }
+    }
+
+    [Fact]
+    public void PassiveTutorialCardsRemainOneWayDataMessages()
+    {
+        string tutorial = ReadDataScript("tutorial.lua");
+
+        Assert.Contains("player:SendDataPacket(4", tutorial, StringComparison.Ordinal);
+        Assert.Contains("player:SendDataPacket(5)", tutorial, StringComparison.Ordinal);
+        Assert.DoesNotContain("callClientFunction(", tutorial, StringComparison.Ordinal);
+        Assert.DoesNotContain(":RunEventFunction(", tutorial, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GridaniaOpeningHasNoCharacterSpecificLoginRepair()
     {
         string login = ReadDataScript("player.lua");
 
-        Assert.Contains("local function repairPrematureGridaniaLinkpearl(player)", login, StringComparison.Ordinal);
-        Assert.Contains("player:HasQuest(110006) == false", login, StringComparison.Ordinal);
-        Assert.Contains("player:GetZoneID() ~= 155", login, StringComparison.Ordinal);
-        Assert.Contains("player:GetPrivateAreaName() ~= \"PrivateAreaMasterPast\"", login, StringComparison.Ordinal);
-        Assert.Contains("player.privateAreaType ~= 2", login, StringComparison.Ordinal);
-        Assert.Contains("quest:GetSequence() ~= 5", login, StringComparison.Ordinal);
-        Assert.Contains("quest:GetNpcLsFrom() == 0", login, StringComparison.Ordinal);
-        AssertOrdered(
-            login,
-            "local function repairPrematureGridaniaLinkpearl(player)",
-            "quest:EndOfNpcLsMsgs()");
-        AssertOrdered(
-            login,
-            "setOpeningCheckpoint(player)",
-            "repairPrematureGridaniaLinkpearl(player)");
+        Assert.DoesNotContain("repairPrematureGridaniaLinkpearl", login, StringComparison.Ordinal);
+        Assert.DoesNotContain("Build 21987", login, StringComparison.Ordinal);
         Assert.DoesNotContain("resumeGridaniaPostOpeningHandoff", login, StringComparison.Ordinal);
 
         string repositoryRoot = FindRepositoryRoot();
@@ -198,8 +250,29 @@ public sealed class GridaniaOpeningTutorialScriptTests
             "\"onLogin\"");
         AssertOrdered(
             processor,
-            "session.GetActor().RefreshQuestENpcs()",
-            "session.GetActor().ReleaseDeferredContentKickEvent()");
+            "IsLocalZoneBootstrapPending(readyPlayer)",
+            "readyPlayer.RefreshQuestENpcs()",
+            "readyPlayer.ReleaseDeferredContentKickEvent()");
+    }
+
+    [Fact]
+    public void StarterEquipmentIsIncludedInTheFirstPlayableStatPass()
+    {
+        string player = ReadDataScript("player.lua");
+        string battleNpc = ReadDataScript("battlenpc.lua");
+
+        AssertOrdered(
+            player,
+            "initClassItems(player);",
+            "initRaceItems(player);",
+            "player:RecalculateStats(\"starter-equipment\");",
+            "player:SavePlayTime();");
+        AssertOrdered(
+            battleNpc,
+            "initClassItems(player);",
+            "initRaceItems(player);",
+            "player:RecalculateStats(\"starter-equipment\");",
+            "player:SavePlayTime();");
     }
 
     [Fact]
@@ -478,7 +551,7 @@ public sealed class GridaniaOpeningTutorialScriptTests
         string contentGroup = File.ReadAllText(Path.Combine(repositoryRoot, "src", "AetherXIV.Core.Map", "Actors", "Group", "ContentGroup.cs"));
         string battleNpcController = File.ReadAllText(Path.Combine(repositoryRoot, "src", "AetherXIV.Core.Map", "Actors", "Chara", "Ai", "Controllers", "BattleNpcController.cs"));
 
-        Assert.Equal(2, CountOccurrences(worldManager, "SendZoneInstanceSnapshot(this)"));
+        Assert.Equal(3, CountOccurrences(worldManager, "SendZoneInstanceSnapshot(this)"));
         Assert.Contains("player.SendInstanceUpdate(true);", worldManager, StringComparison.Ordinal);
         string contentZoneChange = worldManager.Substring(
             worldManager.IndexOf("public void DoZoneChangeContent", StringComparison.Ordinal),
@@ -490,8 +563,33 @@ public sealed class GridaniaOpeningTutorialScriptTests
             worldManager.IndexOf("public void DoZoneChangeContent", StringComparison.Ordinal) -
             worldManager.IndexOf("public void DoZoneChange(Player player, uint destinationZoneId", StringComparison.Ordinal));
         Assert.Contains("ZoneTransitionReloadPolicy.Select", ordinaryZoneChange, StringComparison.Ordinal);
-        Assert.Contains("ZoneTransitionReloadRecipe.ResidentGeometry", ordinaryZoneChange, StringComparison.Ordinal);
-        Assert.Contains("DeleteAllActorsPacket.BuildPacket", ordinaryZoneChange, StringComparison.Ordinal);
+        Assert.Contains("ZoneTransitionReloadRecipe.PrivateAreaBoundary", ordinaryZoneChange, StringComparison.Ordinal);
+        Assert.Contains("ZoneTransitionReloadPolicy.Select(", ordinaryZoneChange, StringComparison.Ordinal);
+        AssertOrdered(ordinaryZoneChange,
+            "_0xE2Packet.BuildPacket(player.actorId, 0x0F)",
+            "ScheduleLocalZoneBootstrap(",
+            "return;");
+        Assert.Contains(
+            "ZoneTransitionBootstrapPolicy.GetBootstrapDueAt(requestedAtUtc)",
+            ordinaryZoneChange,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ZoneTransitionBootstrapPolicy.GetFirstActorBatchDueAt(nowUtc)",
+            ordinaryZoneChange,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SendInstanceBootstrapBatch(",
+            ordinaryZoneChange,
+            StringComparison.Ordinal);
+        AssertOrdered(ordinaryZoneChange,
+            "private void BeginPendingBootstrap(",
+            "player.SendZoneInPackets(",
+            "player.playerSession.ClearInstance();",
+            "private void SendPendingBootstrapActorBatch(",
+            "SendInstanceBootstrapBatch(",
+            "private void CompletePendingBootstrap(",
+            "player.SendZoneInstanceSnapshot(this)",
+            "player.playerSession.LockUpdates(false)");
         Assert.Contains("_0xE2Packet.BuildPacket(player.actorId, 0x10)", ordinaryZoneChange, StringComparison.Ordinal);
         Assert.Contains("_0xE2Packet.BuildPacket(player.actorId, 0x2)", ordinaryZoneChange, StringComparison.Ordinal);
         Assert.Contains("director.zoneId == zoneId && !director.IsDeleted()", player, StringComparison.Ordinal);
@@ -499,7 +597,9 @@ public sealed class GridaniaOpeningTutorialScriptTests
         Assert.Contains("loginInitDirector = null;", player, StringComparison.Ordinal);
 
         string packetProcessor = File.ReadAllText(Path.Combine(repositoryRoot, "src", "AetherXIV.Core.Map", "PacketProcessor.cs"));
-        Assert.Contains("session.GetActor().ReleaseDeferredContentKickEvent();", packetProcessor, StringComparison.Ordinal);
+        Assert.Contains("ZoneTransitionReadinessPolicy.IsReady(", packetProcessor, StringComparison.Ordinal);
+        Assert.Contains("IsLocalZoneBootstrapPending(readyPlayer)", packetProcessor, StringComparison.Ordinal);
+        Assert.Contains("readyPlayer.ReleaseDeferredContentKickEvent();", packetProcessor, StringComparison.Ordinal);
         Assert.Contains("public void DeferContentKickEvent", player, StringComparison.Ordinal);
         Assert.Contains("public void ReleaseDeferredContentKickEvent", player, StringComparison.Ordinal);
         AssertOrdered(worldManager,

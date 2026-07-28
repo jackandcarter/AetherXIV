@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using AetherXIV.Operator;
 using System.Diagnostics;
 
@@ -628,8 +643,8 @@ esac
         Assert.Equal(1u, AetherXivDatabaseCompatibility.SchemaVersion);
         Assert.Equal("aetherxiv-direct-core-v2", AetherXivDatabaseCompatibility.CompatibilityId);
         Assert.Contains("baseline", AetherXivDatabaseCompatibility.BaselineId, StringComparison.Ordinal);
-        Assert.Equal("20260723_000026_class_job_progression.sql", AetherXivDatabaseCompatibility.LatestDirectCoreMigration);
-        Assert.Equal(28, AetherXivDatabaseCompatibility.RequiredDirectCoreMigrations.Count);
+        Assert.Equal("20260724_000028_social_state_persistence.sql", AetherXivDatabaseCompatibility.LatestDirectCoreMigration);
+        Assert.Equal(30, AetherXivDatabaseCompatibility.RequiredDirectCoreMigrations.Count);
         Assert.Equal(
             AetherXivDatabaseCompatibility.LatestDirectCoreMigration,
             AetherXivDatabaseCompatibility.RequiredDirectCoreMigrations[^1]);

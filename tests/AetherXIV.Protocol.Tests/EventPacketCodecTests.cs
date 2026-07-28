@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using AetherXIV.Protocol;
 
 namespace AetherXIV.Protocol.Tests;
@@ -142,8 +157,44 @@ public sealed class EventPacketCodecTests
         Assert.Equal(PacketOpcode.KickEvent, kickEncoded.Header.Opcode);
         Assert.Equal(PacketOpcode.RunEventFunction, runEncoded.Header.Opcode);
         Assert.Equal(PacketOpcode.EndEvent, endEncoded.Header.Opcode);
+        Assert.Equal(0xB0 - 0x20, runEncoded.Payload.Length);
         Assert.Equal("noticeEvent", kickCodec.Decode(kickEncoded).EventName);
         Assert.Equal("delegateEvent", runCodec.Decode(runEncoded).FunctionName);
         Assert.Equal("noticeEvent", endCodec.Decode(endEncoded).EventName);
+    }
+
+    [Fact]
+    public void RunEventFunctionRejectsParametersThatExceedTheRetailPacket()
+    {
+        RunEventFunctionPacketCodec codec = new();
+        RunEventFunctionPacket packet = new(
+            0x10001,
+            0x20002,
+            1,
+            "talkDefault",
+            "delegateEvent",
+            [new LuaParameter(LuaParameterType.String, new string('x', 72))]);
+
+        ArgumentException exception = Assert.Throws<ArgumentException>(
+            () => codec.Encode(packet.TriggerActorId, packet));
+
+        Assert.Contains("0xB0", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunEventFunctionUsesCompactRetailEnvelopeForOrdinaryTalk()
+    {
+        RunEventFunctionPacketCodec codec = new();
+        RunEventFunctionPacket packet = new(
+            0x10001,
+            0x20002,
+            1,
+            "talkDefault",
+            "delegateEvent",
+            [new LuaParameter(LuaParameterType.Null, null)]);
+
+        SubPacket encoded = codec.Encode(packet.TriggerActorId, packet);
+
+        Assert.Equal(0xB0 - 0x20, encoded.Payload.Length);
     }
 }

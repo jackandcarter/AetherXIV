@@ -1,0 +1,129 @@
+{
+  "schema": "aetherxiv.trace.fixture.v1",
+  "service": "World",
+  "serverHost": "202.67.51.120",
+  "serverPort": 54992,
+  "captures": [
+    {
+      "capture": "move_out_of_room.pcapng",
+      "tool": "tshark",
+      "timingEvidence": {
+        "sourceEventEndAndRoomExitFrame": 49,
+        "sourceEventEndAndRoomExitTimestamp": "1356917205.292346000",
+        "firstDestinationAddActorFrame": 87,
+        "firstDestinationAddActorTimestamp": "1356917211.351743000",
+        "firstDestinationAddActorDelayMilliseconds": 6059.397,
+        "destinationKeepListCommitFrame": 117,
+        "destinationKeepListCommitTimestamp": "1356917212.621284000",
+        "destinationBootstrapDurationMilliseconds": 1269.541,
+        "observedActorBatchMaximum": 8,
+        "observedActorBatchIntervalMilliseconds": {
+          "minimum": 119.436,
+          "maximum": 150.524
+        }
+      },
+      "frames": [
+        {
+          "captureName": "move_out_of_room.pcapng",
+          "service": "World",
+          "direction": "server-to-client",
+          "frameIndex": 49,
+          "timestamp": "1356917205.292346000",
+          "connectionType": 0,
+          "opcodeKey": "0x0131",
+          "messageKeys": [
+            {
+              "messageType": "0x0003",
+              "category": "0x0014",
+              "subcode": "0x0131",
+              "messageLength": 80
+            },
+            {
+              "messageType": "0x0003",
+              "category": "0x0014",
+              "subcode": "0x00E2",
+              "messageLength": 40
+            }
+          ],
+          "payloadLength": 86,
+          "payloadHex": "0101000056000200106991ee3b010000789c0b60606670d49ccd04c20c0f2efd13613064640082ab2f1f048068b03810309624e664bba4a62596e6943060039fae7016f03de4d4c030ef1103b279fc50e5005fe319d2",
+          "compressionState": "zlib-body",
+          "evidenceStatus": "TraceConfirmed",
+          "source": "202.67.51.120:54992",
+          "destination": "192.168.1.101:36166"
+        },
+        {
+          "captureName": "move_out_of_room.pcapng",
+          "service": "World",
+          "direction": "server-to-client",
+          "frameIndex": 117,
+          "timestamp": "1356917212.621284000",
+          "connectionType": 0,
+          "opcodeKey": "0x0137",
+          "messageKeys": [
+            {
+              "messageType": "0x0003",
+              "category": "0x0014",
+              "subcode": "0x0006",
+              "messageLength": 40
+            },
+            {
+              "messageType": "0x0003",
+              "category": "0x0014",
+              "subcode": "0x000A",
+              "messageLength": 192
+            },
+            {
+              "messageType": "0x0003",
+              "category": "0x0014",
+              "subcode": "0x0008",
+              "messageLength": 80
+            },
+            {
+              "messageType": "0x0003",
+              "category": "0x0014",
+              "subcode": "0x0008",
+              "messageLength": 80
+            },
+            {
+              "messageType": "0x0003",
+              "category": "0x0014",
+              "subcode": "0x0007",
+              "messageLength": 40
+            }
+          ],
+          "payloadLength": 1265,
+          "payloadHex": "0101000045032900618691ee3b010000789cd597df4b935118c7cf79f7d6e69cbf779c9691eb87596a7b4d731916f31718412cec32186f3a713ae7d2ad106f8208a23b2fbc886e046fa48ba8ff6082104464741142378b2088bc10ea2290a2e76ce7b59d9d777bdfa5963ef0e1d9789ff37d9f73def39eefb6842ca81dadf5759f7e22a1e4bb5f4ee4c508e2c397a49fe65abce4b8fa11e3db3f2fb8317eb1bab9891f7a02a1482886fe6934429f4eaecf5728b34f1bab1b10eace72f391514c0d8ff70547d47838df14449d714e07e1c8642c3414ecbf138ce4d3591274de727d67842f7503b4e09358b6985c9bed84ccb238df37429ff4fab3978f7a10bae71b989b5f99755ef665ebf9059d55418786918e168d385bef3da757c4eae89ad1f5bbb8b66049ad9ffcb8dac226a8cdf1005022a3a683ecbb95656def685a76968b597600cd37612c2b2a8594804165909390cb21df3f895005bdae48a8928dabda5ab7741096ab5976b15cc3722dcb87583e9c6b5132a28e65f1f95de2f6ebc69cdb849ade7bd6ceeffb9c757d3a7515b2d8d78cae5ee17df5733a3867ddac7effc2be7a8df8ba4443341a1e8c0d0746a663ca8dbb11a535a08cf994ce1e45611afec9683cac0e0507636a64589d1aceee59f2f48eaa53aae75a74c8a3d57a8441320dd84cbddf64796b68aa675c56c80aed4e88e7d7def50762d21fc80ef903d9217f20fbc41f88813fd0ebebd76752e7fa7af7fcca83afee44b69e5fd0d1f707231d2de87b4cf2f88376c66bfe50d4f53cf5190d2ccaa9f52be7fdc15e9790a93f381d1bb8107fb8559ff687a423ed0fcb8eb43ff83ad3feb0dcc5fc01e27ff903c9e30f0b6335393532437ccf72fb0331f4072c8b7dfdbd3f1093fe404cfa0329d81fc677d31fbeef557f20fbc41f688f7ffa4cff0acc7eee09a1ceced561f42320c17c25c832640c588122c00e14030ea004b001a54019500e54005500f5d34aa01a700135005dc323c051a01e7003c780e3c009a001380518cdd32ff46fe3faa7dfce804e13d00cb4000ad00a9c03dab2ee61a447cf4cfafff13cd00178b5bd60fa3958759f03ad6be1f6d527ae4ecaa8b399a8a3e78c8babeb10ce076c64fd4f3f7ba94edb7675928ba674a4687c7ab4777262024e822b111d9de690f737c6504f1d01010000ac0128009d8691ee3b010000789cf36060663066b8e1e2a8399b89e1c1a57f220c668c0c4070fbe58300100de2301594166738e7e7e626e6a5f8979630608055cfcc3d80e670133087b1243127db25352db134078b2140f06031d81c354acd79f4cb03640e27a5e640fd6584c71c0658f810e12f2e2af94b874afed2a5d49cfa17607358a814ef869486b3fb2a4f9039ec54f2973a95e28b835273a0fe92a0d41cb6f96073e4a9e41e6d4acda966b00099a345717abe0c8e2f314acd79b8146c0e0fa5e6982c029bc347a939b71e82cde1a5d41c9527607394a814ef8a949af32d12ec1e652a85b302a5e61441c24785527378e3ec40e6f0536ace65761b9039b2548a77034acbd52f82607304a8e42f414acd898194abc2548a2f214acd096bb605996342a5f42c42257f895221be5600cd01998130c71cc51c5996357513afedf5586537b52027b132b5283cbf285b3fb5a2c0293fafb418aba934010118ed90f360f13b48e91c02b29c800d8e030c0ed38e181b7fde8fcf3c7622cc3b7ba60e6cde599d694718181aecf199c74984799a314940f31a1c44d64d3b326ba6a4032ef3002e0147f5",
+          "compressionState": "zlib-body",
+          "evidenceStatus": "TraceConfirmed",
+          "source": "202.67.51.120:54992",
+          "destination": "192.168.1.101:36166"
+        },
+        {
+          "captureName": "move_out_of_room.pcapng",
+          "service": "World",
+          "direction": "client-to-server",
+          "frameIndex": 225,
+          "timestamp": "1356917227.802976000",
+          "connectionType": 0,
+          "opcodeKey": "0x0007",
+          "messageKeys": [
+            {
+              "messageType": "0x0003",
+              "category": "0x0014",
+              "subcode": "0x0007",
+              "messageLength": 40
+            }
+          ],
+          "payloadLength": 56,
+          "payloadHex": "0100000038000100fbc091ee3b0100002800030041299b0241299b02102700001400070000000000ebe9e05000000000ebe9e050ffffffff",
+          "compressionState": "not-compressed",
+          "evidenceStatus": "TraceConfirmed",
+          "source": "192.168.1.101:36166",
+          "destination": "202.67.51.120:54992"
+        }
+      ],
+      "accessIssues": []
+    }
+  ]
+}

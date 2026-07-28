@@ -1,3 +1,12 @@
+<!--
+  AetherXIV
+  Copyright (C) 2026 Demi Dev Unit
+
+  This file is part of AetherXIV.
+
+  SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="AetherXIV.Launcher.App.MainWindow"
@@ -428,18 +437,25 @@
 
       <TabItem Header="Umbra">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <Grid Margin="4,18,4,4" ColumnDefinitions="180,*" RowDefinitions="Auto,Auto" RowSpacing="10" ColumnSpacing="12">
+          <Grid Margin="4,18,4,4" ColumnDefinitions="180,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="12">
             <TextBlock Text="Umbra" VerticalAlignment="Center" />
             <CheckBox x:Name="UmbraEnabledBox"
                       Grid.Column="1"
                       Content="Enable Umbra for the FFXIV client"
                       IsCheckedChanged="UmbraSettings_Changed" />
 
-            <TextBlock Grid.Row="1" Text="Framework" VerticalAlignment="Center" />
+            <TextBlock Grid.Row="1" Text="Safe mode" VerticalAlignment="Center" />
+            <CheckBox x:Name="UmbraSafeModeBox"
+                      Grid.Row="1"
+                      Grid.Column="1"
+                      Content="Start Umbra without loading third-party or developer plugins"
+                      IsCheckedChanged="UmbraSettings_Changed" />
+
+            <TextBlock Grid.Row="2" Text="Framework" VerticalAlignment="Center" />
             <Button x:Name="InstallUmbraButton"
-                    Grid.Row="1"
+                    Grid.Row="2"
                     Grid.Column="1"
-                    Content="Update Umbra Framework"
+                    Content="Check for Umbra Updates"
                     HorizontalAlignment="Left"
                     Click="InstallUmbra_Click" />
           </Grid>
@@ -551,6 +567,49 @@
                    FontFamily="Menlo,Consolas,monospace" />
           <Button Grid.Row="1" Margin="0,12,0,0" Content="Clear" HorizontalAlignment="Right" Click="ClearLog_Click" />
         </Grid>
+      </TabItem>
+
+      <TabItem Header="About">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <Grid Margin="28" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="18">
+            <StackPanel Spacing="5">
+              <TextBlock Text="AetherXIV Launcher" FontSize="30" FontWeight="SemiBold" />
+              <TextBlock x:Name="AboutVersionText"
+                         Text="Version 2.0"
+                         FontSize="16"
+                         Foreground="{StaticResource MutedTextBrush}" />
+            </StackPanel>
+
+            <Border Grid.Row="1"
+                    Background="{StaticResource PanelBrush}"
+                    BorderBrush="#42558F"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="20">
+              <StackPanel Spacing="10">
+                <TextBlock Text="Copyright © 2026 Demi Dev Unit"
+                           FontSize="16"
+                           FontWeight="SemiBold" />
+                <TextBlock Text="AetherXIV is free software licensed under the GNU Affero General Public License, version 3 or later."
+                           TextWrapping="Wrap" />
+                <TextBlock Text="This software is provided without warranty, to the extent permitted by applicable law."
+                           Foreground="{StaticResource MutedTextBrush}"
+                           TextWrapping="Wrap" />
+              </StackPanel>
+            </Border>
+
+            <TextBlock Grid.Row="2"
+                       Text="Source code, license terms, and contribution information are available in the official AetherXIV repository."
+                       Foreground="{StaticResource MutedTextBrush}"
+                       TextWrapping="Wrap" />
+
+            <Button Grid.Row="3"
+                    Classes="primary"
+                    Content="Open AetherXIV Source"
+                    HorizontalAlignment="Left"
+                    Click="OpenSourceRepository_Click" />
+          </Grid>
+        </ScrollViewer>
       </TabItem>
     </TabControl>
     </Grid>

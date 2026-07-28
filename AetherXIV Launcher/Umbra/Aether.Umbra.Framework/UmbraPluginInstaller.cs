@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using System.IO.Compression;
 using System.Security.Cryptography;
 
@@ -21,10 +36,25 @@ public static class UmbraPluginInstaller
         string cacheDirectory,
         CancellationToken cancellationToken = default)
     {
+        string archivePath = await DownloadVerifiedArchiveAsync(
+            entry,
+            cacheDirectory,
+            cancellationToken).ConfigureAwait(false);
+        return InstallVerifiedArchive(
+            entry,
+            archivePath,
+            pluginDirectory,
+            Path.Combine(Path.GetDirectoryName(Path.GetFullPath(cacheDirectory))!, "PluginBackups"));
+    }
+
+    internal static async Task<string> DownloadVerifiedArchiveAsync(
+        UmbraStoreEntry entry,
+        string cacheDirectory,
+        CancellationToken cancellationToken = default)
+    {
         entry.ValidateInstallable();
         UmbraPluginCompatibility.Validate(entry.ToManifest());
 
-        Directory.CreateDirectory(pluginDirectory);
         Directory.CreateDirectory(cacheDirectory);
 
         if (entry.SizeBytes > MaximumPackageBytes)
@@ -51,12 +81,8 @@ public static class UmbraPluginInstaller
             await using (FileStream destination = File.Create(temporaryArchivePath))
                 await CopyExactAsync(source, destination, entry.SizeBytes, cancellationToken);
             File.Move(temporaryArchivePath, archivePath, overwrite: true);
-
-            return InstallVerifiedArchive(
-                entry,
-                archivePath,
-                pluginDirectory,
-                Path.Combine(Path.GetDirectoryName(Path.GetFullPath(cacheDirectory))!, "PluginBackups"));
+            ValidateArchive(entry, archivePath);
+            return archivePath;
         }
         finally
         {

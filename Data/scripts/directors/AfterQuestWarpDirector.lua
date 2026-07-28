@@ -8,20 +8,17 @@ function onEventStarted(player, director, eventType, eventName)
 	if (player:HasQuest(110006) == true) then
 		local quest = player:GetQuest(110006);
 		if (quest ~= nil and quest:GetSequence() == 5) then
-			-- This client tutorial is synchronous: it does not answer with an
-			-- EventUpdate. Run it directly from the acknowledged destination
-			-- event and close that event immediately.
-			--
-			-- Do not call quest:OnNotice here. That nests a second Lua VM
-			-- dispatch inside this director coroutine. The VPS trace from
-			-- 2026-07-24 stops exactly at that boundary: noticeEvent reaches
-			-- the director, but neither RunEventFunction nor EndEvent is sent,
-			-- leaving the client event-locked before the linkpearl can be read.
-			player:RunEventFunction("delegateEvent", player, quest, "processEventTu_001");
+			-- processEventTu_001 owns a response-bearing tutorial transaction.
+			-- Keep the director notice alive until the client returns its
+			-- EventUpdate; ending it here clears the client-side event owner
+			-- while the Confirm window is still docking.
+			callClientFunction(player, "delegateEvent", player, quest, "processEventTu_001");
+			player:EndEvent();
+			return;
 		end
 	end
 
-	-- Every notice acknowledgement must close, including stale recovery kicks.
+	-- A stale kick has no tutorial transaction to launch.
 	player:EndEvent();
 end
 

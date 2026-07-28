@@ -806,6 +806,16 @@ WHERE id = @characterId", conn))
 
         public static PlayerBaseStatProfile GetPlayerBaseStats(byte classOrJobId, byte tribe, short level)
         {
+            return GetPlayerBaseStats(classOrJobId, tribe, level, false);
+        }
+
+        public static PlayerBaseStatProfile GetPlayerBaseStatsAtOrBelow(byte classOrJobId, byte tribe, short level)
+        {
+            return GetPlayerBaseStats(classOrJobId, tribe, level, true);
+        }
+
+        private static PlayerBaseStatProfile GetPlayerBaseStats(byte classOrJobId, byte tribe, short level, bool allowLowerLevel)
+        {
             if (!playerBaseStatsTableAvailable)
                 return null;
 
@@ -831,9 +841,9 @@ WHERE id = @characterId", conn))
                         source
                         FROM server_player_base_stats
                         WHERE classId = @classId
-                        AND level = @level
+                        AND level " + (allowLowerLevel ? "<= @level" : "= @level") + @"
                         AND tribe IN (@tribe, 0)
-                        ORDER BY IF(tribe = @tribe, 1, 0) DESC
+                        ORDER BY level DESC, IF(tribe = @tribe, 1, 0) DESC
                         LIMIT 1";
 
                     MySqlCommand cmd = new MySqlCommand(query, conn);
@@ -2868,6 +2878,241 @@ WHERE id = @characterId", conn))
                 }
             }
             return SendAchievementRatePacket.BuildPacket(player.actorId, achievementId, progress, progressFlags);
+        }
+
+        public static string[] GetBlacklist(uint characterId)
+        {
+            List<string> names = new List<string>();
+            using (MySqlConnection conn = new MySqlConnection(String.Format(
+                "Server={0}; Port={1}; Database={2}; UID={3}; Password={4}",
+                ConfigConstants.DATABASE_HOST,
+                ConfigConstants.DATABASE_PORT,
+                ConfigConstants.DATABASE_NAME,
+                ConfigConstants.DATABASE_USERNAME,
+                ConfigConstants.DATABASE_PASSWORD)))
+            {
+                try
+                {
+                    conn.Open();
+                    using (MySqlCommand cmd = new MySqlCommand(
+                        "SELECT name FROM characters_blacklist WHERE characterId=@characterId ORDER BY slot",
+                        conn))
+                    {
+                        cmd.Parameters.AddWithValue("@characterId", characterId);
+                        using (MySqlDataReader reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                                names.Add(reader.GetString(0));
+                        }
+                    }
+                }
+                catch (MySqlException e)
+                {
+                    Program.Log.Error(e.ToString());
+                }
+            }
+            return names.ToArray();
+        }
+
+        public static Tuple<long, string>[] GetFriendList(uint characterId)
+        {
+            List<Tuple<long, string>> friends = new List<Tuple<long, string>>();
+            using (MySqlConnection conn = new MySqlConnection(String.Format(
+                "Server={0}; Port={1}; Database={2}; UID={3}; Password={4}",
+                ConfigConstants.DATABASE_HOST,
+                ConfigConstants.DATABASE_PORT,
+                ConfigConstants.DATABASE_NAME,
+                ConfigConstants.DATABASE_USERNAME,
+                ConfigConstants.DATABASE_PASSWORD)))
+            {
+                try
+                {
+                    conn.Open();
+                    using (MySqlCommand cmd = new MySqlCommand(@"
+SELECT c.id, c.name
+FROM characters_friendlist f
+JOIN characters c ON c.name=f.name
+WHERE f.characterId=@characterId
+ORDER BY f.slot", conn))
+                    {
+                        cmd.Parameters.AddWithValue("@characterId", characterId);
+                        using (MySqlDataReader reader = cmd.ExecuteReader())
+                        {
+                            while (reader.Read())
+                                friends.Add(Tuple.Create(reader.GetInt64(0), reader.GetString(1)));
+                        }
+                    }
+                }
+                catch (MySqlException e)
+                {
+                    Program.Log.Error(e.ToString());
+                }
+            }
+            return friends.ToArray();
+        }
+
+        public static bool AddBlacklist(uint characterId, string requestedName, out string canonicalName)
+        {
+            return AddSocialName("characters_blacklist", characterId, requestedName, out _, out canonicalName);
+        }
+
+        public static bool AddFriend(uint characterId, string requestedName, out long friendCharacterId, out string canonicalName)
+        {
+            return AddSocialName(
+                "characters_friendlist",
+                characterId,
+                requestedName,
+                out friendCharacterId,
+                out canonicalName);
+        }
+
+        private static bool AddSocialName(
+            string table,
+            uint characterId,
+            string requestedName,
+            out long targetCharacterId,
+            out string canonicalName)
+        {
+            targetCharacterId = 0;
+            canonicalName = requestedName ?? "";
+            if (String.IsNullOrWhiteSpace(requestedName))
+                return false;
+
+            using (MySqlConnection conn = new MySqlConnection(String.Format(
+                "Server={0}; Port={1}; Database={2}; UID={3}; Password={4}",
+                ConfigConstants.DATABASE_HOST,
+                ConfigConstants.DATABASE_PORT,
+                ConfigConstants.DATABASE_NAME,
+                ConfigConstants.DATABASE_USERNAME,
+                ConfigConstants.DATABASE_PASSWORD)))
+            {
+                try
+                {
+                    conn.Open();
+                    using (MySqlTransaction transaction = conn.BeginTransaction())
+                    {
+                        using (MySqlCommand target = new MySqlCommand(
+                            "SELECT id,name FROM characters WHERE name=@name LIMIT 1",
+                            conn,
+                            transaction))
+                        {
+                            target.Parameters.AddWithValue("@name", requestedName);
+                            using (MySqlDataReader reader = target.ExecuteReader())
+                            {
+                                if (!reader.Read())
+                                {
+                                    transaction.Rollback();
+                                    return false;
+                                }
+                                targetCharacterId = reader.GetInt64(0);
+                                canonicalName = reader.GetString(1);
+                            }
+                        }
+
+                        if (targetCharacterId == characterId)
+                        {
+                            transaction.Rollback();
+                            return false;
+                        }
+
+                        int slot;
+                        using (MySqlCommand existing = new MySqlCommand(
+                            $"SELECT slot FROM {table} WHERE characterId=@characterId AND name=@name LIMIT 1",
+                            conn,
+                            transaction))
+                        {
+                            existing.Parameters.AddWithValue("@characterId", characterId);
+                            existing.Parameters.AddWithValue("@name", canonicalName);
+                            object value = existing.ExecuteScalar();
+                            if (value != null && value != DBNull.Value)
+                            {
+                                transaction.Rollback();
+                                return false;
+                            }
+                        }
+
+                        using (MySqlCommand nextSlot = new MySqlCommand(
+                            $"SELECT COALESCE(MAX(slot),-1)+1 FROM {table} WHERE characterId=@characterId FOR UPDATE",
+                            conn,
+                            transaction))
+                        {
+                            nextSlot.Parameters.AddWithValue("@characterId", characterId);
+                            slot = Convert.ToInt32(nextSlot.ExecuteScalar());
+                        }
+                        if (slot < 0 || slot >= 200)
+                        {
+                            transaction.Rollback();
+                            return false;
+                        }
+
+                        using (MySqlCommand insert = new MySqlCommand(
+                            $"INSERT INTO {table} (characterId,slot,name) VALUES (@characterId,@slot,@name)",
+                            conn,
+                            transaction))
+                        {
+                            insert.Parameters.AddWithValue("@characterId", characterId);
+                            insert.Parameters.AddWithValue("@slot", slot);
+                            insert.Parameters.AddWithValue("@name", canonicalName);
+                            if (insert.ExecuteNonQuery() != 1)
+                            {
+                                transaction.Rollback();
+                                return false;
+                            }
+                        }
+
+                        transaction.Commit();
+                        return true;
+                    }
+                }
+                catch (MySqlException e)
+                {
+                    Program.Log.Error(e.ToString());
+                    return false;
+                }
+            }
+        }
+
+        public static bool RemoveBlacklist(uint characterId, string name)
+        {
+            return RemoveSocialName("characters_blacklist", characterId, name);
+        }
+
+        public static bool RemoveFriend(uint characterId, string name)
+        {
+            return RemoveSocialName("characters_friendlist", characterId, name);
+        }
+
+        private static bool RemoveSocialName(string table, uint characterId, string name)
+        {
+            if (String.IsNullOrWhiteSpace(name))
+                return false;
+
+            using (MySqlConnection conn = new MySqlConnection(String.Format(
+                "Server={0}; Port={1}; Database={2}; UID={3}; Password={4}",
+                ConfigConstants.DATABASE_HOST,
+                ConfigConstants.DATABASE_PORT,
+                ConfigConstants.DATABASE_NAME,
+                ConfigConstants.DATABASE_USERNAME,
+                ConfigConstants.DATABASE_PASSWORD)))
+            {
+                try
+                {
+                    conn.Open();
+                    using (MySqlCommand cmd = new MySqlCommand(
+                        $"DELETE FROM {table} WHERE characterId=@characterId AND name=@name",
+                        conn))
+                    {
+                        cmd.Parameters.AddWithValue("@characterId", characterId);
+                        cmd.Parameters.AddWithValue("@name", name);
+                        return cmd.ExecuteNonQuery() > 0;
+                    }
+                }
+                catch (MySqlException e)
+                {
+                    Program.Log.Error(e.ToString());
+                    return false;
+                }
+            }
         }
 
         public static bool CreateLinkshell(Player player, string lsName, ushort lsCrest)

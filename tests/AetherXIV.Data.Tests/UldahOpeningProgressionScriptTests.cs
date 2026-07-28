@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 namespace AetherXIV.Data.Tests;
 
 public sealed class UldahOpeningProgressionScriptTests
@@ -70,10 +85,8 @@ public sealed class UldahOpeningProgressionScriptTests
             login,
             "quest:NewNpcLsMsg(1)",
             "quest:StartSequence(5)");
-        AssertOrdered(
-            login,
-            "repairPrematureGridaniaLinkpearl(player)",
-            "repairBuild21989UldahHandoff(player)");
+        Assert.Contains("repairBuild21989UldahHandoff(player)", login, StringComparison.Ordinal);
+        Assert.DoesNotContain("repairPrematureGridaniaLinkpearl", login, StringComparison.Ordinal);
     }
 
     private static string ReadDataScript(params string[] relativeParts)

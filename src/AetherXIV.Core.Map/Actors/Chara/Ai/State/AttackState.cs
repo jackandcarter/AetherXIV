@@ -1,6 +1,7 @@
 ﻿using System;
 using AetherXIV.Core.Common;
 using AetherXIV.Core.Map.Actors;
+using AetherXIV.Core.Map.actors.chara.ai.utils;
 using AetherXIV.Core.Map.packets.send.actor;
 using AetherXIV.Core.Map.packets.send.actor.battle;
 namespace AetherXIV.Core.Map.actors.chara.ai.state
@@ -103,9 +104,8 @@ namespace AetherXIV.Core.Map.actors.chara.ai.state
             //List<BattleAction> actions = new List<BattleAction>();
             CommandResultContainer actions = new CommandResultContainer();
 
-            //This is all temporary until the skill sheet is finishd and the different auto attacks are added to the database
+            //This is temporary until the different auto attacks are added to the database.
             //Some mobs have multiple unique auto attacks that they switch between as well as ranged auto attacks, so we'll need a way to handle that
-            //For now, just use a temporary hardcoded BattleCommand that's the same for everyone.
             BattleCommand attackCommand = new BattleCommand(22104, "Attack");
             attackCommand.range = 5;
             attackCommand.rangeHeight = 10;
@@ -114,7 +114,25 @@ namespace AetherXIV.Core.Map.actors.chara.ai.state
             attackCommand.validTarget = (ValidTarget)17152;
             attackCommand.commandType = CommandType.AutoAttack;
             attackCommand.numHits = (byte)owner.GetMod(Modifier.HitCount);
-            attackCommand.basePotency = 100;
+            int weaponDamagePower = 0;
+            int ammoVirtualDamagePower = 0;
+            Player player = owner as Player;
+            if (player != null)
+            {
+                var mainHand = player.GetEquipment().GetItemAtSlot(Player.SLOT_MAINHAND);
+                var weapon = mainHand == null
+                    ? null
+                    : Server.GetItemGamedata(mainHand.itemId) as AetherXIV.Core.Map.dataobjects.WeaponItem;
+                if (weapon != null)
+                {
+                    weaponDamagePower = weapon.damagePower;
+                    ammoVirtualDamagePower = weapon.ammoVirtualDamagePower;
+                }
+            }
+            attackCommand.basePotency = AutoAttackPotencyPolicy.Calculate(
+                weaponDamagePower,
+                ammoVirtualDamagePower,
+                owner.GetMod(Modifier.Attack));
             ActionProperty property = (owner.GetMod(Modifier.AttackType) != 0) ? (ActionProperty)owner.GetMod(Modifier.AttackType) : ActionProperty.Slashing;
             attackCommand.actionProperty = property;
             attackCommand.actionType = ActionType.Physical;

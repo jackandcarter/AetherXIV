@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using Aether.Umbra.PluginApi;
 
 namespace Aether.Umbra.Framework;
@@ -12,6 +27,7 @@ internal sealed class UmbraPluginManagerPlugin(UmbraRuntime runtime) : IUmbraPlu
     private string? resultMessage;
     private bool resultSucceeded;
     private string customRepositoryUrl = "";
+    private string developerPluginLocation = "";
     private Task<UmbraPluginActionResult>? pendingAction;
 
     public string Name => "Umbra Plugin Manager";
@@ -298,6 +314,11 @@ internal sealed class UmbraPluginManagerPlugin(UmbraRuntime runtime) : IUmbraPlu
                     status?.State == UmbraPluginRuntimeState.Running ? UmbraIcon.Check : UmbraIcon.Power);
                 drawContext.SameLine();
                 drawContext.Badge($"API {manifest.ApiVersion}", UmbraTextTone.Accent, UmbraIcon.Shield);
+                if (manifest.IsDeveloperPlugin)
+                {
+                    drawContext.SameLine();
+                    drawContext.Badge("Developer", UmbraTextTone.Warning, UmbraIcon.Folder);
+                }
 
                 if (drawContext.Button(
                     $"{(selected ? "Selected" : "Details")}###{manifest.Id}",
@@ -349,6 +370,12 @@ internal sealed class UmbraPluginManagerPlugin(UmbraRuntime runtime) : IUmbraPlu
         drawContext.Badge(stateText, stateTone, status?.State == UmbraPluginRuntimeState.Running ? UmbraIcon.Check : UmbraIcon.Power);
         drawContext.Text($"Entry: {manifest.Entry}", UmbraTextTone.Muted, UmbraTextStyle.Caption);
         drawContext.Text($"Minimum framework: {manifest.MinimumFrameworkVersion}", UmbraTextTone.Muted, UmbraTextStyle.Caption);
+        if (manifest.IsDeveloperPlugin)
+        {
+            drawContext.Badge("Local developer plugin", UmbraTextTone.Warning, UmbraIcon.Folder);
+            if (!string.IsNullOrWhiteSpace(manifest.DeveloperLocation))
+                drawContext.Text($"Location: {manifest.DeveloperLocation}", UmbraTextTone.Muted, UmbraTextStyle.Caption);
+        }
         if (!string.IsNullOrWhiteSpace(manifest.InstalledFromSource))
             drawContext.Text($"Source: {manifest.InstalledFromSource}", UmbraTextTone.Muted, UmbraTextStyle.Caption);
         drawContext.Spacing(4.0f);
@@ -377,7 +404,19 @@ internal sealed class UmbraPluginManagerPlugin(UmbraRuntime runtime) : IUmbraPlu
 
         drawContext.Spacing(8.0f);
         drawContext.Separator();
-        if (!runtime.Options.SafeMode)
+        if (!runtime.Options.SafeMode && manifest.IsDeveloperPlugin)
+        {
+            if (drawContext.Button(
+                $"Reload###detail-reload-{manifest.Id}",
+                UmbraButtonStyle.Primary,
+                UmbraIcon.Refresh,
+                112.0f,
+                36.0f))
+            {
+                Report(runtime.ReloadPlugin(manifest.Id));
+            }
+        }
+        else if (!runtime.Options.SafeMode)
         {
             string toggleLabel = manifest.Enabled ? "Disable" : "Enable";
             if (drawContext.Button(
@@ -404,6 +443,15 @@ internal sealed class UmbraPluginManagerPlugin(UmbraRuntime runtime) : IUmbraPlu
                     Report(runtime.ReloadPlugin(manifest.Id));
                 }
             }
+        }
+
+        if (manifest.IsDeveloperPlugin)
+        {
+            drawContext.Text(
+                "Developer plugins are managed from Repositories > Developer Plugins. Umbra never deletes local development files.",
+                UmbraTextTone.Warning,
+                UmbraTextStyle.Caption);
+            return;
         }
 
         drawContext.Spacing(5.0f);
@@ -736,6 +784,7 @@ internal sealed class UmbraPluginManagerPlugin(UmbraRuntime runtime) : IUmbraPlu
         if (runtime.PluginManager.RepositorySources.Count == 0)
         {
             drawContext.Text("No repositories are configured.", UmbraTextTone.Muted);
+            DrawDeveloperPlugins(drawContext);
             return;
         }
 
@@ -759,8 +808,7 @@ internal sealed class UmbraPluginManagerPlugin(UmbraRuntime runtime) : IUmbraPlu
                 drawContext.Text(source.Name ?? source.Url, UmbraTextTone.Normal, UmbraTextStyle.Caption);
                 if (source.Name is not null)
                     drawContext.Text(source.Url, UmbraTextTone.Muted, UmbraTextStyle.Caption);
-                int entryCount = runtime.PluginManager.SupportedPlugins
-                    .Concat(runtime.PluginManager.AvailablePlugins)
+                int entryCount = runtime.PluginManager.Catalog.StoreEntries
                     .Count(entry => string.Equals(
                         entry.RepositoryUrl,
                         source.Url,
@@ -777,6 +825,101 @@ internal sealed class UmbraPluginManagerPlugin(UmbraRuntime runtime) : IUmbraPlu
                     {
                         StartAction(runtime.RemoveCustomRepositoryAsync(source.Url));
                     }
+                }
+            }
+            finally
+            {
+                drawContext.EndChild();
+            }
+            drawContext.Spacing(5.0f);
+        }
+
+        DrawDeveloperPlugins(drawContext);
+    }
+
+    private void DrawDeveloperPlugins(IUmbraDrawContext drawContext)
+    {
+        drawContext.Spacing(8.0f);
+        drawContext.Separator();
+        drawContext.Text("Developer Plugins", UmbraTextTone.Accent, UmbraTextStyle.Heading);
+        drawContext.Text(
+            "Load local development builds from an absolute plugin DLL, manifest, or directory. These files are never installed, updated, or deleted by Umbra.",
+            UmbraTextTone.Warning,
+            UmbraTextStyle.Caption);
+
+        bool enabled = runtime.PluginManager.DeveloperPlugins.Enabled;
+        if (pendingAction is null
+            && drawContext.Toggle("Load developer plugins", ref enabled))
+        {
+            StartAction(runtime.SetDeveloperPluginsEnabledAsync(enabled));
+        }
+        if (runtime.Options.SafeMode)
+        {
+            drawContext.Text(
+                "Safe mode blocks developer plugin loading.",
+                UmbraTextTone.Warning,
+                UmbraTextStyle.Caption);
+        }
+
+        drawContext.InputText(
+            "##UmbraDeveloperPluginLocation",
+            ref developerPluginLocation,
+            "C:\\path\\to\\plugin.dll or plugin directory",
+            2048);
+        if (pendingAction is null)
+        {
+            if (drawContext.Button(
+                "Add location###developer-plugin-add",
+                UmbraButtonStyle.Primary,
+                UmbraIcon.Plug,
+                150.0f,
+                36.0f))
+            {
+                string location = developerPluginLocation.Trim();
+                StartAction(runtime.AddDeveloperPluginLocationAsync(location));
+                developerPluginLocation = "";
+            }
+            drawContext.SameLine();
+            if (drawContext.Button(
+                "Rescan and reload###developer-plugin-rescan",
+                UmbraButtonStyle.Ghost,
+                UmbraIcon.Refresh,
+                174.0f,
+                36.0f))
+            {
+                StartAction(runtime.RescanDeveloperPluginsAsync());
+            }
+        }
+
+        if (runtime.PluginManager.DeveloperPlugins.Locations.Count == 0)
+        {
+            drawContext.Text("No developer plugin locations are configured.", UmbraTextTone.Muted);
+            return;
+        }
+
+        foreach (string location in runtime.PluginManager.DeveloperPlugins.Locations)
+        {
+            bool visible = drawContext.BeginPanel(
+                $"##developer-plugin-{location}",
+                0.0f,
+                92.0f,
+                UmbraPanelStyle.Card);
+            try
+            {
+                if (!visible)
+                    continue;
+
+                drawContext.Badge("Local · unreviewed", UmbraTextTone.Warning, UmbraIcon.Warning);
+                drawContext.Text(location, UmbraTextTone.Muted, UmbraTextStyle.Caption);
+                if (pendingAction is null
+                    && drawContext.Button(
+                        $"Remove###developer-plugin-remove-{location}",
+                        UmbraButtonStyle.Ghost,
+                        UmbraIcon.Trash,
+                        104.0f,
+                        30.0f))
+                {
+                    StartAction(runtime.RemoveDeveloperPluginLocationAsync(location));
                 }
             }
             finally
@@ -868,7 +1011,8 @@ internal sealed class UmbraPluginManagerPlugin(UmbraRuntime runtime) : IUmbraPlu
         return MatchesSearch(entry.Name, entry.Id, entry.Author, entry.Description, entry.Punchline);
     }
 
-    private static string StoreEntryKey(UmbraStoreEntry entry) => $"{entry.Source}:{entry.Id}";
+    private static string StoreEntryKey(UmbraStoreEntry entry) =>
+        $"{entry.Source}:{entry.RepositoryUrl}:{entry.Id}";
 
     private static (float ListWidth, float DetailWidth) CalculateTwoPaneWidths(float availableWidth)
     {

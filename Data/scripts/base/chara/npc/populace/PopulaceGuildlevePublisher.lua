@@ -87,7 +87,7 @@ end
 
 function onEventUpdate(player, npc, step, menuOptionSelected)
 	--player:RunEventFunction("eventTalkType", 0x32, true, 0x02CE, 0x356, 0x367, false, 2, nil, 0x29, 0,0,0);
-	player:RunEventFunction("eventTalkPack", 201, 207);
+	callClientFunction(player, "eventTalkPack", 201, 207);
 	--player:RunEventFunction("eventTalkCard", 0x30C3, 0x30C4, 0x30C1, 0x30C5, 0x30C6, 0x30C7, 0x30C8, 0x30C9);
 	--
 	--player:RunEventFunction("eventGLChangeDetail", 0xDEAD, 0x30C4, 0xFF, 0xF4242, 0xD, 0xF4242, 0, 2, true);

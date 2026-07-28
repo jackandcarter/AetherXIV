@@ -9,30 +9,29 @@ namespace AetherXIV.Core.Map.packets.send.social
     class SendBlacklistPacket
     {
         public const ushort OPCODE = 0x01CB;
-        public const uint PACKET_SIZE = 0x686;
+        public const uint PACKET_SIZE = 0x2A8;
+        public const int MAX_ENTRIES = 20;
+        public const int NAME_SIZE = 0x20;
 
-        public static SubPacket BuildPacket(uint sourceActorId, string[] blacklistedNames, ref int offset)
+        public static SubPacket BuildPacket(uint sourceActorId, uint pageIndex, string[] blacklistedNames)
         {
             byte[] data = new byte[PACKET_SIZE - 0x20];
 
             using (MemoryStream mem = new MemoryStream(data))
             {
                 using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {                    
-                    binWriter.Write((UInt32)0);
-                    int max;
+                {
+                    binWriter.Write(pageIndex);
+                    int start = checked((int)pageIndex * MAX_ENTRIES);
+                    int count = Math.Max(0, Math.Min(MAX_ENTRIES, blacklistedNames.Length - start));
+                    binWriter.Write((UInt32)count);
 
-                    if (blacklistedNames.Length - offset <= 0x32)
-                        max = blacklistedNames.Length - offset;
-                    else
-                        max = 0x32;
-
-                    binWriter.Write((UInt32)max);
-
-                    for (int i = 0; i < max; i++ )
-                        binWriter.Write(Encoding.ASCII.GetBytes(blacklistedNames[i]), 0, Encoding.ASCII.GetByteCount(blacklistedNames[i]) >= 0x20 ? 0x20 : Encoding.ASCII.GetByteCount(blacklistedNames[i]));
-
-                    offset += max;
+                    for (int i = 0; i < count; i++)
+                    {
+                        byte[] encoded = Encoding.ASCII.GetBytes(blacklistedNames[start + i] ?? "");
+                        binWriter.Write(encoded, 0, Math.Min(encoded.Length, NAME_SIZE));
+                        binWriter.BaseStream.Position = 0x08 + ((i + 1) * NAME_SIZE);
+                    }
                 }
             }
 

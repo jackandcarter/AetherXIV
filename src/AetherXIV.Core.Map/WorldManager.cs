@@ -45,7 +45,35 @@ namespace AetherXIV.Core.Map
         private Server mServer;
 
         private const int MILIS_LOOPTIME = 333;
+        private const int TRANSITION_LOOPTIME = 20;
         private Timer mZoneTimer;
+        private Timer mTransitionTimer;
+
+        private enum PendingBootstrapPhase
+        {
+            AwaitingRoomExit,
+            StreamingActors
+        }
+
+        private sealed class PendingLocalZoneBootstrap
+        {
+            public long token;
+            public Player player;
+            public Area destinationArea;
+            public ushort spawnType;
+            public ZoneTransitionReloadRecipe reloadRecipe;
+            public DateTime requestedAtUtc;
+            public DateTime nextActionAtUtc;
+            public PendingBootstrapPhase phase;
+            public List<Actor> actors;
+            public int actorIndex;
+            public int batchNumber;
+        }
+
+        private readonly Object pendingBootstrapLock = new Object();
+        private readonly Dictionary<uint, PendingLocalZoneBootstrap> pendingBootstraps =
+            new Dictionary<uint, PendingLocalZoneBootstrap>();
+        private long nextPendingBootstrapToken;
 
         //Zone Server Groups
         public Dictionary<ulong, Group> mContentGroups = new Dictionary<ulong, Group>();
@@ -1263,6 +1291,7 @@ namespace AetherXIV.Core.Map
         {
             uint currentZoneId = player.zoneId;
             string currentPrivateArea = player.privateArea ?? "";
+            uint currentPrivateAreaType = player.privateAreaType;
             Program.Log.Info("Zone change requested: player={0} fromZone={1} fromPrivateArea={2} toZone={3} toPrivateArea={4} toPrivateAreaType={5} spawnType={6} position=({7}, {8}, {9}, {10})",
                 player.customDisplayName,
                 currentZoneId,
@@ -1362,15 +1391,30 @@ namespace AetherXIV.Core.Map
             if (oldZone is PrivateAreaContent oldContentArea)
                 oldContentArea.CheckDestroy();
 
-            // Same-zone public/private and private/private changes replace
-            // resident geometry. Retail uses the content-style forced reload
-            // for that family: wipe, 0x00E2(0x10), then an immediate bundle
-            // without a trailing keep-list commit. A 0x00E2(0x02) full-map
-            // reload cannot finish when the destination map is already
-            // resident, leaving the client under the Now Loading veil.
+            // A private-area boundary is a room exit even when both areas
+            // share the same numeric zone. The official room-exit capture is
+            // EndEvent -> 0x00E2(0x0F) -> destination bootstrap -> actor
+            // keep-list. It does not wipe the actor table or use the 0x10
+            // in-place/content latch.
             ZoneTransitionReloadRecipe reloadRecipe =
-                ZoneTransitionReloadPolicy.Select(currentZoneId, destinationZoneId);
-            if (reloadRecipe == ZoneTransitionReloadRecipe.ResidentGeometry)
+                ZoneTransitionReloadPolicy.Select(
+                    currentZoneId,
+                    currentPrivateArea,
+                    currentPrivateAreaType,
+                    destinationZoneId,
+                    destinationPrivateArea,
+                    (uint)destinationPrivateAreaType);
+            if (reloadRecipe == ZoneTransitionReloadRecipe.PrivateAreaBoundary)
+            {
+                player.playerSession.QueuePacket(_0xE2Packet.BuildPacket(player.actorId, 0x0F));
+                ScheduleLocalZoneBootstrap(
+                    player,
+                    newArea,
+                    spawnType,
+                    reloadRecipe);
+                return;
+            }
+            else if (reloadRecipe == ZoneTransitionReloadRecipe.ResidentGeometry)
             {
                 player.playerSession.QueuePacket(DeleteAllActorsPacket.BuildPacket(player.actorId));
                 player.playerSession.QueuePacket(_0xE2Packet.BuildPacket(player.actorId, 0x10));
@@ -1410,6 +1454,322 @@ namespace AetherXIV.Core.Map
                 player.SendGameMessage(GetActor(), 34108, 0x20);
 
             LuaEngine.GetInstance().CallLuaFunction(player, newArea, "onZoneIn", true);
+        }
+
+        private void ScheduleLocalZoneBootstrap(
+            Player player,
+            Area destinationArea,
+            ushort spawnType,
+            ZoneTransitionReloadRecipe reloadRecipe)
+        {
+            DateTime requestedAtUtc = DateTime.UtcNow;
+            PendingLocalZoneBootstrap pending = new PendingLocalZoneBootstrap
+            {
+                token = Interlocked.Increment(ref nextPendingBootstrapToken),
+                player = player,
+                destinationArea = destinationArea,
+                spawnType = spawnType,
+                reloadRecipe = reloadRecipe,
+                requestedAtUtc = requestedAtUtc,
+                nextActionAtUtc =
+                    ZoneTransitionBootstrapPolicy.GetBootstrapDueAt(requestedAtUtc),
+                phase = PendingBootstrapPhase.AwaitingRoomExit,
+                actors = new List<Actor>(),
+                actorIndex = 0,
+                batchNumber = 0
+            };
+
+            PendingLocalZoneBootstrap replaced = null;
+            lock (pendingBootstrapLock)
+            {
+                pendingBootstraps.TryGetValue(player.actorId, out replaced);
+                pendingBootstraps[player.actorId] = pending;
+            }
+
+            if (replaced != null)
+            {
+                DevDiagnostics.Trace(
+                    "zone.change.bootstrap.replaced",
+                    "player", player.customDisplayName,
+                    "oldToken", replaced.token,
+                    "newToken", pending.token,
+                    "oldPhase", replaced.phase.ToString());
+            }
+
+            DevDiagnostics.Trace(
+                "zone.change.bootstrap.deferred",
+                "player", player.customDisplayName,
+                "token", pending.token,
+                "zone", player.zoneId,
+                "privateArea", player.privateArea ?? "",
+                "privateAreaType", player.privateAreaType,
+                "reloadRecipe", reloadRecipe.ToString(),
+                "delayMilliseconds",
+                    ZoneTransitionBootstrapPolicy.RoomExitDelayMilliseconds,
+                "requestedAtUtc", requestedAtUtc.ToString("O"),
+                "dueAtUtc", pending.nextActionAtUtc.ToString("O"));
+        }
+
+        private void ProcessPendingLocalZoneBootstraps(DateTime nowUtc)
+        {
+            PendingLocalZoneBootstrap[] candidates;
+            lock (pendingBootstrapLock)
+            {
+                candidates = pendingBootstraps.Values
+                    .Where(pending => pending.nextActionAtUtc <= nowUtc)
+                    .ToArray();
+            }
+
+            foreach (PendingLocalZoneBootstrap pending in candidates)
+            {
+                if (!IsCurrentPendingBootstrap(pending))
+                    continue;
+
+                if (!IsPendingBootstrapValid(pending, out string invalidReason))
+                {
+                    CancelPendingBootstrap(pending, invalidReason);
+                    continue;
+                }
+
+                try
+                {
+                    if (pending.phase == PendingBootstrapPhase.AwaitingRoomExit)
+                        BeginPendingBootstrap(pending, nowUtc);
+                    else
+                        SendPendingBootstrapActorBatch(pending, nowUtc);
+                }
+                catch (Exception exception)
+                {
+                    Program.Log.Error(
+                        exception,
+                        "Deferred zone bootstrap failed: player={0} token={1} phase={2}",
+                        pending.player.customDisplayName,
+                        pending.token,
+                        pending.phase);
+                    CancelPendingBootstrap(pending, "bootstrap exception");
+                }
+            }
+        }
+
+        private bool IsCurrentPendingBootstrap(PendingLocalZoneBootstrap pending)
+        {
+            lock (pendingBootstrapLock)
+            {
+                return pending != null
+                    && pendingBootstraps.TryGetValue(
+                        pending.player.actorId,
+                        out PendingLocalZoneBootstrap current)
+                    && Object.ReferenceEquals(current, pending);
+            }
+        }
+
+        public bool IsLocalZoneBootstrapPending(Player player)
+        {
+            if (player == null)
+                return false;
+
+            lock (pendingBootstrapLock)
+                return pendingBootstraps.ContainsKey(player.actorId);
+        }
+
+        private bool IsPendingBootstrapValid(
+            PendingLocalZoneBootstrap pending,
+            out string invalidReason)
+        {
+            if (pending.player == null || pending.player.playerSession == null)
+            {
+                invalidReason = "player session missing";
+                return false;
+            }
+
+            if (pending.player.playerSession.isEnding)
+            {
+                invalidReason = "session ending";
+                return false;
+            }
+
+            if (!Object.ReferenceEquals(
+                    pending.player.zone,
+                    pending.destinationArea))
+            {
+                invalidReason = "destination area changed";
+                return false;
+            }
+
+            invalidReason = "";
+            return true;
+        }
+
+        private void BeginPendingBootstrap(
+            PendingLocalZoneBootstrap pending,
+            DateTime nowUtc)
+        {
+            Player player = pending.player;
+            player.SendZoneInPackets(this, pending.spawnType);
+            player.playerSession.ClearInstance();
+
+            List<Actor> destinationActors =
+                pending.destinationArea.GetActorsAroundActor(player, 50);
+            if (player.zone2 != null
+                && !Object.ReferenceEquals(player.zone2, pending.destinationArea))
+            {
+                destinationActors.AddRange(
+                    player.zone2.GetActorsAroundActor(player, 50));
+            }
+
+            pending.actors = destinationActors
+                .Where(actor => actor != null && actor.actorId != player.actorId)
+                .GroupBy(actor => actor.actorId)
+                .Select(group => group.First())
+                .ToList();
+            pending.actorIndex = 0;
+            pending.batchNumber = 0;
+            pending.phase = PendingBootstrapPhase.StreamingActors;
+            pending.nextActionAtUtc =
+                ZoneTransitionBootstrapPolicy.GetFirstActorBatchDueAt(nowUtc);
+
+            DevDiagnostics.Trace(
+                "zone.change.bootstrap.release",
+                "player", player.customDisplayName,
+                "token", pending.token,
+                "zone", player.zoneId,
+                "privateArea", player.privateArea ?? "",
+                "privateAreaType", player.privateAreaType,
+                "elapsedMilliseconds",
+                    (nowUtc - pending.requestedAtUtc).TotalMilliseconds,
+                "destinationActorCount", pending.actors.Count,
+                "firstActorBatchDelayMilliseconds",
+                    ZoneTransitionBootstrapPolicy.FirstActorBatchDelayMilliseconds,
+                "actorsPerBatch",
+                    ZoneTransitionBootstrapPolicy.ActorsPerBatch,
+                "actorBatchIntervalMilliseconds",
+                    ZoneTransitionBootstrapPolicy.ActorBatchIntervalMilliseconds);
+
+            FlushMapToWorldPackets();
+
+            if (pending.actors.Count == 0)
+                CompletePendingBootstrap(pending, nowUtc);
+        }
+
+        private void SendPendingBootstrapActorBatch(
+            PendingLocalZoneBootstrap pending,
+            DateTime nowUtc)
+        {
+            int startIndex = pending.actorIndex;
+            pending.actorIndex =
+                pending.player.playerSession.SendInstanceBootstrapBatch(
+                    pending.actors,
+                    pending.actorIndex,
+                    ZoneTransitionBootstrapPolicy.ActorsPerBatch,
+                    out int spawnedActors);
+            pending.batchNumber++;
+
+            DevDiagnostics.Trace(
+                "zone.change.bootstrap.actorBatch",
+                "player", pending.player.customDisplayName,
+                "token", pending.token,
+                "batch", pending.batchNumber,
+                "startIndex", startIndex,
+                "nextIndex", pending.actorIndex,
+                "spawnedActors", spawnedActors,
+                "totalActors", pending.actors.Count,
+                "elapsedMilliseconds",
+                    (nowUtc - pending.requestedAtUtc).TotalMilliseconds);
+
+            FlushMapToWorldPackets();
+
+            if (pending.actorIndex >= pending.actors.Count)
+            {
+                CompletePendingBootstrap(pending, nowUtc);
+                return;
+            }
+
+            pending.nextActionAtUtc =
+                ZoneTransitionBootstrapPolicy.GetNextActorBatchDueAt(nowUtc);
+        }
+
+        private void CompletePendingBootstrap(
+            PendingLocalZoneBootstrap pending,
+            DateTime nowUtc)
+        {
+            Player player = pending.player;
+            player.SendZoneInstanceSnapshot(this);
+            player.playerSession.LockUpdates(false);
+
+            lock (pendingBootstrapLock)
+            {
+                if (pendingBootstraps.TryGetValue(
+                        player.actorId,
+                        out PendingLocalZoneBootstrap current)
+                    && Object.ReferenceEquals(current, pending))
+                {
+                    pendingBootstraps.Remove(player.actorId);
+                }
+            }
+
+            DevDiagnostics.Trace(
+                "zone.change.local.end",
+                "player", player.customDisplayName,
+                "token", pending.token,
+                "zone", player.zoneId,
+                "privateArea", player.privateArea ?? "",
+                "privateAreaType", player.privateAreaType,
+                "reloadRecipe", pending.reloadRecipe.ToString(),
+                "areaActorCount", player.zone == null
+                    ? 0
+                    : player.zone.GetActorCount(),
+                "instanceActorCount",
+                    player.playerSession.actorInstanceList.Count,
+                "actorBatches", pending.batchNumber,
+                "elapsedMilliseconds",
+                    (nowUtc - pending.requestedAtUtc).TotalMilliseconds);
+
+            if (pending.destinationArea is PrivateArea)
+                player.SendGameMessage(GetActor(), 34108, 0x20);
+
+            LuaEngine.GetInstance().CallLuaFunction(
+                player,
+                pending.destinationArea,
+                "onZoneIn",
+                true);
+            FlushMapToWorldPackets();
+        }
+
+        private void CancelPendingBootstrap(
+            PendingLocalZoneBootstrap pending,
+            string reason)
+        {
+            bool removed = false;
+            lock (pendingBootstrapLock)
+            {
+                if (pending != null
+                    && pending.player != null
+                    && pendingBootstraps.TryGetValue(
+                        pending.player.actorId,
+                        out PendingLocalZoneBootstrap current)
+                    && Object.ReferenceEquals(current, pending))
+                {
+                    pendingBootstraps.Remove(pending.player.actorId);
+                    removed = true;
+                }
+            }
+
+            if (!removed)
+                return;
+
+            DevDiagnostics.Trace(
+                "zone.change.bootstrap.cancelled",
+                "player", pending.player.customDisplayName,
+                "token", pending.token,
+                "phase", pending.phase.ToString(),
+                "reason", reason);
+        }
+
+        private static void FlushMapToWorldPackets()
+        {
+            ZoneConnection connection = Server.GetWorldConnection();
+            if (connection != null)
+                connection.FlushQueuedSendPackets();
         }
 
         //Moves actor within zone to spawn position
@@ -2509,12 +2869,31 @@ namespace AetherXIV.Core.Map
         public void StartZoneThread()
         {
             mZoneTimer = new Timer(ZoneThreadLoop, null, 0, MILIS_LOOPTIME);
+            mTransitionTimer =
+                new Timer(
+                    TransitionThreadLoop,
+                    null,
+                    TRANSITION_LOOPTIME,
+                    TRANSITION_LOOPTIME);
             Program.Log.Info("Zone Loop has started");
         }
 
         public bool StopZoneThread(int timeoutMilliseconds)
         {
-            Timer timer = Interlocked.Exchange(ref mZoneTimer, null);
+            bool transitionStopped =
+                StopTimer(ref mTransitionTimer, timeoutMilliseconds);
+            bool zoneStopped =
+                StopTimer(ref mZoneTimer, timeoutMilliseconds);
+
+            lock (pendingBootstrapLock)
+                pendingBootstraps.Clear();
+
+            return transitionStopped && zoneStopped;
+        }
+
+        private static bool StopTimer(ref Timer timerField, int timeoutMilliseconds)
+        {
+            Timer timer = Interlocked.Exchange(ref timerField, null);
             if (timer == null)
                 return true;
 
@@ -2525,6 +2904,21 @@ namespace AetherXIV.Core.Map
                     return true;
 
                 return callbacksFinished.WaitOne(timeoutMilliseconds);
+            }
+        }
+
+        private void TransitionThreadLoop(Object state)
+        {
+            try
+            {
+                lock (zoneList)
+                    ProcessPendingLocalZoneBootstraps(DateTime.UtcNow);
+            }
+            catch (Exception exception)
+            {
+                Program.Log.Error(
+                    exception,
+                    "Deferred zone bootstrap loop failed.");
             }
         }
         

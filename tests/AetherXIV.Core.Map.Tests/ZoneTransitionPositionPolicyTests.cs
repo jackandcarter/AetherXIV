@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 namespace AetherXIV.Core.Map.Tests;
 
 public sealed class ZoneTransitionPositionPolicyTests
@@ -95,11 +110,44 @@ public sealed class ZoneTransitionPositionPolicyTests
     }
 
     [Fact]
-    public void SameZonePrivateAreaFlipUsesResidentGeometryReload()
+    public void PrivateToPublicBoundaryUsesRoomExitReload()
+    {
+        Assert.Equal(
+            ZoneTransitionReloadRecipe.PrivateAreaBoundary,
+            ZoneTransitionReloadPolicy.Select(
+                155,
+                "PrivateAreaMasterPast",
+                2,
+                155,
+                null,
+                0));
+    }
+
+    [Fact]
+    public void RoomExitBootstrapUsesCapturedRetailTimingAndBatchBounds()
+    {
+        DateTime queuedAt = new(2026, 7, 27, 0, 0, 0, DateTimeKind.Utc);
+        DateTime bootstrapAt =
+            ZoneTransitionBootstrapPolicy.GetBootstrapDueAt(queuedAt);
+        DateTime firstActorBatchAt =
+            ZoneTransitionBootstrapPolicy.GetFirstActorBatchDueAt(bootstrapAt);
+
+        Assert.Equal(6000, (bootstrapAt - queuedAt).TotalMilliseconds);
+        Assert.Equal(440, (firstActorBatchAt - bootstrapAt).TotalMilliseconds);
+        Assert.Equal(140, ZoneTransitionBootstrapPolicy.ActorBatchIntervalMilliseconds);
+        Assert.Equal(8, ZoneTransitionBootstrapPolicy.ActorsPerBatch);
+        Assert.True(ZoneTransitionBootstrapPolicy.RequiresDeferredBootstrap(
+            ZoneTransitionReloadRecipe.PrivateAreaBoundary));
+        Assert.False(ZoneTransitionBootstrapPolicy.RequiresDeferredBootstrap(
+            ZoneTransitionReloadRecipe.FullMap));
+    }
+
+    [Fact]
+    public void SamePublicAreaMoveUsesResidentGeometryReload()
     {
         Assert.Equal(
             ZoneTransitionReloadRecipe.ResidentGeometry,
-            ZoneTransitionReloadPolicy.Select(155, 155));
+            ZoneTransitionReloadPolicy.Select(155, null, 0, 155, null, 0));
     }
 
     [Fact]
@@ -107,6 +155,27 @@ public sealed class ZoneTransitionPositionPolicyTests
     {
         Assert.Equal(
             ZoneTransitionReloadRecipe.FullMap,
-            ZoneTransitionReloadPolicy.Select(166, 155));
+            ZoneTransitionReloadPolicy.Select(
+                166,
+                "PrivateAreaMasterPast",
+                1,
+                155,
+                null,
+                0));
+    }
+
+    [Theory]
+    [InlineData(false, -1, false)]
+    [InlineData(true, 0, false)]
+    [InlineData(true, 1, false)]
+    [InlineData(true, -1, true)]
+    public void DeferredNoticeOnlyReleasesForRetailZoneReadyAcknowledgement(
+        bool packetValid,
+        int unknown,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            ZoneTransitionReadinessPolicy.IsReady(packetValid, unknown));
     }
 }

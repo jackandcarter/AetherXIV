@@ -222,6 +222,10 @@ build_umbra_bootstrap
 python3 "${ROOT_DIR}/tools/Universal/create-direct-core-database-package.py" \
   --repo-root "${ROOT_DIR}" \
   --output-dir "${OUTPUT_ROOT}/Database"
+cp "${ROOT_DIR}/LICENSE" "${OUTPUT_ROOT}/LICENSE"
+cp "${ROOT_DIR}/THIRD_PARTY_NOTICES.md" "${OUTPUT_ROOT}/THIRD_PARTY_NOTICES.md"
+cp "${ROOT_DIR}/MODIFICATIONS.md" "${OUTPUT_ROOT}/MODIFICATIONS.md"
+cp "${ROOT_DIR}/TRADEMARKS.md" "${OUTPUT_ROOT}/TRADEMARKS.md"
 write_build_manifest
 
 if [[ "${CONFIGURATION}" == Release ]]; then

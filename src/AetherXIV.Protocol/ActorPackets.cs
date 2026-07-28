@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using static AetherXIV.Protocol.ActorPacketCodecHelpers;
 using System.Text;
 
@@ -212,6 +227,34 @@ public sealed class RemoveActorPacketCodec : IPacketCodec<RemoveActorPacket>
 }
 
 public readonly record struct SetActorTargetAnimatedPacket(uint TargetActorId);
+
+public readonly record struct SetActorEventTargetPacket(uint TargetActorId)
+{
+    public const uint InvalidActorId = 0xC0000000;
+}
+
+public sealed class SetActorEventTargetPacketCodec : IPacketCodec<SetActorEventTargetPacket>
+{
+    public const int PayloadSize = 0x28 - 0x20;
+
+    public PacketOpcode Opcode => PacketOpcode.SetActorEventTarget;
+
+    public Type PacketType => typeof(SetActorEventTargetPacket);
+
+    public SetActorEventTargetPacket Decode(SubPacket packet)
+    {
+        EnsureOpcode(packet, Opcode);
+        ReadOnlySpan<byte> payload = EnsurePayload(packet, PayloadSize);
+        return new SetActorEventTargetPacket(PacketBinary.ReadUInt32LittleEndian(payload));
+    }
+
+    public SubPacket Encode(uint sourceActorId, SetActorEventTargetPacket packet)
+    {
+        byte[] payload = new byte[PayloadSize];
+        PacketBinary.WriteUInt32LittleEndian(payload, packet.TargetActorId);
+        return SubPacket.Create(Opcode, sourceActorId, payload);
+    }
+}
 
 public sealed class SetActorTargetAnimatedPacketCodec : IPacketCodec<SetActorTargetAnimatedPacket>
 {

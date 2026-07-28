@@ -25,6 +25,7 @@ using AetherXIV.Core.Map.packets.send.events;
 using AetherXIV.Core.Map.packets.send.actor.inventory;
 using AetherXIV.Core.Map.packets.send.player;
 using AetherXIV.Core.Map.packets.send.actor.battle;
+using AetherXIV.Core.Map.packets.receive;
 using AetherXIV.Core.Map.packets.receive.events;
 using static AetherXIV.Core.Map.LuaUtils;
 using AetherXIV.Core.Map.packets.send.actor.events;
@@ -182,6 +183,12 @@ namespace AetherXIV.Core.Map.Actors
         public string currentEventName = "";
         public byte currentEventType = 0;
         public Coroutine currentEventRunning;
+        public string currentEventFunctionName = "";
+        public ulong currentEventFunctionStartedAt = 0;
+        public bool currentEventFunctionReceivedUpdate = false;
+        public uint currentCutsceneState = 0;
+        public string currentCutsceneName = "";
+        public uint currentCutsceneDetail = 0;
 
         //Player Info
         public uint destinationZone;
@@ -751,6 +758,21 @@ namespace AetherXIV.Core.Map.Actors
                 QueuePackets(directorEventStatusPackets);
             }
 
+            int npcLinkshellOwnedCount = 0;
+            int npcLinkshellCallingCount = 0;
+            int npcLinkshellExtraCount = 0;
+            for (int i = 0; i < playerWork.npcLinkshellChatCalling.Length; i++)
+            {
+                bool isCalling = playerWork.npcLinkshellChatCalling[i];
+                bool isExtra = playerWork.npcLinkshellChatExtra[i];
+                if (isCalling || isExtra)
+                    npcLinkshellOwnedCount++;
+                if (isCalling)
+                    npcLinkshellCallingCount++;
+                if (isExtra)
+                    npcLinkshellExtraCount++;
+            }
+
             if (currentContentGroup != null)
             {
                 currentContentGroup.SendGroupPackets(playerSession);
@@ -781,13 +803,17 @@ namespace AetherXIV.Core.Map.Actors
                 "ownedDirectorSpawnPackets", ownedDirectorSpawnPackets,
                 "ownedDirectorInitPackets", ownedDirectorInitPackets,
                 "ownedDirectorEventStatusPackets", ownedDirectorEventStatusPackets,
+                "npcLinkshellOwnedCount", npcLinkshellOwnedCount,
+                "npcLinkshellCallingCount", npcLinkshellCallingCount,
+                "npcLinkshellExtraCount", npcLinkshellExtraCount,
                 "hasContentGroup", currentContentGroup != null,
                 "hasParty", currentParty != null);
         }
 
         /// <summary>
-        /// Commits the actors instantiated by a zone bootstrap using the
-        /// retail 0x0006, chunked 0x0008, 0x0007 keep-list sequence.
+        /// Closes a retail mass-delete transaction by listing every actor the
+        /// client must keep. Opcode 0x000A carries a fixed group of 32 IDs;
+        /// counted 0x0008 records carry the remainder.
         /// </summary>
         public void SendZoneInstanceSnapshot(WorldManager world)
         {
@@ -829,10 +855,24 @@ namespace AetherXIV.Core.Map.Actors
             }
 
             QueuePacket(ServerZoneInstanceBeginPacket.BuildPacket(actorId));
-            for (int offset = 0; offset < actorIds.Count; offset += ServerZoneInstanceActorsPacket.MAXIMUM_ACTORS)
+
+            int offset = 0;
+            bool sentKeepActorsX32 =
+                actorIds.Count >= ServerZoneInstanceKeepActorsX32Packet.MAXIMUM_ACTORS;
+            if (sentKeepActorsX32)
+            {
+                QueuePacket(ServerZoneInstanceKeepActorsX32Packet.BuildPacket(
+                    actorId,
+                    actorIds.GetRange(0, ServerZoneInstanceKeepActorsX32Packet.MAXIMUM_ACTORS)));
+                offset = ServerZoneInstanceKeepActorsX32Packet.MAXIMUM_ACTORS;
+            }
+
+            int keepActorsX08ChunkCount = 0;
+            for (; offset < actorIds.Count; offset += ServerZoneInstanceActorsPacket.MAXIMUM_ACTORS)
             {
                 int count = Math.Min(ServerZoneInstanceActorsPacket.MAXIMUM_ACTORS, actorIds.Count - offset);
                 QueuePacket(ServerZoneInstanceActorsPacket.BuildPacket(actorId, actorIds.GetRange(offset, count)));
+                keepActorsX08ChunkCount++;
             }
             QueuePacket(ServerZoneInstanceEndPacket.BuildPacket(actorId));
 
@@ -844,7 +884,12 @@ namespace AetherXIV.Core.Map.Actors
                 "privateArea", privateArea ?? "",
                 "privateAreaType", privateAreaType,
                 "actorCount", actorIds.Count,
-                "chunkCount", (actorIds.Count + ServerZoneInstanceActorsPacket.MAXIMUM_ACTORS - 1) / ServerZoneInstanceActorsPacket.MAXIMUM_ACTORS,
+                "keepActorsX32Opcode", sentKeepActorsX32 ? "0x000A" : "",
+                "keepActorsX32Count", sentKeepActorsX32
+                    ? ServerZoneInstanceKeepActorsX32Packet.MAXIMUM_ACTORS
+                    : 0,
+                "keepActorsX08Opcode", "0x0008",
+                "keepActorsX08ChunkCount", keepActorsX08ChunkCount,
                 "actorIds", String.Join(",", actorIds.Select(id => String.Format("0x{0:X8}", id))));
         }
 
@@ -2574,6 +2619,9 @@ namespace AetherXIV.Core.Map.Actors
             currentEventOwner = start.ownerActorID;
             currentEventName = start.eventName;
             currentEventType = start.eventType;
+            currentEventFunctionName = "";
+            currentEventFunctionStartedAt = 0;
+            currentEventFunctionReceivedUpdate = false;
             DevDiagnostics.Trace(
                 "event.start",
                 "player", customDisplayName,
@@ -2596,6 +2644,23 @@ namespace AetherXIV.Core.Map.Actors
             }
 
             LuaEngine.GetInstance().EventStarted(this, owner, start);
+        }
+
+        public void UpdateCutsceneState(CutsceneStatePacket packet)
+        {
+            if (packet == null || packet.invalidPacket)
+                return;
+
+            currentCutsceneState = packet.state;
+            currentCutsceneName = packet.cutsceneName;
+            currentCutsceneDetail = packet.detail;
+            DevDiagnostics.Trace(
+                "client.cutscene.state",
+                "player", customDisplayName,
+                "actor", String.Format("0x{0:X}", actorId),
+                "state", currentCutsceneState,
+                "cutscene", currentCutsceneName,
+                "detail", String.Format("0x{0:X8}", currentCutsceneDetail));
         }
 
         public void RefreshQuestENpcs()
@@ -2637,6 +2702,9 @@ namespace AetherXIV.Core.Map.Actors
             currentEventOwner = start.ownerActorID;
             currentEventName = start.eventName;
             currentEventType = start.eventType;
+            currentEventFunctionName = "";
+            currentEventFunctionStartedAt = 0;
+            currentEventFunctionReceivedUpdate = false;
 
             uint? npcLsHint = null;
             if (start.luaParams != null)
@@ -2697,6 +2765,12 @@ namespace AetherXIV.Core.Map.Actors
 
         public void UpdateEvent(EventUpdatePacket update)
         {
+            ulong updateTime = Utils.MilisUnixTimeStampUTC();
+            ulong functionElapsedMilliseconds =
+                currentEventFunctionStartedAt == 0 || updateTime < currentEventFunctionStartedAt
+                    ? 0
+                    : updateTime - currentEventFunctionStartedAt;
+            currentEventFunctionReceivedUpdate = currentEventFunctionStartedAt != 0;
             DevDiagnostics.Trace(
                 "event.update",
                 "player", customDisplayName,
@@ -2704,6 +2778,8 @@ namespace AetherXIV.Core.Map.Actors
                 "owner", String.Format("0x{0:X}", currentEventOwner),
                 "eventName", currentEventName,
                 "eventType", currentEventType,
+                "pendingFunction", currentEventFunctionName,
+                "functionElapsedMilliseconds", functionElapsedMilliseconds,
                 "params", LuaUtils.DumpParams(update.luaParams));
             LuaEngine.GetInstance().OnEventUpdate(this, update.luaParams);
         }
@@ -2730,8 +2806,8 @@ namespace AetherXIV.Core.Map.Actors
 
         /// <summary>
         /// Parks a content-director event until the client acknowledges the
-        /// same-zone actor reload. A KickEvent sent before that acknowledgement
-        /// is discarded because DeleteAllActors has invalidated its owner.
+        /// destination actor bootstrap. A kick sent before that acknowledgement
+        /// can arrive before the director has been committed to the client.
         /// </summary>
         public void DeferContentKickEvent(Actor actor, string eventName, params object[] parameters)
         {
@@ -2823,6 +2899,12 @@ namespace AetherXIV.Core.Map.Actors
         public void RunEventFunction(string functionName, params object[] parameters)
         {
             List<LuaParam> lParams = LuaUtils.CreateLuaParamList(parameters);
+            currentEventFunctionName = functionName ?? "";
+            currentEventFunctionStartedAt = Utils.MilisUnixTimeStampUTC();
+            currentEventFunctionReceivedUpdate = false;
+            bool detached = currentEventOwner == 0 &&
+                String.IsNullOrEmpty(currentEventName) &&
+                currentEventType == 0;
             DevDiagnostics.Trace(
                 "event.runFunction",
                 "player", customDisplayName,
@@ -2830,6 +2912,8 @@ namespace AetherXIV.Core.Map.Actors
                 "owner", String.Format("0x{0:X}", currentEventOwner),
                 "eventName", currentEventName,
                 "eventType", currentEventType,
+                "detached", detached,
+                "envelopeSize", RunEventFunctionPacket.GetPacketSize(currentEventType),
                 "function", functionName,
                 "params", LuaUtils.DumpParams(lParams));
             SubPacket spacket = RunEventFunctionPacket.BuildPacket(actorId, currentEventOwner, currentEventName, currentEventType, functionName, lParams);
@@ -2839,13 +2923,21 @@ namespace AetherXIV.Core.Map.Actors
 
         public void EndEvent()
         {
+            ulong endTime = Utils.MilisUnixTimeStampUTC();
+            ulong functionElapsedMilliseconds =
+                currentEventFunctionStartedAt == 0 || endTime < currentEventFunctionStartedAt
+                    ? 0
+                    : endTime - currentEventFunctionStartedAt;
             DevDiagnostics.Trace(
                 "event.end",
                 "player", customDisplayName,
                 "actor", String.Format("0x{0:X}", actorId),
                 "owner", String.Format("0x{0:X}", currentEventOwner),
                 "eventName", currentEventName,
-                "eventType", currentEventType);
+                "eventType", currentEventType,
+                "pendingFunction", currentEventFunctionName,
+                "functionElapsedMilliseconds", functionElapsedMilliseconds,
+                "functionHadClientResponse", currentEventFunctionReceivedUpdate);
             SubPacket p = EndEventPacket.BuildPacket(actorId, currentEventOwner, currentEventName, currentEventType);
             p.DebugPrintSubPacket();
             QueuePacket(p);
@@ -2854,6 +2946,9 @@ namespace AetherXIV.Core.Map.Actors
             currentEventName = "";
             currentEventType = 0;
             currentEventRunning = null;
+            currentEventFunctionName = "";
+            currentEventFunctionStartedAt = 0;
+            currentEventFunctionReceivedUpdate = false;
         }
 
         public void BroadcastCountdown(byte countdownLength, ulong syncTime)
@@ -4149,6 +4244,26 @@ namespace AetherXIV.Core.Map.Actors
             if (profile != null)
             {
                 baseStatProfiles[key] = profile;
+                return profile;
+            }
+
+            // Never erase a character's established base layer merely because
+            // the next exact growth row has not yet been recovered. Reuse the
+            // closest trace/client-backed lower row without inventing growth.
+            // Once an exact row is added it wins on the next process start.
+            profile = Database.GetPlayerBaseStatsAtOrBelow(classOrJobId, tribe, level);
+            if (profile != null)
+            {
+                baseStatProfiles[key] = profile;
+                DevDiagnostics.Trace(
+                    "stats.base.fallback",
+                    "player", String.Format("0x{0:X}", actorId),
+                    "playerName", customDisplayName != null ? customDisplayName : actorName,
+                    "classOrJobId", classOrJobId,
+                    "tribe", tribe,
+                    "requestedLevel", level,
+                    "profileLevel", profile.level,
+                    "source", profile.source);
                 return profile;
             }
 

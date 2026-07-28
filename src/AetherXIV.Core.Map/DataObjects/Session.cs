@@ -2,6 +2,7 @@
 
 using AetherXIV.Core.Map.Actors;
 using AetherXIV.Core.Map.packets.send.actor;
+using System;
 using System.Collections.Generic;
 using AetherXIV.Core.Map.actors.chara.npc;
 
@@ -154,20 +155,70 @@ namespace AetherXIV.Core.Map.dataobjects
 
                 }
                 else
-                {   
-                    QueuePacket(actor.GetSpawnPackets(playerActor, 1));
-
-                    QueuePacket(actor.GetInitPackets());
-                    QueuePacket(actor.GetSetEventStatusPackets());
-                    actorInstanceList.Add(actor);
-
-                    if (actor is Npc)
-                    {
-                        ((Npc)actor).DoOnActorSpawn(playerActor);
-                    }
-                }
+                    SpawnInstanceActor(actor);
             }
 
+        }
+
+        /// <summary>
+        /// Sends one bounded group of destination actors during a room-exit
+        /// bootstrap. Retail streams these groups after the player and
+        /// inventory bootstrap instead of delivering the whole room in one
+        /// burst.
+        /// </summary>
+        public int SendInstanceBootstrapBatch(
+            IReadOnlyList<Actor> actors,
+            int startIndex,
+            int maximumActors,
+            out int spawnedActors)
+        {
+            spawnedActors = 0;
+            if (actors == null || maximumActors <= 0)
+                return startIndex;
+
+            int index = Math.Max(0, startIndex);
+            while (index < actors.Count && spawnedActors < maximumActors)
+            {
+                Actor actor = actors[index++];
+                if (actor == null
+                    || actor.actorId == playerActor.actorId
+                    || actorInstanceList.Contains(actor))
+                {
+                    continue;
+                }
+
+                SpawnInstanceActor(actor);
+                spawnedActors++;
+            }
+
+            return index;
+        }
+
+        private void SpawnInstanceActor(Actor actor)
+        {
+            List<SubPacket> spawnPackets = actor.GetSpawnPackets(playerActor, 1);
+            List<SubPacket> initPackets = actor.GetInitPackets();
+            List<SubPacket> eventStatusPackets = actor.GetSetEventStatusPackets();
+
+            QueuePacket(spawnPackets);
+            QueuePacket(initPackets);
+            QueuePacket(eventStatusPackets);
+            actorInstanceList.Add(actor);
+
+            DevDiagnostics.Trace(
+                "zone.bootstrap.actor",
+                "player", playerActor.customDisplayName,
+                "actorId", String.Format("0x{0:X}", actor.actorId),
+                "actorName", actor.actorName ?? "",
+                "displayName", actor.customDisplayName ?? "",
+                "classPath", actor.classPath ?? "",
+                "className", actor.className ?? "",
+                "spawnPackets", spawnPackets.Count,
+                "initPackets", initPackets.Count,
+                "eventStatusPackets", eventStatusPackets.Count);
+
+            if (actor is Npc)
+                ((Npc)actor).DoOnActorSpawn(playerActor);
         }
 
 

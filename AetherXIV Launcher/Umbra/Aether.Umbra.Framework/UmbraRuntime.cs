@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using Aether.Umbra.PluginApi;
 
 namespace Aether.Umbra.Framework;
@@ -8,6 +23,7 @@ public sealed class UmbraRuntime : IDisposable
     private readonly SemaphoreSlim pluginMutationGate = new(1, 1);
     private readonly UmbraSystemPluginHost systemPlugins;
     private readonly Task updateLoop;
+    private readonly Task repositoryRefreshTask;
     private bool disposed;
 
     private UmbraRuntime(
@@ -34,6 +50,9 @@ public sealed class UmbraRuntime : IDisposable
         systemPlugins.Initialize();
         Plugins.LoadEnabled(manifests);
         updateLoop = Task.Run(() => RunUpdateLoopAsync(shutdown.Token));
+        repositoryRefreshTask = PluginManager.RepositorySources.Count == 0
+            ? Task.CompletedTask
+            : Task.Run(() => RunInitialRepositoryRefreshAsync(shutdown.Token));
     }
 
     public UmbraRuntimeOptions Options { get; }
@@ -102,6 +121,9 @@ public sealed class UmbraRuntime : IDisposable
             candidate => string.Equals(candidate.Id, pluginId, StringComparison.OrdinalIgnoreCase));
         if (manifest is null)
             return UmbraPluginActionResult.Failure($"Plugin not found: {pluginId}");
+        if (manifest.IsDeveloperPlugin)
+            return UmbraPluginActionResult.Failure(
+                "Developer plugins are controlled by the Developer Plugins switch and local location list.");
         if (enabled && Options.SafeMode)
             return UmbraPluginActionResult.Failure("Safe mode blocks third-party plugin activation.");
         if (manifest.Enabled == enabled)
@@ -160,6 +182,9 @@ public sealed class UmbraRuntime : IDisposable
             candidate => string.Equals(candidate.Id, pluginId, StringComparison.OrdinalIgnoreCase));
         if (manifest is null)
             return UmbraPluginActionResult.Failure($"Plugin not found: {pluginId}");
+        if (manifest.IsDeveloperPlugin)
+            return UmbraPluginActionResult.Failure(
+                "Remove developer plugins from the local location list; Umbra will not delete development files.");
 
         string pluginRoot = Path.GetFullPath(Options.PluginDirectory);
         string installRoot = Path.GetFullPath(Path.GetDirectoryName(manifest.ManifestPath) ?? "");
@@ -241,8 +266,7 @@ public sealed class UmbraRuntime : IDisposable
                 PluginManager.RepositorySources.Append(source));
             UmbraRepositoryRegistry.SaveCustom(Options.CacheDirectory, sources);
 
-            IEnumerable<UmbraStoreEntry> retained = PluginManager.SupportedPlugins
-                .Concat(PluginManager.AvailablePlugins)
+            IEnumerable<UmbraStoreEntry> retained = PluginManager.Catalog.StoreEntries
                 .Where(entry => !string.Equals(entry.RepositoryUrl, source.Url, StringComparison.OrdinalIgnoreCase));
             PluginManager = PluginManager with
             {
@@ -281,8 +305,7 @@ public sealed class UmbraRuntime : IDisposable
                 .Where(candidate => !string.Equals(candidate.Url, url, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
             UmbraRepositoryRegistry.SaveCustom(Options.CacheDirectory, sources);
-            IEnumerable<UmbraStoreEntry> retained = PluginManager.SupportedPlugins
-                .Concat(PluginManager.AvailablePlugins)
+            IEnumerable<UmbraStoreEntry> retained = PluginManager.Catalog.StoreEntries
                 .Where(entry => !string.Equals(entry.RepositoryUrl, url, StringComparison.OrdinalIgnoreCase));
             PluginManager = PluginManager with
             {
@@ -306,19 +329,47 @@ public sealed class UmbraRuntime : IDisposable
 
     internal async Task<UmbraPluginActionResult> InstallPluginAsync(UmbraStoreEntry entry)
     {
+        UmbraPluginManifest? previousSnapshot = PluginManager.InstalledPlugins.FirstOrDefault(candidate =>
+            string.Equals(candidate.Id, entry.Id, StringComparison.OrdinalIgnoreCase));
+        if (previousSnapshot?.IsDeveloperPlugin == true)
+        {
+            return UmbraPluginActionResult.Failure(
+                "A developer plugin with this ID is loaded. Remove its local location before installing a repository package.");
+        }
+
+        string archivePath;
+        try
+        {
+            archivePath = await UmbraPluginInstaller.DownloadVerifiedArchiveAsync(
+                entry,
+                Path.Combine(Options.CacheDirectory, "Packages"),
+                shutdown.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"umbra_plugin_download_failed id={entry.Id} version={entry.Version}", ex);
+            return UmbraPluginActionResult.Failure(ex.Message);
+        }
+
         await pluginMutationGate.WaitAsync(shutdown.Token).ConfigureAwait(false);
         UmbraPluginManifest? previous = PluginManager.InstalledPlugins.FirstOrDefault(candidate =>
             string.Equals(candidate.Id, entry.Id, StringComparison.OrdinalIgnoreCase));
         try
         {
+            if (previous?.IsDeveloperPlugin == true)
+            {
+                return UmbraPluginActionResult.Failure(
+                    "A developer plugin with this ID was loaded while the package downloaded. Remove its local location before installing.");
+            }
+
             if (previous is not null)
                 Plugins.Unload(previous.Id);
 
-            UmbraPluginInstallResult install = await UmbraPluginInstaller.DownloadAndInstallAsync(
+            UmbraPluginInstallResult install = UmbraPluginInstaller.InstallVerifiedArchive(
                 entry,
+                archivePath,
                 Options.PluginDirectory,
-                Path.Combine(Options.CacheDirectory, "Packages"),
-                shutdown.Token).ConfigureAwait(false);
+                Path.Combine(Options.CacheDirectory, "PluginBackups"));
             UmbraPluginManifest manifest = UmbraPluginManifest.Load(install.ManifestPath);
             if (previous is null)
             {
@@ -381,20 +432,25 @@ public sealed class UmbraRuntime : IDisposable
         log.Info($"umbra_dev_bridge_control={options.DevBridgeControlPath}");
         log.Info($"umbra_dev_bridge_initial_enabled={options.DevBridgeInitiallyEnabled}");
 
-        IReadOnlyList<UmbraPluginManifest> manifests = UmbraPluginDiscovery.Discover(options.PluginDirectory, log);
+        IReadOnlyList<UmbraPluginManifest> installedManifests =
+            UmbraPluginDiscovery.Discover(options.PluginDirectory, log);
+        UmbraDeveloperPluginSettings developerPlugins =
+            UmbraDeveloperPluginSettingsStore.Load(options.CacheDirectory, log);
+        IReadOnlyList<UmbraPluginManifest> developerManifests = developerPlugins.Enabled
+            ? UmbraDeveloperPluginDiscovery.Discover(developerPlugins.Locations, log)
+            : Array.Empty<UmbraPluginManifest>();
+        IReadOnlyList<UmbraPluginManifest> manifests = MergePluginManifests(
+            installedManifests,
+            developerManifests,
+            log);
         IReadOnlyList<UmbraRepositorySource> repositorySources = UmbraRepositoryRegistry.Load(
             options.CacheDirectory,
             options.RepositorySources,
             log);
-        IReadOnlyList<UmbraStoreEntry> storeEntries;
-        using (CancellationTokenSource repositoryTimeout = new(TimeSpan.FromSeconds(5)))
-        {
-            storeEntries = await UmbraRepositoryFetcher.FetchAsync(
-                repositorySources,
-                Path.Combine(options.CacheDirectory, "Repositories"),
-                log,
-                repositoryTimeout.Token);
-        }
+        IReadOnlyList<UmbraStoreEntry> storeEntries = UmbraRepositoryFetcher.LoadCached(
+            repositorySources,
+            Path.Combine(options.CacheDirectory, "Repositories"),
+            log);
 
         UmbraPluginCatalogState catalog = UmbraPluginCatalogState.Build(manifests, storeEntries);
         UmbraPluginManagerState pluginManager = new(
@@ -405,7 +461,10 @@ public sealed class UmbraRuntime : IDisposable
             options.SafeMode,
             DebugLoggingEnabled: false,
             DevUiEnabled: false,
-            PluginExecutionEnabled: !options.SafeMode);
+            PluginExecutionEnabled: !options.SafeMode)
+        {
+            DeveloperPlugins = developerPlugins
+        };
 
         log.Info($"umbra_plugin_manifest_count={pluginManager.InstalledPlugins.Count}");
         log.Info($"umbra_plugin_enabled_count={pluginManager.InstalledPlugins.Count(plugin => plugin.Enabled)}");
@@ -424,6 +483,133 @@ public sealed class UmbraRuntime : IDisposable
         log.Info($"umbra_plugin_running_count={runtime.Plugins.Statuses.Count(status => status.State == UmbraPluginRuntimeState.Running)}");
         log.Info("umbra_runtime_started=true");
         return runtime;
+    }
+
+    internal async Task<UmbraPluginActionResult> SetDeveloperPluginsEnabledAsync(bool enabled)
+    {
+        if (enabled && Options.SafeMode)
+            return UmbraPluginActionResult.Failure("Safe mode blocks developer plugin loading.");
+
+        await pluginMutationGate.WaitAsync(shutdown.Token).ConfigureAwait(false);
+        try
+        {
+            UmbraDeveloperPluginSettings settings = UmbraDeveloperPluginSettingsStore.Save(
+                Options.CacheDirectory,
+                PluginManager.DeveloperPlugins with { Enabled = enabled });
+            return RescanDeveloperPlugins(settings, enabled
+                ? "Developer plugin loading enabled."
+                : "Developer plugin loading disabled.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"umbra_developer_plugins_enabled_change_failed enabled={enabled}", ex);
+            return UmbraPluginActionResult.Failure(ex.Message);
+        }
+        finally
+        {
+            pluginMutationGate.Release();
+        }
+    }
+
+    internal async Task<UmbraPluginActionResult> AddDeveloperPluginLocationAsync(string location)
+    {
+        UmbraPluginManifest candidate;
+        try
+        {
+            candidate = UmbraDeveloperPluginDiscovery.LoadLocation(location);
+        }
+        catch (Exception ex)
+        {
+            return UmbraPluginActionResult.Failure(ex.Message);
+        }
+
+        if (PluginManager.InstalledPlugins.Any(manifest =>
+            !manifest.IsDeveloperPlugin
+            && string.Equals(manifest.Id, candidate.Id, StringComparison.OrdinalIgnoreCase)))
+        {
+            return UmbraPluginActionResult.Failure(
+                $"An installed plugin already uses the ID {candidate.Id}.");
+        }
+
+        await pluginMutationGate.WaitAsync(shutdown.Token).ConfigureAwait(false);
+        try
+        {
+            string normalized = Path.GetFullPath(location.Trim());
+            if (PluginManager.DeveloperPlugins.Locations.Contains(
+                normalized,
+                StringComparer.OrdinalIgnoreCase))
+            {
+                return UmbraPluginActionResult.Failure("That developer plugin location is already configured.");
+            }
+
+            UmbraDeveloperPluginSettings settings = UmbraDeveloperPluginSettingsStore.Save(
+                Options.CacheDirectory,
+                PluginManager.DeveloperPlugins with
+                {
+                    Locations = PluginManager.DeveloperPlugins.Locations.Append(normalized).ToArray()
+                });
+            return RescanDeveloperPlugins(settings, $"Developer plugin location added: {candidate.Name}.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"umbra_developer_plugin_location_add_failed location={location}", ex);
+            return UmbraPluginActionResult.Failure(ex.Message);
+        }
+        finally
+        {
+            pluginMutationGate.Release();
+        }
+    }
+
+    internal async Task<UmbraPluginActionResult> RemoveDeveloperPluginLocationAsync(string location)
+    {
+        await pluginMutationGate.WaitAsync(shutdown.Token).ConfigureAwait(false);
+        try
+        {
+            string normalized = Path.GetFullPath(location);
+            string[] retained = PluginManager.DeveloperPlugins.Locations
+                .Where(candidate => !string.Equals(
+                    candidate,
+                    normalized,
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (retained.Length == PluginManager.DeveloperPlugins.Locations.Count)
+                return UmbraPluginActionResult.Failure("Developer plugin location was not found.");
+
+            UmbraDeveloperPluginSettings settings = UmbraDeveloperPluginSettingsStore.Save(
+                Options.CacheDirectory,
+                PluginManager.DeveloperPlugins with { Locations = retained });
+            return RescanDeveloperPlugins(settings, "Developer plugin location removed. Local files were left intact.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"umbra_developer_plugin_location_remove_failed location={location}", ex);
+            return UmbraPluginActionResult.Failure(ex.Message);
+        }
+        finally
+        {
+            pluginMutationGate.Release();
+        }
+    }
+
+    internal async Task<UmbraPluginActionResult> RescanDeveloperPluginsAsync()
+    {
+        await pluginMutationGate.WaitAsync(shutdown.Token).ConfigureAwait(false);
+        try
+        {
+            return RescanDeveloperPlugins(
+                PluginManager.DeveloperPlugins,
+                "Developer plugin locations rescanned.");
+        }
+        catch (Exception ex)
+        {
+            Log.Error("umbra_developer_plugin_rescan_failed", ex);
+            return UmbraPluginActionResult.Failure(ex.Message);
+        }
+        finally
+        {
+            pluginMutationGate.Release();
+        }
     }
 
     public TService? GetService<TService>() where TService : class
@@ -458,7 +644,7 @@ public sealed class UmbraRuntime : IDisposable
         shutdown.Cancel();
         try
         {
-            updateLoop.Wait(TimeSpan.FromSeconds(2));
+            Task.WaitAll([updateLoop, repositoryRefreshTask], TimeSpan.FromSeconds(2));
         }
         catch
         {
@@ -471,6 +657,21 @@ public sealed class UmbraRuntime : IDisposable
         DevBridge.Dispose();
         shutdown.Dispose();
         Log.Info("umbra_runtime_stopped=true");
+    }
+
+    private async Task RunInitialRepositoryRefreshAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+            Log.Info("umbra_initial_repository_refresh_started=true");
+            UmbraPluginActionResult result = await RefreshRepositoriesAsync().ConfigureAwait(false);
+            Log.Info($"umbra_initial_repository_refresh_succeeded={result.Succeeded}");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Runtime shutdown occurred before the deferred refresh was due.
+        }
     }
 
     private async Task RunUpdateLoopAsync(CancellationToken cancellationToken)
@@ -504,11 +705,74 @@ public sealed class UmbraRuntime : IDisposable
 
     private void ReplaceInstalledCatalog(IEnumerable<UmbraPluginManifest> installed)
     {
-        IEnumerable<UmbraStoreEntry> storeEntries = PluginManager.SupportedPlugins
-            .Concat(PluginManager.AvailablePlugins);
+        IEnumerable<UmbraStoreEntry> storeEntries = PluginManager.Catalog.StoreEntries;
         UmbraPluginCatalogState catalog = UmbraPluginCatalogState.Build(installed, storeEntries);
         PluginManager = PluginManager with { Catalog = catalog };
         PluginManager.RuntimeHost = Plugins;
+    }
+
+    private UmbraPluginActionResult RescanDeveloperPlugins(
+        UmbraDeveloperPluginSettings settings,
+        string successMessage)
+    {
+        UmbraPluginManifest[] regular = PluginManager.InstalledPlugins
+            .Where(manifest => !manifest.IsDeveloperPlugin)
+            .ToArray();
+        UmbraPluginManifest[] previousDeveloper = PluginManager.InstalledPlugins
+            .Where(manifest => manifest.IsDeveloperPlugin)
+            .ToArray();
+        IReadOnlyList<UmbraPluginManifest> discovered = settings.Enabled
+            ? UmbraDeveloperPluginDiscovery.Discover(settings.Locations, Log)
+            : Array.Empty<UmbraPluginManifest>();
+        IReadOnlyList<UmbraPluginManifest> merged = MergePluginManifests(regular, discovered, Log);
+
+        foreach (UmbraPluginManifest manifest in previousDeveloper)
+        {
+            Plugins.Unload(manifest.Id);
+            Plugins.Forget(manifest.Id);
+        }
+
+        UmbraPluginCatalogState catalog = UmbraPluginCatalogState.Build(
+            merged,
+            PluginManager.Catalog.StoreEntries);
+        PluginManager = PluginManager with
+        {
+            Catalog = catalog,
+            DeveloperPlugins = settings
+        };
+        PluginManager.RuntimeHost = Plugins;
+
+        if (settings.Enabled && !Options.SafeMode)
+            Plugins.LoadEnabled(merged.Where(manifest => manifest.IsDeveloperPlugin));
+
+        int loaded = merged.Count(manifest => manifest.IsDeveloperPlugin);
+        Log.Info(
+            $"umbra_developer_plugins_rescanned enabled={settings.Enabled} discovered={loaded}");
+        return UmbraPluginActionResult.Success($"{successMessage} {loaded} developer plugin(s) discovered.");
+    }
+
+    private static IReadOnlyList<UmbraPluginManifest> MergePluginManifests(
+        IEnumerable<UmbraPluginManifest> installed,
+        IEnumerable<UmbraPluginManifest> developer,
+        UmbraRuntimeLog log)
+    {
+        List<UmbraPluginManifest> merged = installed.ToList();
+        HashSet<string> ids = merged
+            .Select(manifest => manifest.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (UmbraPluginManifest manifest in developer)
+        {
+            if (!ids.Add(manifest.Id))
+            {
+                log.Warning(
+                    $"umbra_developer_plugin_id_conflict id={manifest.Id} location={manifest.DeveloperLocation}");
+                continue;
+            }
+
+            merged.Add(manifest);
+        }
+
+        return merged;
     }
 
     private void ReplaceStoreCatalog(IEnumerable<UmbraStoreEntry> storeEntries)

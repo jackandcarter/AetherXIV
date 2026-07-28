@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -9,6 +24,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <d3d9.h>
+#include <cstdio>
 
 #include "imgui.h"
 #include "backends/imgui_impl_dx9.h"
@@ -245,6 +261,9 @@ namespace
     DWORD OverlayStartTicks = 0;
     bool PluginInstallerOpen = false;
     bool PluginManagerSettingsRequestPending = false;
+    bool PluginManagerUpdatesRequestPending = false;
+    volatile LONG PluginUpdateCount = 0;
+    volatile LONG PluginUpdateToastStartTicks = 0;
     bool UmbraDockExpanded = true;
     bool LastMouseDown = false;
     bool LastInsertDown = false;
@@ -3166,7 +3185,13 @@ namespace
         ImGui::End();
     }
 
-    void DrawUmbraImGuiToast(const char* name, const char* message, const ImVec4& accent, float x, float y)
+    bool DrawUmbraImGuiToast(
+        const char* name,
+        const char* message,
+        const ImVec4& accent,
+        float x,
+        float y,
+        bool clickable = false)
     {
         const UmbraTheme& theme = GetUmbraTheme();
         ImGuiWindowFlags flags =
@@ -3183,6 +3208,7 @@ namespace
         ImGui::PushStyleColor(ImGuiCol_Border, accent);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0f, 10.0f));
+        bool clicked = false;
         if (ImGui::Begin(name, nullptr, flags))
         {
             ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -3192,11 +3218,17 @@ namespace
             ImGui::Indent(9.0f);
             ImGui::TextColored(accent, "%s", message);
             ImGui::Unindent(9.0f);
+            if (clickable && ImGui::IsWindowHovered())
+            {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+            }
         }
         ImGui::End();
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();
         ImGui::PopStyleColor();
+        return clicked;
     }
 
     void DrawUmbraImGuiToasts(const D3DVIEWPORT9& viewport)
@@ -3204,19 +3236,60 @@ namespace
         if (OverlayStartTicks == 0)
             OverlayStartTicks = GetTickCount();
 
-        DWORD elapsed = GetTickCount() - OverlayStartTicks;
-        if (elapsed > ToastVisibleMs)
-            return;
-
         float width = static_cast<float>(viewport.Width);
         float height = static_cast<float>(viewport.Height);
         float x = width - 358.0f;
-        float y = height - 158.0f;
+        float y = height - 58.0f;
         const UmbraTheme& theme = GetUmbraTheme();
-        DrawUmbraImGuiToast("##UmbraToastReady", "Umbra framework ready", theme.accent, x, y);
-        DrawUmbraImGuiToast("##UmbraToastNative", "Native DX9 UI active", ImVec4(0.30f, 0.95f, 0.55f, 1.0f), x, y + 50.0f);
-        if (ShowPluginExecutionWarning)
-            DrawUmbraImGuiToast("##UmbraToastPlugins", "Plugin execution disabled", theme.warning, x, y + 100.0f);
+        DWORD now = GetTickCount();
+        LONG updateCount = InterlockedCompareExchange(&PluginUpdateCount, 0, 0);
+        DWORD updateStarted = static_cast<DWORD>(
+            InterlockedCompareExchange(&PluginUpdateToastStartTicks, 0, 0));
+        if (updateCount > 0
+            && updateStarted != 0
+            && now - updateStarted <= ToastVisibleMs)
+        {
+            char message[96]{};
+            std::snprintf(
+                message,
+                sizeof(message),
+                "%ld plugin update%s available - click to view",
+                updateCount,
+                updateCount == 1 ? "" : "s");
+            if (DrawUmbraImGuiToast(
+                "##UmbraToastPluginUpdates",
+                message,
+                theme.accent,
+                x,
+                y,
+                true))
+            {
+                PluginInstallerOpen = true;
+                PluginManagerUpdatesRequestPending = true;
+                PluginManagerSettingsRequestPending = false;
+                UmbraLibrarySection = 2;
+                InterlockedExchange(&PluginUpdateToastStartTicks, 0);
+            }
+            y -= 50.0f;
+        }
+
+        DWORD startupElapsed = now - OverlayStartTicks;
+        if (startupElapsed <= ToastVisibleMs)
+        {
+            if (ShowPluginExecutionWarning)
+            {
+                DrawUmbraImGuiToast("##UmbraToastPlugins", "Plugin execution disabled", theme.warning, x, y);
+                y -= 50.0f;
+            }
+            DrawUmbraImGuiToast(
+                "##UmbraToastNative",
+                "Native DX9 UI active",
+                ImVec4(0.30f, 0.95f, 0.55f, 1.0f),
+                x,
+                y);
+            y -= 50.0f;
+            DrawUmbraImGuiToast("##UmbraToastReady", "Umbra framework ready", theme.accent, x, y);
+        }
     }
 
     int NotifyManagedRenderEvent(UmbraRenderEventKind kind, const D3DVIEWPORT9* viewport)
@@ -3245,7 +3318,8 @@ namespace
                 renderEvent.viewportWidth = viewport->Width;
                 renderEvent.viewportHeight = viewport->Height;
                 renderEvent.reserved = (PluginInstallerOpen ? 1u : 0u)
-                    | (PluginManagerSettingsRequestPending ? 2u : 0u);
+                    | (PluginManagerSettingsRequestPending ? 2u : 0u)
+                    | (PluginManagerUpdatesRequestPending ? 4u : 0u);
             }
 
             ManagedRenderThreadId = GetCurrentThreadId();
@@ -3270,7 +3344,10 @@ namespace
             }
             InterlockedExchange(&ManagedUiCallbackActive, 0);
             if (result == 0)
+            {
                 PluginManagerSettingsRequestPending = false;
+                PluginManagerUpdatesRequestPending = false;
+            }
         }
 
         if (result == 0 && InterlockedCompareExchange(&ManagedRenderBridgeReadyLogged, 1, 0) == 0)
@@ -5624,6 +5701,22 @@ extern "C" __declspec(dllexport) void __stdcall UmbraUiSetPluginManagerOpen(int 
 {
     if (IsManagedUiCallAvailable())
         PluginInstallerOpen = isOpen != 0;
+}
+
+extern "C" __declspec(dllexport) void __stdcall UmbraUiSetPluginUpdateCount(int updateCount)
+{
+    LONG normalized = updateCount < 0 ? 0 : static_cast<LONG>(updateCount);
+    LONG previous = InterlockedExchange(&PluginUpdateCount, normalized);
+    if (normalized == 0)
+    {
+        InterlockedExchange(&PluginUpdateToastStartTicks, 0);
+    }
+    else if (normalized > previous)
+    {
+        InterlockedExchange(
+            &PluginUpdateToastStartTicks,
+            static_cast<LONG>(GetTickCount()));
+    }
 }
 
 extern "C" BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID)

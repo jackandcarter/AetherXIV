@@ -156,7 +156,11 @@ namespace AetherXIV.Core.World.DataObjects
 
                     conn.lastPartialSize = bytesRead - offset;
 
-                    //Build any queued subpackets into basepackets and send
+                    //Commit all client-bound subpackets received in this Map
+                    //read as compressed multi-subpacket World frames.
+                    Server.GetServer().FlushZoneRelayPackets();
+
+                    //Send any World-to-Map control responses.
                     conn.FlushQueuedSendPackets();
 
                     if (offset < bytesRead)

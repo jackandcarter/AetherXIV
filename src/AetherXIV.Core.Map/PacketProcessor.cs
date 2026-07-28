@@ -243,11 +243,30 @@ namespace AetherXIV.Core.Map
                             "privateAreaType", session.GetActor().privateAreaType,
                             "timestampRaw", zoneInCompletePacket.timestamp,
                             "unknown", zoneInCompletePacket.unknown,
-                            "invalidPacket", zoneInCompletePacket.invalidPacket);
-                        if (!zoneInCompletePacket.invalidPacket)
+                            "invalidPacket", zoneInCompletePacket.invalidPacket,
+                            "transitionReady", ZoneTransitionReadinessPolicy.IsReady(
+                                !zoneInCompletePacket.invalidPacket,
+                                zoneInCompletePacket.unknown));
+                        if (ZoneTransitionReadinessPolicy.IsReady(
+                            !zoneInCompletePacket.invalidPacket,
+                            zoneInCompletePacket.unknown))
                         {
-                            session.GetActor().RefreshQuestENpcs();
-                            session.GetActor().ReleaseDeferredContentKickEvent();
+                            Player readyPlayer = session.GetActor();
+                            if (Server.GetWorldManager()
+                                .IsLocalZoneBootstrapPending(readyPlayer))
+                            {
+                                DevDiagnostics.Trace(
+                                    "client.zoneInComplete.ignoredEarly",
+                                    "session", session.id,
+                                    "player", readyPlayer.customDisplayName,
+                                    "reason",
+                                        "destination actor bootstrap is still pending");
+                            }
+                            else
+                            {
+                                readyPlayer.RefreshQuestENpcs();
+                                readyPlayer.ReleaseDeferredContentKickEvent();
+                            }
                         }
                         break;
                     //Update Position
@@ -286,7 +305,12 @@ namespace AetherXIV.Core.Map
                         session.UpdatePlayerActorPosition(posUpdate.x, posUpdate.y, posUpdate.z, posUpdate.rot, posUpdate.moveState);
                         positionPlayer.SendInstanceUpdate();
 
-                        if (positionPlayer.IsInZoneChange())
+                        // A destination-position echo can arrive while the
+                        // retail-paced actor bootstrap is still locked. It is
+                        // not a completed transition until the keep-list has
+                        // been committed and updates are unlocked.
+                        if (positionPlayer.IsInZoneChange()
+                            && !session.isUpdatesLocked)
                             positionPlayer.CompleteZoneChange();
 
                         break;
@@ -300,6 +324,7 @@ namespace AetherXIV.Core.Map
                         var targetActor = player.zone == null ? null : player.zone.FindActorInArea<Character>(setTarget.actorID);
                         bool autoAttackRequested = setTarget.attackTarget != 0xE0000000;
                         player.currentTarget = setTarget.actorID;
+                        player.QueuePacket(SetActorEventTargetPacket.BuildPacket(session.id, setTarget.actorID));
 
                         if (autoAttackRequested)
                         {
@@ -416,11 +441,20 @@ namespace AetherXIV.Core.Map
 
                         Program.Log.Debug("\n===Event START===\nSource Actor: 0x{0:X}\nCaller Actor: 0x{1:X}\nVal1: 0x{2:X}\nVal2: 0x{3:X}\nEvent Starter: {4}\nParams: {5}", eventStart.triggerActorID, eventStart.ownerActorID, eventStart.serverCodes, eventStart.unknown, eventStart.eventName, LuaUtils.DumpParams(eventStart.luaParams));
                         break;
-                    //Unknown, happens at npc spawn and cutscene play????
+                    //Client cutscene lifecycle state. Retail does not send a
+                    // direct response to this direction-specific 0x00CE.
                     case 0x00CE:
-                        ClientInteractionDiagnostics.TraceStateMessage(session, subpacket);
-                        PacketDiagnostics.LogUnknownGameMessage("Map", "map opcode 0x00CE", subpacket);
-                        subpacket.DebugPrintSubPacket();
+                        CutsceneStatePacket cutsceneState = new CutsceneStatePacket(subpacket.data);
+                        if (cutsceneState.invalidPacket)
+                        {
+                            DevDiagnostics.Trace(
+                                "client.packet.invalid",
+                                "session", session.id,
+                                "opcode", "0x00CE",
+                                "reason", "cutscene-state payload is not 40 bytes");
+                            break;
+                        }
+                        session.GetActor().UpdateCutsceneState(cutsceneState);
                         break;
                     //Countdown requested
                     case 0x00CF:
@@ -465,6 +499,36 @@ namespace AetherXIV.Core.Map
                             "handled", handledParameterRequest);
                         if (handledParameterRequest)
                             session.GetActor().SendCharaExpInfo();
+                        break;
+                    // Client list-object add/delete acknowledgement. This
+                    // direction-specific 0x0130 is not RunEventFunction and
+                    // does not require a server response.
+                    case 0x0130:
+                        ClientListObjectLifecycleAcknowledgePacket listObjectAcknowledge =
+                            new ClientListObjectLifecycleAcknowledgePacket(subpacket.data);
+                        bool actorMatchesSession = !listObjectAcknowledge.invalidPacket
+                            && listObjectAcknowledge.actorId == session.GetActor().actorId;
+                        DevDiagnostics.Trace(
+                            "client.listObject.lifecycleAcknowledge",
+                            "session", session.id,
+                            "player", session.GetActor().customDisplayName,
+                            "actor", String.Format("0x{0:X}", listObjectAcknowledge.actorId),
+                            "listType", String.Format("0x{0:X}", listObjectAcknowledge.listType),
+                            "reserved0", String.Format("0x{0:X}", listObjectAcknowledge.reserved0),
+                            "reserved1", String.Format("0x{0:X}", listObjectAcknowledge.reserved1),
+                            "actorMatchesSession", actorMatchesSession,
+                            "canonical", listObjectAcknowledge.IsCanonicalActorListAcknowledge(),
+                            "invalidPacket", listObjectAcknowledge.invalidPacket);
+                        if (listObjectAcknowledge.invalidPacket
+                            || !listObjectAcknowledge.IsCanonicalActorListAcknowledge()
+                            || !actorMatchesSession)
+                        {
+                            DevDiagnostics.Trace(
+                                "client.packet.invalid",
+                                "session", session.id,
+                                "opcode", "0x0130",
+                                "reason", "non-canonical list-object lifecycle acknowledgement");
+                        }
                         break;
                     //Item Package Request
                     case 0x0131:
@@ -524,30 +588,90 @@ namespace AetherXIV.Core.Map
                     /* SOCIAL STUFF */
                     case 0x01C9:
                         AddRemoveSocialPacket addBlackList = new AddRemoveSocialPacket(subpacket.data);
-                        session.QueuePacket(BlacklistAddedPacket.BuildPacket(session.id, true, addBlackList.name));
+                        string blacklistName = addBlackList.name ?? "";
+                        bool blacklistAdded = !addBlackList.invalidPacket
+                            && Database.AddBlacklist(session.id, addBlackList.name, out blacklistName);
+                        session.QueuePacket(BlacklistAddedPacket.BuildPacket(
+                            session.id,
+                            blacklistAdded,
+                            blacklistAdded ? blacklistName : addBlackList.name ?? ""));
                         break;
                     case 0x01CA:
-                        AddRemoveSocialPacket RemoveBlackList = new AddRemoveSocialPacket(subpacket.data);
-                        session.QueuePacket(BlacklistRemovedPacket.BuildPacket(session.id, true, RemoveBlackList.name));
+                        AddRemoveSocialPacket removeBlackList = new AddRemoveSocialPacket(subpacket.data);
+                        bool blacklistRemoved = !removeBlackList.invalidPacket
+                            && Database.RemoveBlacklist(session.id, removeBlackList.name);
+                        session.QueuePacket(BlacklistRemovedPacket.BuildPacket(
+                            session.id,
+                            blacklistRemoved,
+                            removeBlackList.name ?? ""));
                         break;
                     case 0x01CB:
-                        int offset1 = 0;
-                        session.QueuePacket(SendBlacklistPacket.BuildPacket(session.id, new String[] { "Test" }, ref offset1));
+                        SocialStateRequestPacket blacklistRequest = new SocialStateRequestPacket(subpacket.data);
+                        if (!blacklistRequest.invalidPacket)
+                        {
+                            session.QueuePacket(SendBlacklistPacket.BuildPacket(
+                                session.id,
+                                blacklistRequest.pageIndex,
+                                Database.GetBlacklist(session.id)));
+                        }
                         break;
                     case 0x01CC:
                         AddRemoveSocialPacket addFriendList = new AddRemoveSocialPacket(subpacket.data);
-                        session.QueuePacket(FriendlistAddedPacket.BuildPacket(session.id, true, (uint)addFriendList.name.GetHashCode(), true, addFriendList.name));
+                        long friendCharacterId = 0;
+                        string friendName = addFriendList.name ?? "";
+                        bool friendAdded = !addFriendList.invalidPacket
+                            && Database.AddFriend(
+                                session.id,
+                                addFriendList.name,
+                                out friendCharacterId,
+                                out friendName);
+                        bool friendOnline = friendAdded
+                            && friendCharacterId <= UInt32.MaxValue
+                            && Server.GetServer().GetSession((uint)friendCharacterId) != null;
+                        session.QueuePacket(FriendlistAddedPacket.BuildPacket(
+                            session.id,
+                            friendAdded,
+                            friendCharacterId,
+                            friendOnline,
+                            friendAdded ? friendName : addFriendList.name ?? ""));
                         break;
                     case 0x01CD:
-                        AddRemoveSocialPacket RemoveFriendList = new AddRemoveSocialPacket(subpacket.data);
-                        session.QueuePacket(FriendlistRemovedPacket.BuildPacket(session.id, true, RemoveFriendList.name));
+                        AddRemoveSocialPacket removeFriendList = new AddRemoveSocialPacket(subpacket.data);
+                        bool friendRemoved = !removeFriendList.invalidPacket
+                            && Database.RemoveFriend(session.id, removeFriendList.name);
+                        session.QueuePacket(FriendlistRemovedPacket.BuildPacket(
+                            session.id,
+                            friendRemoved,
+                            removeFriendList.name ?? ""));
                         break;
                     case 0x01CE:
-                        int offset2 = 0;
-                        session.QueuePacket(SendFriendlistPacket.BuildPacket(session.id, new Tuple<long, string>[] { new Tuple<long, string>(01, "Test2") }, ref offset2));
+                        SocialStateRequestPacket friendListRequest = new SocialStateRequestPacket(subpacket.data);
+                        if (!friendListRequest.invalidPacket)
+                        {
+                            session.QueuePacket(SendFriendlistPacket.BuildPacket(
+                                session.id,
+                                friendListRequest.pageIndex,
+                                Database.GetFriendList(session.id)));
+                        }
                         break;
                     case 0x01CF:
-                        session.QueuePacket(FriendStatusPacket.BuildPacket(session.id, null));
+                        SocialStateRequestPacket friendStatusRequest = new SocialStateRequestPacket(subpacket.data);
+                        if (!friendStatusRequest.invalidPacket)
+                        {
+                            Tuple<long, string>[] friends = Database.GetFriendList(session.id);
+                            Tuple<long, bool>[] statuses = new Tuple<long, bool>[friends.Length];
+                            for (int index = 0; index < friends.Length; index++)
+                            {
+                                long characterId = friends[index].Item1;
+                                bool online = characterId <= UInt32.MaxValue
+                                    && Server.GetServer().GetSession((uint)characterId) != null;
+                                statuses[index] = Tuple.Create(characterId, online);
+                            }
+                            session.QueuePacket(FriendStatusPacket.BuildPacket(
+                                session.id,
+                                friendStatusRequest.pageIndex,
+                                statuses));
+                        }
                         break;
                     /* SUPPORT DESK STUFF */
                     //Request for FAQ/Info List

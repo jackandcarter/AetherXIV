@@ -97,26 +97,6 @@ local function startOpeningDirector(player, spawnImmediate)
 	player:KickEvent(director, "noticeEvent", true);
 end
 
-local function repairPrematureGridaniaLinkpearl(player)
-	if (player:HasQuest(110006) == false or
-		player:GetZoneID() ~= 155 or
-		player:GetPrivateAreaName() ~= "PrivateAreaMasterPast" or
-		player.privateAreaType ~= 2) then
-		return;
-	end
-
-	local quest = player:GetQuest(110006);
-	if (quest == nil or quest:GetSequence() ~= 5 or quest:GetNpcLsFrom() == 0) then
-		return;
-	end
-
-	-- Build 21987 could persist sequence 5 and a flashing linkpearl before the
-	-- player ever spoke to Miounne. Hide that premature call on login; the PA/2
-	-- Miounne handler accepts sequence 5 as a one-time recovery path and queues
-	-- the real message after replaying her first conversation.
-	quest:EndOfNpcLsMsgs();
-end
-
 local function repairBuild21989UldahHandoff(player)
 	if (player:HasQuest(110010) == false) then
 		return;
@@ -167,7 +147,6 @@ function onBeginLogin(player)
 	end
 
 	setOpeningCheckpoint(player);
-	repairPrematureGridaniaLinkpearl(player);
 	repairBuild21989UldahHandoff(player);
 end
 
@@ -187,6 +166,7 @@ function onLogin(player)
 		
 		initClassItems(player);
 		initRaceItems(player);	
+		player:RecalculateStats("starter-equipment");
 
 		player:SavePlayTime();		
 	end	

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -614,14 +615,29 @@ namespace AetherXIV.Core.World
             else if (mZoneSessionList.ContainsKey(sessionId))
             {
                 ClientConnection conn = mZoneSessionList[sessionId].clientConnection;
-                conn.QueuePacket(subpacket);
-                conn.FlushQueuedSendPackets();
+                conn.QueueRelayPacket(subpacket);
             }
             else
             {
                 PacketDiagnostics.LogUnknownSubPacket("World", "zone server subpacket without session", subpacket);
             }
 
+        }
+
+        public void FlushZoneRelayPackets()
+        {
+            List<ClientConnection> connections;
+            lock (mZoneSessionList)
+            {
+                connections = mZoneSessionList.Values
+                    .Select(session => session.clientConnection)
+                    .Where(connection => connection != null)
+                    .Distinct()
+                    .ToList();
+            }
+
+            foreach (ClientConnection connection in connections)
+                connection.FlushRelayPackets();
         }
 
         public WorldManager GetWorldManager()

@@ -218,39 +218,46 @@ namespace AetherXIV.Core.Common
 
         public static BasePacket CreatePacket(List<SubPacket> subpackets, bool isAuthed, bool isCompressed)
         {
+            if (subpackets == null)
+                throw new ArgumentNullException(nameof(subpackets));
+            if (subpackets.Count == 0)
+                throw new ArgumentException("A base packet must contain at least one subpacket.", nameof(subpackets));
+
             //Create Header
             var header = new BasePacketHeader();
-            byte[] data = null;
 
             header.isAuthenticated = isAuthed ? (byte) 1 : (byte) 0;
             header.isCompressed = isCompressed ? (byte) 1 : (byte) 0;
-            header.numSubpackets = (ushort) subpackets.Count;
-            header.packetSize = BASEPACKET_SIZE;
+            header.numSubpackets = checked((ushort)subpackets.Count);
             header.timestamp = Utils.MilisUnixTimeStampUTC();
 
-            //Get packet size
+            int uncompressedBodySize = 0;
             foreach (var subpacket in subpackets)
-                header.packetSize += subpacket.header.subpacketSize;
+            {
+                if (subpacket == null)
+                    throw new ArgumentException("A base packet cannot contain a null subpacket.", nameof(subpackets));
+                uncompressedBodySize =
+                    checked(uncompressedBodySize + subpacket.header.subpacketSize);
+            }
 
-            data = new byte[header.packetSize - 0x10];
+            byte[] uncompressedData = new byte[uncompressedBodySize];
 
             //Add Subpackets
             var offset = 0;
             foreach (var subpacket in subpackets)
             {
                 var subpacketData = subpacket.GetBytes();
-                Array.Copy(subpacketData, 0, data, offset, subpacketData.Length);
-                offset += (ushort)subpacketData.Length;
+                Array.Copy(subpacketData, 0, uncompressedData, offset, subpacketData.Length);
+                offset += subpacketData.Length;
             }
 
-            //Compress this array into a new one if needed
-            if (isCompressed)
-            {
-                data = CompressData(data);
-                header.packetSize = (ushort)(BASEPACKET_SIZE + data.Length);
-            }
+            byte[] data = isCompressed
+                ? CompressData(uncompressedData)
+                : uncompressedData;
+            header.packetSize = checked((ushort)(BASEPACKET_SIZE + data.Length));
 
-            Debug.Assert(data != null && offset == data.Length && header.packetSize == 0x10 + offset);
+            Debug.Assert(offset == uncompressedData.Length);
+            Debug.Assert(header.packetSize == BASEPACKET_SIZE + data.Length);
 
             var packet = new BasePacket(header, data);
             return packet;
@@ -258,37 +265,12 @@ namespace AetherXIV.Core.Common
 
         public static BasePacket CreatePacket(SubPacket subpacket, bool isAuthed, bool isCompressed)
         {
-            //Create Header
-            var header = new BasePacketHeader();
-            byte[] data = null;
-
-            header.isAuthenticated = isAuthed ? (byte) 1 : (byte) 0;
-            header.isCompressed = isCompressed ? (byte) 1 : (byte) 0;
-            header.numSubpackets = 1;
-            header.packetSize = BASEPACKET_SIZE;
-            header.timestamp = Utils.MilisUnixTimeStampUTC();
-
-            //Get packet size
-            header.packetSize += subpacket.header.subpacketSize;
-
-            data = new byte[header.packetSize - 0x10];
-
-            //Add Subpackets
-            byte[] subpacketData = subpacket.GetBytes();
-
-            //Compress this array into a new one if needed
-            if (isCompressed)
-            {
-                subpacketData = CompressData(subpacketData);
-                header.packetSize = (ushort)(BASEPACKET_SIZE + data.Length);
-            }
-
-            Array.Copy(subpacketData, 0, data, 0, subpacketData.Length);
-
-            Debug.Assert(data != null);
-
-            var packet = new BasePacket(header, data);
-            return packet;
+            if (subpacket == null)
+                throw new ArgumentNullException(nameof(subpacket));
+            return CreatePacket(
+                new List<SubPacket> { subpacket },
+                isAuthed,
+                isCompressed);
         }
 
         public static BasePacket CreatePacket(byte[] data, bool isAuthed, bool isCompressed)

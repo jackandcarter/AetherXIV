@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Security.Cryptography;
@@ -451,6 +466,47 @@ public sealed class AetherXivLauncherCoreTests
     }
 
     [Fact]
+    public void UmbraRepositoryFetcherLoadsKnownGoodCacheWithoutNetwork()
+    {
+        string cacheDirectory = CreateTempDirectory();
+        string repositoryUrl = "https://offline.example.test/plugins.json";
+        string cacheName = Convert.ToHexString(
+            SHA256.HashData(Encoding.UTF8.GetBytes(repositoryUrl))).ToLowerInvariant() + ".json";
+        File.WriteAllText(Path.Combine(cacheDirectory, cacheName), """
+            {
+              "plugins": [
+                {
+                  "id": "dev.cached",
+                  "name": "Cached Plugin",
+                  "version": "1.2.0",
+                  "api_version": "2.0",
+                  "download_url": "https://offline.example.test/plugin.zip",
+                  "size_bytes": 1234,
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "minimum_framework_version": "0.1.0"
+                }
+              ]
+            }
+            """);
+        string logPath = Path.Combine(CreateTempDirectory(), "umbra.log");
+
+        IReadOnlyList<FrameworkStoreEntry> entries =
+            Aether.Umbra.Framework.UmbraRepositoryFetcher.LoadCached(
+                new[]
+                {
+                    new FrameworkRepositorySource(
+                        repositoryUrl,
+                        FrameworkRepositorySource.Supported)
+                },
+                cacheDirectory,
+                Aether.Umbra.Framework.UmbraRuntimeLog.Open(logPath));
+
+        FrameworkStoreEntry entry = Assert.Single(entries);
+        Assert.Equal("dev.cached", entry.Id);
+        Assert.Equal(repositoryUrl, entry.RepositoryUrl);
+    }
+
+    [Fact]
     public void UmbraPluginInstallerValidatesArchiveAndRequiresMatchingManifest()
     {
         byte[] archive = CreateRuntimeArchive(
@@ -571,6 +627,204 @@ public sealed class AetherXivLauncherCoreTests
         Assert.Single(state.Available);
         Assert.Single(state.Updates);
         Assert.Equal("dev.example", state.Updates[0].Id);
+    }
+
+    [Fact]
+    public void UmbraPluginCatalogStateUsesInstalledRepositoryForUpdates()
+    {
+        Aether.Umbra.Framework.UmbraPluginManifest installed = new(
+            "dev.example",
+            "Example",
+            "1.0.0",
+            "2.0",
+            "Example.dll",
+            "0.1.0",
+            true)
+        {
+            InstalledFromUrl = "https://repo-a.example/plugins.json",
+            InstalledFromSource = FrameworkRepositorySource.Custom
+        };
+        FrameworkStoreEntry expected = CreateStoreEntry(Array.Empty<byte>(), "dev.example") with
+        {
+            Version = "1.1.0",
+            RepositoryUrl = "https://repo-a.example/plugins.json",
+            Source = FrameworkRepositorySource.Custom
+        };
+        FrameworkStoreEntry collision = CreateStoreEntry(Array.Empty<byte>(), "dev.example") with
+        {
+            Version = "9.0.0",
+            RepositoryUrl = "https://repo-b.example/plugins.json",
+            Source = FrameworkRepositorySource.Supported
+        };
+
+        FrameworkPluginCatalogState state = FrameworkPluginCatalogState.Build(
+            new[] { installed },
+            new[] { collision, expected });
+
+        Assert.Single(state.Updates);
+        Assert.Equal(expected.RepositoryUrl, state.Updates[0].RepositoryUrl);
+        Assert.Equal(expected.Version, state.Updates[0].Version);
+    }
+
+    [Fact]
+    public void UmbraPluginCatalogStateDoesNotCrossRepositoriesForUpdates()
+    {
+        Aether.Umbra.Framework.UmbraPluginManifest installed = new(
+            "dev.example",
+            "Example",
+            "1.0.0",
+            "2.0",
+            "Example.dll",
+            "0.1.0",
+            true)
+        {
+            InstalledFromUrl = "https://repo-a.example/plugins.json",
+            InstalledFromSource = FrameworkRepositorySource.Custom
+        };
+        FrameworkStoreEntry collision = CreateStoreEntry(Array.Empty<byte>(), "dev.example") with
+        {
+            Version = "9.0.0",
+            RepositoryUrl = "https://repo-b.example/plugins.json",
+            Source = FrameworkRepositorySource.Supported
+        };
+
+        FrameworkPluginCatalogState state = FrameworkPluginCatalogState.Build(
+            new[] { installed },
+            new[] { collision });
+
+        Assert.Empty(state.Updates);
+    }
+
+    [Fact]
+    public void UmbraPluginCatalogStateAllowsUnambiguousLegacyUpdate()
+    {
+        Aether.Umbra.Framework.UmbraPluginManifest installed = new(
+            "dev.example",
+            "Example",
+            "1.0.0",
+            "2.0",
+            "Example.dll",
+            "0.1.0",
+            true);
+        FrameworkStoreEntry oldCandidate = CreateStoreEntry(Array.Empty<byte>(), "dev.example") with
+        {
+            Version = "1.1.0",
+            RepositoryUrl = "https://repo-a.example/plugins.json"
+        };
+        FrameworkStoreEntry latestCandidate = oldCandidate with { Version = "1.2.0" };
+
+        FrameworkPluginCatalogState state = FrameworkPluginCatalogState.Build(
+            new[] { installed },
+            new[] { oldCandidate, latestCandidate });
+
+        Assert.Single(state.Updates);
+        Assert.Equal("1.2.0", state.Updates[0].Version);
+    }
+
+    [Fact]
+    public void UmbraPluginCatalogStateRejectsAmbiguousLegacyUpdate()
+    {
+        Aether.Umbra.Framework.UmbraPluginManifest installed = new(
+            "dev.example",
+            "Example",
+            "1.0.0",
+            "2.0",
+            "Example.dll",
+            "0.1.0",
+            true);
+        FrameworkStoreEntry first = CreateStoreEntry(Array.Empty<byte>(), "dev.example") with
+        {
+            Version = "1.1.0",
+            RepositoryUrl = "https://repo-a.example/plugins.json"
+        };
+        FrameworkStoreEntry second = CreateStoreEntry(Array.Empty<byte>(), "dev.example") with
+        {
+            Version = "2.0.0",
+            RepositoryUrl = "https://repo-b.example/plugins.json"
+        };
+
+        FrameworkPluginCatalogState state = FrameworkPluginCatalogState.Build(
+            new[] { installed },
+            new[] { first, second });
+
+        Assert.Empty(state.Updates);
+    }
+
+    [Fact]
+    public void UmbraPluginCatalogStateDoesNotOfferRepositoryUpdatesForDeveloperPlugins()
+    {
+        Aether.Umbra.Framework.UmbraPluginManifest developer = new(
+            "dev.example",
+            "Example",
+            "1.0.0",
+            "2.0",
+            "Example.dll",
+            "0.1.0",
+            true)
+        {
+            IsDeveloperPlugin = true,
+            DeveloperLocation = "/development/Example.dll"
+        };
+        FrameworkStoreEntry repositoryEntry = CreateStoreEntry(Array.Empty<byte>(), "dev.example") with
+        {
+            Version = "9.0.0",
+            Source = FrameworkRepositorySource.Supported
+        };
+
+        FrameworkPluginCatalogState state = FrameworkPluginCatalogState.Build(
+            new[] { developer },
+            new[] { repositoryEntry });
+
+        Assert.Empty(state.Updates);
+    }
+
+    [Fact]
+    public void UmbraDeveloperPluginDiscoveryAcceptsManifestDirectoryAndMarksItLocal()
+    {
+        string directory = CreateTempDirectory();
+        File.WriteAllBytes(Path.Combine(directory, "Example.dll"), [0x4d, 0x5a]);
+        File.WriteAllText(Path.Combine(directory, "umbra-plugin.json"), """
+            {
+              "id": "dev.local",
+              "name": "Local Plugin",
+              "version": "0.1.0",
+              "api_version": "2.0",
+              "entry": "Example.dll",
+              "minimum_framework_version": "0.1.0",
+              "enabled": false
+            }
+            """);
+
+        Aether.Umbra.Framework.UmbraPluginManifest manifest =
+            Aether.Umbra.Framework.UmbraDeveloperPluginDiscovery.LoadLocation(directory);
+
+        Assert.True(manifest.IsDeveloperPlugin);
+        Assert.True(manifest.Enabled);
+        Assert.Equal(Path.GetFullPath(directory), manifest.DeveloperLocation);
+        Assert.Equal("dev.local", manifest.Id);
+    }
+
+    [Fact]
+    public void UmbraDeveloperPluginSettingsPersistInFrameworkCache()
+    {
+        string cacheDirectory = CreateTempDirectory();
+        string location = Path.Combine(CreateTempDirectory(), "plugin");
+        string logPath = Path.Combine(CreateTempDirectory(), "umbra.log");
+        Aether.Umbra.Framework.UmbraDeveloperPluginSettings saved =
+            Aether.Umbra.Framework.UmbraDeveloperPluginSettingsStore.Save(
+                cacheDirectory,
+                new Aether.Umbra.Framework.UmbraDeveloperPluginSettings(
+                    true,
+                    new[] { location, location }));
+
+        Aether.Umbra.Framework.UmbraDeveloperPluginSettings loaded =
+            Aether.Umbra.Framework.UmbraDeveloperPluginSettingsStore.Load(
+                cacheDirectory,
+                Aether.Umbra.Framework.UmbraRuntimeLog.Open(logPath));
+
+        Assert.True(saved.Enabled);
+        Assert.True(loaded.Enabled);
+        Assert.Equal(Path.GetFullPath(location), Assert.Single(loaded.Locations));
     }
 
     [Fact]

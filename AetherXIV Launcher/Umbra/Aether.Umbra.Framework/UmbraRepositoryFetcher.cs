@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using System.Security.Cryptography;
 using System.Text;
 
@@ -6,6 +21,32 @@ namespace Aether.Umbra.Framework;
 public static class UmbraRepositoryFetcher
 {
     private const int MaximumRepositoryBytes = 2 * 1024 * 1024;
+
+    internal static IReadOnlyList<UmbraStoreEntry> LoadCached(
+        IEnumerable<UmbraRepositorySource> repositories,
+        string cacheDirectory,
+        UmbraRuntimeLog log)
+    {
+        List<UmbraStoreEntry> entries = new();
+        foreach (UmbraRepositorySource repository in repositories)
+        {
+            string? cached = ReadCache(cacheDirectory, repository.Url);
+            if (cached is null)
+                continue;
+
+            try
+            {
+                entries.AddRange(UmbraStoreEntry.ParseRepository(cached, repository));
+                log.Info($"umbra_repository_cache_loaded url={repository.Url}");
+            }
+            catch (Exception ex)
+            {
+                log.Warning($"umbra_repository_cache_invalid url={repository.Url} error={ex.Message}");
+            }
+        }
+
+        return NormalizeEntries(entries);
+    }
 
     public static async Task<IReadOnlyList<UmbraStoreEntry>> FetchAsync(
         IEnumerable<UmbraRepositorySource> repositories,
@@ -51,6 +92,12 @@ public static class UmbraRepositoryFetcher
             }
         }
 
+        return NormalizeEntries(entries);
+    }
+
+    private static IReadOnlyList<UmbraStoreEntry> NormalizeEntries(
+        IEnumerable<UmbraStoreEntry> entries)
+    {
         return entries
             .GroupBy(entry => (entry.RepositoryUrl, entry.Id, entry.Version), new StoreEntryKeyComparer())
             .Select(group => group.First())

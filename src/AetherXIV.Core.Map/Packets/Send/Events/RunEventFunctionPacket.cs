@@ -11,12 +11,18 @@ namespace AetherXIV.Core.Map.packets.send.events
     class RunEventFunctionPacket
     {
         public const ushort OPCODE = 0x0130;
-        public const uint PACKET_SIZE = 0x2B8;
+        public const uint PACKET_SIZE = 0xB0;
+        private const int PARAMETER_OFFSET = 0x49;
+
+        public static uint GetPacketSize(byte eventType)
+        {
+            return PACKET_SIZE;
+        }
 
         public static SubPacket BuildPacket(uint triggerActorID, uint ownerActorID, string eventName, byte eventType, string functionName, List<LuaParam> luaParams)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-            int maxBodySize = data.Length - 0x80;
+            uint packetSize = GetPacketSize(eventType);
+            byte[] data = new byte[packetSize - 0x20];
 
             using (MemoryStream mem = new MemoryStream(data))
             {
@@ -28,9 +34,19 @@ namespace AetherXIV.Core.Map.packets.send.events
                     Utils.WriteNullTermString(binWriter, eventName);
                     binWriter.Seek(0x29, SeekOrigin.Begin);                
                     Utils.WriteNullTermString(binWriter, functionName);
-                    binWriter.Seek(0x49, SeekOrigin.Begin);
+                    binWriter.Seek(PARAMETER_OFFSET, SeekOrigin.Begin);
 
-                    LuaUtils.WriteLuaParams(binWriter, luaParams);
+                    try
+                    {
+                        LuaUtils.WriteLuaParams(binWriter, luaParams);
+                    }
+                    catch (NotSupportedException ex)
+                    {
+                        throw new ArgumentException(
+                            $"RunEventFunction parameters exceed the 0x{packetSize:X} packet contract.",
+                            nameof(luaParams),
+                            ex);
+                    }
                 }
             }
 

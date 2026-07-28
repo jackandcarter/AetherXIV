@@ -1,3 +1,17 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -5,12 +19,15 @@ using Avalonia.Media;
 using Avalonia.Threading;
 using AetherXIV.Core;
 using AetherXIV.Operator;
+using System.Diagnostics;
 using System.Text;
 
 namespace AetherXIV.UI.App;
 
 public sealed partial class MainWindow : Window
 {
+    private const string SourceRepositoryUrl = "https://github.com/jackandcarter/AetherXIV";
+
     private readonly Dictionary<AetherXivManagedService, ServiceRowControls> serviceRows = new();
     private readonly Dictionary<AetherXivManagedService, TextBox> logBoxes = new();
     private readonly AetherXivLiveLogBuffer liveLogBuffer = new();
@@ -54,6 +71,7 @@ public sealed partial class MainWindow : Window
         ResetNewsEditor();
         DetectReelImages();
         RefreshHeader();
+        AboutVersionText.Text = $"{AetherXivBuildInfo.VersionText} · {AetherXivBuildInfo.BuildText}";
         Closing += (_, _) =>
         {
             liveLogFlushTimer.Stop();
@@ -72,6 +90,17 @@ public sealed partial class MainWindow : Window
         ProductVersionText.Text = showBuildNumber
             ? AetherXivBuildInfo.BuildText
             : AetherXivBuildInfo.VersionText;
+    }
+
+    private void OpenSourceRepository_Click(
+        object? sender,
+        Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = SourceRepositoryUrl,
+            UseShellExecute = true
+        });
     }
 
     private AetherXivServiceSupervisor CreateSupervisor(AetherXivOperatorConfig nextConfig)

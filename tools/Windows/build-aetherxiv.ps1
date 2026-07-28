@@ -236,6 +236,10 @@ $mapCoreHash = (Get-FileHash -Algorithm SHA256 $mapCorePath).Hash.ToLowerInvaria
 if ($Configuration -eq "Release") {
     Get-ChildItem -Path $OutputRoot -Recurse -File -Filter *.pdb | Remove-Item -Force
 }
+Copy-Item -LiteralPath (Join-Path $rootDir "LICENSE") -Destination (Join-Path $OutputRoot "LICENSE") -Force
+Copy-Item -LiteralPath (Join-Path $rootDir "THIRD_PARTY_NOTICES.md") -Destination (Join-Path $OutputRoot "THIRD_PARTY_NOTICES.md") -Force
+Copy-Item -LiteralPath (Join-Path $rootDir "MODIFICATIONS.md") -Destination (Join-Path $OutputRoot "MODIFICATIONS.md") -Force
+Copy-Item -LiteralPath (Join-Path $rootDir "TRADEMARKS.md") -Destination (Join-Path $OutputRoot "TRADEMARKS.md") -Force
 Get-ChildItem -Path $OutputRoot -Recurse -File -Filter .DS_Store | Remove-Item -Force
 if (Test-Path $releaseWorkRoot) {
     Remove-Item -Recurse -Force $releaseWorkRoot
@@ -252,6 +256,10 @@ if ($forbiddenReleaseFiles.Count -gt 0) {
 }
 
 $requiredReleaseFiles = @(
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "MODIFICATIONS.md",
+    "TRADEMARKS.md",
     "build-manifest.txt",
     "servers\map\AetherXIV.Core.Map.exe",
     "servers\world\AetherXIV.Core.World.exe",

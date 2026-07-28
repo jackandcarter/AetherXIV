@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using AetherXIV.Protocol;
 
 namespace AetherXIV.Protocol.Tests;
@@ -23,6 +38,9 @@ public sealed class ActorPacketCodecTests
         SubPacket targetAnimated = new SetActorTargetAnimatedPacketCodec().Encode(
             actorId,
             new SetActorTargetAnimatedPacket(0x40001234));
+        SubPacket eventTarget = new SetActorEventTargetPacketCodec().Encode(
+            actorId,
+            new SetActorEventTargetPacket(0x40005678));
         SubPacket name = new SetActorNamePacketCodec().Encode(actorId, new SetActorNamePacket(0, "Gogofu"));
         SubPacket state = new SetActorStatePacketCodec().Encode(actorId, new SetActorStatePacket(7, 0));
         SubPacket zoning = new SetActorIsZoningPacketCodec().Encode(actorId, new SetActorIsZoningPacket(false));
@@ -57,6 +75,8 @@ public sealed class ActorPacketCodecTests
 
         Assert.Equal((ushort)0x00D3, (ushort)targetAnimated.Header.Opcode);
         Assert.Equal(0x40001234u, new SetActorTargetAnimatedPacketCodec().Decode(targetAnimated).TargetActorId);
+        Assert.Equal((ushort)0x00D2, (ushort)eventTarget.Header.Opcode);
+        Assert.Equal(0x40005678u, new SetActorEventTargetPacketCodec().Decode(eventTarget).TargetActorId);
 
         Assert.Equal((ushort)0x013D, (ushort)name.Header.Opcode);
         Assert.Equal(0u, PacketBinary.ReadUInt32LittleEndian(name.Payload.Span));

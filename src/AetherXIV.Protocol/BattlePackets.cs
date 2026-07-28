@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using static AetherXIV.Protocol.ActorPacketCodecHelpers;
 
 namespace AetherXIV.Protocol;
@@ -160,7 +175,7 @@ public sealed record CommandResultX10Packet(
 
 public sealed class CommandResultX10PacketCodec : IPacketCodec<CommandResultX10Packet>
 {
-    public const int PayloadSize = 0xB4;
+    public const int PayloadSize = 0xD8 - 0x20;
     public const int MaxActions = 10;
 
     public PacketOpcode Opcode => PacketOpcode.CommandResultX10;
@@ -180,11 +195,11 @@ public sealed class CommandResultX10PacketCodec : IPacketCodec<CommandResultX10P
         {
             actions.Add(new CommandResultAction(
                 PacketBinary.ReadUInt32LittleEndian(payload[(0x28 + index * 4)..]),
-                PacketBinary.ReadUInt16LittleEndian(payload[(0x4C + index * 2)..]),
-                PacketBinary.ReadUInt16LittleEndian(payload[(0x60 + index * 2)..]),
-                PacketBinary.ReadUInt32LittleEndian(payload[(0x74 + index * 4)..]),
-                payload[0x9C + index],
-                payload[0xA6 + index]));
+                PacketBinary.ReadUInt16LittleEndian(payload[(0x50 + index * 2)..]),
+                PacketBinary.ReadUInt16LittleEndian(payload[(0x64 + index * 2)..]),
+                PacketBinary.ReadUInt32LittleEndian(payload[(0x78 + index * 4)..]),
+                payload[0xA0 + index],
+                payload[0xAA + index]));
         }
 
         return new CommandResultX10Packet(
@@ -215,11 +230,11 @@ public sealed class CommandResultX10PacketCodec : IPacketCodec<CommandResultX10P
         {
             CommandResultAction action = packet.Actions[index];
             PacketBinary.WriteUInt32LittleEndian(payload.AsSpan(0x28 + index * 4), action.TargetActorId);
-            PacketBinary.WriteUInt16LittleEndian(payload.AsSpan(0x4C + index * 2), action.Amount);
-            PacketBinary.WriteUInt16LittleEndian(payload.AsSpan(0x60 + index * 2), action.WorldMasterTextId);
-            PacketBinary.WriteUInt32LittleEndian(payload.AsSpan(0x74 + index * 4), action.EffectId);
-            payload[0x9C + index] = action.Param;
-            payload[0xA6 + index] = action.HitNumber;
+            PacketBinary.WriteUInt16LittleEndian(payload.AsSpan(0x50 + index * 2), action.Amount);
+            PacketBinary.WriteUInt16LittleEndian(payload.AsSpan(0x64 + index * 2), action.WorldMasterTextId);
+            PacketBinary.WriteUInt32LittleEndian(payload.AsSpan(0x78 + index * 4), action.EffectId);
+            payload[0xA0 + index] = action.Param;
+            payload[0xAA + index] = action.HitNumber;
         }
 
         return SubPacket.Create(Opcode, sourceActorId, payload);

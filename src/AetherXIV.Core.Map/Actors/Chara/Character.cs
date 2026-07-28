@@ -664,12 +664,15 @@ namespace AetherXIV.Core.Map.Actors
 
         public byte GetMPP()
         {
-            return (byte)((charaWork.parameterSave.mp / charaWork.parameterSave.mpMax) * 100);
+            if (charaWork.parameterSave.mpMax <= 0)
+                return 0;
+
+            return (byte)((charaWork.parameterSave.mp / (float)charaWork.parameterSave.mpMax) * 100);
         }
 
         public byte GetTPP()
         {
-            return (byte)((tpBase / 3000) * 100);
+            return (byte)((tpBase / 3000.0f) * 100);
         }
 
         public byte GetHPP()
@@ -718,7 +721,7 @@ namespace AetherXIV.Core.Map.Actors
 
         public void SetMaxMP(uint mp)
         {
-            charaWork.parameterSave.mp = (short)mp;
+            charaWork.parameterSave.mpMax = (short)mp;
             updateFlags |= ActorUpdateFlags.HpTpMp;
         }
 
@@ -884,6 +887,11 @@ namespace AetherXIV.Core.Map.Actors
 
         public void RecalculateStats(string reason)
         {
+            short previousHp = charaWork.parameterSave.hp[0];
+            short previousHpMax = charaWork.parameterSave.hpMax[0];
+            short previousMp = charaWork.parameterSave.mp;
+            short previousMpMax = charaWork.parameterSave.mpMax;
+
             DevDiagnostics.Trace(
                 "stats.recalc.begin",
                 "actor", String.Format("0x{0:X}", actorId),
@@ -899,6 +907,19 @@ namespace AetherXIV.Core.Map.Actors
 
             ClearRecalculatedMods();
             CalculateBaseStats();
+
+            // Stat/status/equipment recalculation changes maxima and derived
+            // attributes; it must not heal an already initialised character.
+            // This also clamps malformed legacy lobby defaults to a corrected
+            // maximum while allowing a genuinely empty spawn to initialise.
+            SetHP((uint)CharacterResourcePolicy.RestoreCurrent(
+                previousHp,
+                previousHpMax,
+                charaWork.parameterSave.hpMax[0]));
+            SetMP((uint)CharacterResourcePolicy.RestoreCurrent(
+                previousMp,
+                previousMpMax,
+                charaWork.parameterSave.mpMax));
 
             DevDiagnostics.Trace(
                 "stats.recalc.end",

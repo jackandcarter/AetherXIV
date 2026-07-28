@@ -19,10 +19,13 @@
     <NuGetAudit>false</NuGetAudit>
     <NoWarn>$(NoWarn);NU1900</NoWarn>
     <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900</WarningsNotAsErrors>
+    <Authors>Demi Dev Unit</Authors>
+    <Company>Demi Dev Unit</Company>
+    <Copyright>Copyright © 2026 Demi Dev Unit</Copyright>
     <AssemblyVersion>2.0.0.0</AssemblyVersion>
     <FileVersion>2.0.0.0</FileVersion>
     <Version>2.0.0-foundation</Version>
-    <InformationalVersion>2.0.0+build.21998</InformationalVersion>
-    <AetherXivBuildNumber>21998</AetherXivBuildNumber>
+    <InformationalVersion>2.0.0+build.21999</InformationalVersion>
+    <AetherXivBuildNumber>21999</AetherXivBuildNumber>
   </PropertyGroup>
 </Project>

@@ -282,6 +282,7 @@ namespace AetherXIV.Core.World
                 case 0x012D:
                 case 0x012E:
                 case 0x012F:
+                case 0x0130:
                 case 0x0131:
                 case 0x0135:
                 case 0x01C3:

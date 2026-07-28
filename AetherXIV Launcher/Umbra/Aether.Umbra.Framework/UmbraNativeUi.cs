@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using System.Runtime.InteropServices;
 using System.Text;
 using Aether.Umbra.PluginApi;
@@ -88,6 +103,9 @@ internal static class UmbraNativeUi
 
     internal static void SetPluginManagerOpen(bool isOpen) =>
         SetPluginManagerOpenNative(isOpen ? 1 : 0);
+
+    internal static void SetPluginUpdateCount(int updateCount) =>
+        SetPluginUpdateCountNative(Math.Max(0, updateCount));
 
     internal static void DrawSettingsContent() => DrawSettingsContentNative();
 
@@ -192,6 +210,9 @@ internal static class UmbraNativeUi
 
     [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiSetPluginManagerOpen", CallingConvention = CallingConvention.StdCall)]
     private static extern void SetPluginManagerOpenNative(int isOpen);
+
+    [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiSetPluginUpdateCount", CallingConvention = CallingConvention.StdCall)]
+    private static extern void SetPluginUpdateCountNative(int updateCount);
 
     [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiDrawSettingsContent", CallingConvention = CallingConvention.StdCall)]
     private static extern void DrawSettingsContentNative();

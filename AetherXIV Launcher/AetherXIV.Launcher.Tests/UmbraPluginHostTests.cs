@@ -1,3 +1,18 @@
+/*
+ * AetherXIV
+ * Copyright (C) 2026 Demi Dev Unit
+ *
+ * This file is part of AetherXIV.
+ * See THIRD_PARTY_NOTICES.md for historical and third-party attribution.
+ *
+ * AetherXIV is free software: you may redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
 using System.Text.Json;
 using Aether.Umbra.Framework;
 using Aether.Umbra.PluginApi;
@@ -227,6 +242,57 @@ public sealed class UmbraPluginHostTests
         Assert.Empty(runtime.Plugins.Statuses);
         Assert.False(runtime.PluginManager.PluginExecutionEnabled);
         Assert.Contains("umbra_third_party_plugins_skipped=safe_mode", File.ReadAllText(logPath));
+    }
+
+    [Fact]
+    public async Task UmbraLoadsDeveloperPluginLocationsAndNeverDeletesTheirFiles()
+    {
+        string root = CreateTempDirectory();
+        string pluginRoot = Path.Combine(root, "Plugins");
+        string developerRoot = Path.Combine(root, "Development", "sdk-sample");
+        Directory.CreateDirectory(developerRoot);
+
+        string assemblyName = "Aether.Umbra.SamplePlugin.dll";
+        File.Copy(typeof(SamplePlugin).Assembly.Location, Path.Combine(developerRoot, assemblyName));
+        WriteManifest(developerRoot, new UmbraPluginManifest(
+            "dev.aetherxiv.umbra.developer-sample",
+            "Umbra Developer Sample",
+            "0.1.0",
+            "2.0",
+            assemblyName,
+            "0.1.0",
+            false)
+        {
+            EntryType = typeof(SamplePlugin).FullName
+        });
+
+        string logPath = Path.Combine(root, "Logs", "umbra.log");
+        UmbraRuntimeOptions options = CreateOptions(root, pluginRoot, logPath, safeMode: false);
+        UmbraDeveloperPluginSettingsStore.Save(
+            options.CacheDirectory,
+            new UmbraDeveloperPluginSettings(true, new[] { developerRoot }));
+
+        using UmbraRuntime runtime = await UmbraRuntime.StartAsync(
+            options,
+            UmbraRuntimeLog.Open(logPath));
+
+        UmbraPluginManifest manifest = Assert.Single(runtime.PluginManager.InstalledPlugins);
+        Assert.True(manifest.IsDeveloperPlugin);
+        Assert.True(manifest.Enabled);
+        Assert.True(runtime.PluginManager.DeveloperPlugins.Enabled);
+        Assert.Equal(UmbraPluginRuntimeState.Running, Assert.Single(runtime.Plugins.Statuses).State);
+
+        UmbraPluginActionResult enableResult = runtime.SetPluginEnabled(manifest.Id, false);
+        Assert.False(enableResult.Succeeded);
+        UmbraPluginActionResult uninstallResult = runtime.UninstallPlugin(manifest.Id);
+        Assert.False(uninstallResult.Succeeded);
+        Assert.True(Directory.Exists(developerRoot));
+
+        UmbraPluginActionResult disabled = await runtime.SetDeveloperPluginsEnabledAsync(false);
+        Assert.True(disabled.Succeeded, disabled.Message);
+        Assert.Empty(runtime.PluginManager.InstalledPlugins);
+        Assert.Empty(runtime.Plugins.Statuses);
+        Assert.True(Directory.Exists(developerRoot));
     }
 
     [Fact]

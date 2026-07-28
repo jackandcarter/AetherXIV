@@ -68,6 +68,7 @@ namespace AetherXIV.Core.Common
                 return;
 
             DevDiagnostics.TraceSubPacketClassification(context, subpacket);
+            DevDiagnostics.TraceUnknownSubPacket(context, subpacket);
 
             logger.Info(
                 "[{0}] Unknown subpacket context={1} type=0x{2:X} opcode=0x{3:X} source=0x{4:X} target=0x{5:X} size={6} payload={7}{8}{9}",
@@ -89,6 +90,7 @@ namespace AetherXIV.Core.Common
                 return;
 
             DevDiagnostics.TraceSubPacketClassification(context, subpacket);
+            DevDiagnostics.TraceUnknownSubPacket(context, subpacket);
 
             logger.Info(
                 "[{0}] Unknown game message context={1} opcode=0x{2:X} source=0x{3:X} target=0x{4:X} size={5} payload={6}{7}{8}",
