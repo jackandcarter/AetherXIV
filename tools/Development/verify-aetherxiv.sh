@@ -36,6 +36,9 @@ if command -v pwsh >/dev/null 2>&1; then
 fi
 "${DOTNET_BIN}" build "${ROOT_DIR}/AetherXIV.sln" \
   --configuration Release -m:1 /nodeReuse:false /p:NuGetAudit=false
+python3 "${ROOT_DIR}/tools/Universal/package-umbra-pluginapi.py" \
+  --dotnet "${DOTNET_BIN}" \
+  --force
 "${DOTNET_BIN}" build "${ROOT_DIR}/AetherXIV Launcher/AetherXIV.Launcher.sln" \
   --configuration Release -m:1 /nodeReuse:false /p:NuGetAudit=false
 
