@@ -131,7 +131,7 @@ files are backed up when settings are saved.
 
 - **Enable Umbra for the FFXIV client** adds the verified framework to the
   launch sequence.
-- **Safe Mod** starts Umbra without loading third-party plugins.
+- **Safe Mode** starts Umbra without loading third-party plugins.
 - **Umbra Updates (Service Offline)** is intentionally disabled in this build.
   It becomes **Check for Umbra Updates** when the signed Demi Dev Unit service
   is deployed and enabled.
