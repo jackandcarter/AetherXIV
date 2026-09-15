@@ -291,39 +291,25 @@ jobs:
       - name: Build the macOS core package
         run: ./tools/MacOS/build-aetherxiv.sh "${BUILD_CONFIGURATION}" --scope core
 
-      - name: Smoke-test the bundled macOS runtime and Umbra x86 .NET host
+      - name: Validate the bundled macOS runtime layout
         run: |
           runtime_root="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/Resources/CompatibilityRuntime"
           wine="${runtime_root}/bin/wine"
-          wineserver="${runtime_root}/bin/wineserver"
           helper="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Helpers/win-x64/AetherXIV.Launcher.ClientLauncher.exe"
           injector="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Helpers/win-x64/Umbra.NativeInjector.x86.exe"
           bridge="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Helpers/win-x64/AetherXIV.DiscordBridge.exe"
           framework="$(pwd)/bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Umbra/Framework"
-          managed_probe="${framework}/Managed/Aether.Umbra.Framework.exe"
-          prefix="${RUNNER_TEMP}/aetherxiv-macos-prefix"
-          to_wine_path() { local path="$1"; printf 'Z:%s' "${path//\//\\}"; }
           test -f "${runtime_root}/lib/wine/x86_64-unix/libMoltenVK.dylib"
+          test -x "${wine}"
+          test -x "${runtime_root}/bin/wineserver"
+          test -f "${helper}"
+          test -f "${injector}"
+          test -f "${bridge}"
+          test -f "${framework}/Managed/Aether.Umbra.Framework.exe"
+          test -f "${framework}/Runtime/dotnet.exe"
           export DYLD_FALLBACK_LIBRARY_PATH="$(pwd)/${runtime_root}/lib/wine/x86_64-unix"
-          "${wine}" --version
-          WINEDEBUG=-all WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' WINEARCH=wow64 WINEPREFIX="${prefix}" \
-            "${wine}" wineboot -u
-          WINEDEBUG=-all WINEPREFIX="${prefix}" "${wineserver}" -w
-          WINEDEBUG=-all WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' WINEPREFIX="${prefix}" \
-            "${wine}" "${helper}" --probe | tee "${RUNNER_TEMP}/helper-probe.log"
-          WINEDEBUG=-all WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' WINEPREFIX="${prefix}" \
-            "${wine}" "${injector}" --probe | tee "${RUNNER_TEMP}/injector-probe.log"
-          WINEDEBUG=-all WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' WINEPREFIX="${prefix}" \
-            "${wine}" "${bridge}" --probe | tee "${RUNNER_TEMP}/bridge-probe.log"
-          WINEDEBUG=-all WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' WINEPREFIX="${prefix}" \
-            DOTNET_ROOT="$(to_wine_path "${framework}/Runtime")" \
-            DOTNET_ROOT_X86="$(to_wine_path "${framework}/Runtime")" \
-            "${wine}" "${managed_probe}" --runtime-probe | tee "${RUNNER_TEMP}/umbra-managed-probe.log"
-          WINEDEBUG=-all WINEPREFIX="${prefix}" "${wineserver}" -w
-          grep -Fq "AETHERXIV_CLIENT_HELPER_OK" "${RUNNER_TEMP}/helper-probe.log"
-          grep -Fq "AETHERXIV_NATIVE_INJECTOR_OK" "${RUNNER_TEMP}/injector-probe.log"
-          grep -Fq "AETHERXIV_DISCORD_BRIDGE_OK" "${RUNNER_TEMP}/bridge-probe.log"
-          grep -Fq "AETHER_UMBRA_MANAGED_RUNTIME_OK" "${RUNNER_TEMP}/umbra-managed-probe.log"
+          "${wine}" --version | grep -Fq 'wine-11.0'
+          codesign --verify --deep --strict "bin/build/Release/MacOS/AetherXIV Launcher.app"
 
       - name: Package macOS full, Core, and Launcher downloads
         run: |

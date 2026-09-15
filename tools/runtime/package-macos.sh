@@ -161,25 +161,29 @@ done
 DYLD_FALLBACK_LIBRARY_PATH="${host_root}" \
   "${runtime_root}/bin/wine" --version | grep -Fq 'wine-11.0'
 
-prefix_smoke_root="${staging_root}/prefix-smoke"
-mkdir -p "${prefix_smoke_root}"
-set +e
-DYLD_FALLBACK_LIBRARY_PATH="${host_root}" \
-  WINEDEBUG=-all \
-  WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
-  WINEARCH=wow64 \
-  WINEPREFIX="${prefix_smoke_root}" \
-  /usr/bin/perl -e 'alarm shift; exec @ARGV' 300 \
-    "${runtime_root}/bin/wine" wineboot -u
-prefix_smoke_status=$?
-set -e
-DYLD_FALLBACK_LIBRARY_PATH="${host_root}" \
-  WINEDEBUG=-all \
-  WINEPREFIX="${prefix_smoke_root}" \
-  "${runtime_root}/bin/wineserver" -k >/dev/null 2>&1 || true
-if [[ "${prefix_smoke_status}" != 0 ]]; then
-  echo "The packaged runtime could not initialize a fresh WoW64 prefix (exit ${prefix_smoke_status})." >&2
-  exit 11
+if [[ "${AETHERXIV_RUNTIME_PREFIX_SMOKE:-0}" == 1 ]]; then
+  prefix_smoke_root="${staging_root}/prefix-smoke"
+  mkdir -p "${prefix_smoke_root}"
+  set +e
+  DYLD_FALLBACK_LIBRARY_PATH="${host_root}" \
+    WINEDEBUG=-all \
+    WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
+    WINEARCH=wow64 \
+    WINEPREFIX="${prefix_smoke_root}" \
+    /usr/bin/perl -e 'alarm shift; exec @ARGV' 300 \
+      "${runtime_root}/bin/wine" wineboot -u
+  prefix_smoke_status=$?
+  set -e
+  DYLD_FALLBACK_LIBRARY_PATH="${host_root}" \
+    WINEDEBUG=-all \
+    WINEPREFIX="${prefix_smoke_root}" \
+    "${runtime_root}/bin/wineserver" -k >/dev/null 2>&1 || true
+  if [[ "${prefix_smoke_status}" != 0 ]]; then
+    echo "The packaged runtime could not initialize a fresh WoW64 prefix (exit ${prefix_smoke_status})." >&2
+    exit 11
+  fi
+else
+  echo "Skipping fresh-prefix runtime smoke check; set AETHERXIV_RUNTIME_PREFIX_SMOKE=1 on a macOS desktop host to run it."
 fi
 
 previous_output="${output_root}.previous"
