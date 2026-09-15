@@ -372,6 +372,13 @@ echo "Publishing AetherXIV Core app..."
 publish_self_contained_project "${ROOT_DIR}/src/AetherXIV.UI.App/AetherXIV.UI.App.csproj" "${OUTPUT_ROOT}/core/app" --runtime "${LAUNCHER_RID}"
 
 echo "Publishing bundled Umbra base framework and private .NET runtime..."
+"${DOTNET_BIN}" restore \
+  "${LAUNCHER_ROOT}/Umbra/Aether.Umbra.Framework/Aether.Umbra.Framework.csproj" \
+  --runtime "${UMBRA_RID}" \
+  -m:1 \
+  /nodeReuse:false \
+  /p:SelfContained=true \
+  /p:NuGetAudit=false
 publish_project \
   "${LAUNCHER_ROOT}/Umbra/Aether.Umbra.Framework/Aether.Umbra.Framework.csproj" \
   "${OUTPUT_ROOT}/launcher/app/Umbra/Framework/Managed" \

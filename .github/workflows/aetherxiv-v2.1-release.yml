@@ -8,6 +8,16 @@ on:
         description: Name shown for this release build.
         required: true
         default: AetherXIV v2.1 Release
+      build_targets:
+        description: Platforms to build; select all to publish a complete release.
+        type: choice
+        required: true
+        default: all
+        options:
+          - all
+          - linux-steamos
+          - linux
+          - steamos
       release_tag:
         description: Release tag to create or update.
         required: true
@@ -58,7 +68,7 @@ jobs:
 
   build-linux:
     name: Build Linux x64
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' }}
+    if: ${{ github.event_name == 'push' || inputs.build_targets == 'all' || inputs.build_targets == 'linux-steamos' || inputs.build_targets == 'linux' }}
     needs: verify
     runs-on: ubuntu-latest
     steps:
@@ -188,7 +198,7 @@ jobs:
 
   build-steamos:
     name: Build SteamOS x64
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' }}
+    if: ${{ github.event_name == 'push' || inputs.build_targets == 'all' || inputs.build_targets == 'linux-steamos' || inputs.build_targets == 'steamos' }}
     needs: verify
     runs-on: ubuntu-latest
     steps:
@@ -252,7 +262,7 @@ jobs:
 
   build-macos:
     name: Build macOS arm64 with x64 WoW64 runtime
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' }}
+    if: ${{ github.event_name == 'push' || inputs.build_targets == 'all' }}
     needs: verify
     runs-on: macos-15-intel
     steps:
@@ -324,7 +334,7 @@ jobs:
 
   build-windows:
     name: Build Windows x64
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' }}
+    if: ${{ github.event_name == 'push' || inputs.build_targets == 'all' }}
     needs: verify
     runs-on: windows-latest
     steps:
@@ -441,7 +451,7 @@ jobs:
 
   build-docker:
     name: Validate Docker server (amd64 + arm64)
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' }}
+    if: ${{ github.event_name == 'push' || inputs.build_targets == 'all' }}
     needs: verify
     runs-on: ubuntu-latest
     env:
@@ -495,7 +505,7 @@ jobs:
 
   publish-release:
     name: Publish AetherXIV 2.1
-    if: ${{ always() && !cancelled() && needs.verify.result == 'success' && needs.build-linux.result == 'success' && needs.build-steamos.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success' && needs.build-docker.result == 'success' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' || inputs.publish_release) }}
+    if: ${{ always() && !cancelled() && needs.verify.result == 'success' && needs.build-linux.result == 'success' && needs.build-steamos.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success' && needs.build-docker.result == 'success' && (github.event_name == 'push' || inputs.build_targets == 'all') && (github.event_name == 'push' || inputs.publish_release) }}
     needs:
       - verify
       - build-linux
