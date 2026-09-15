@@ -201,7 +201,12 @@ def main() -> int:
 
     catalog_path = args.catalog.resolve()
     catalog = native_actor_slots.load(catalog_path)
-    source_hash = hashlib.sha256(catalog_path.read_bytes()).hexdigest()
+    # GitHub's Windows runner may check text files out with CRLF endings while
+    # Unix runners retain LF.  Hash normalized text so the generated migration
+    # verifies identically on every supported build host.
+    source_hash = hashlib.sha256(
+        catalog_path.read_text(encoding="utf-8").encode("utf-8")
+    ).hexdigest()
     content = (
         direct_core_sql(catalog, source_hash)
         if args.target == "direct-core"
