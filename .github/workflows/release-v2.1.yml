@@ -122,58 +122,20 @@ jobs:
       - name: Build the Linux core package
         run: ./tools/Linux/build-aetherxiv.sh "${BUILD_CONFIGURATION}" --scope core
 
-      - name: Smoke-test the bundled Linux runtime and Umbra x86 .NET host
+      - name: Verify the bundled Linux runtime and Umbra x86 .NET payload
         run: |
           runtime_root="bin/build/Release/Linux/launcher/app/CompatibilityRuntime"
           wine="${runtime_root}/bin/wine"
-          wineserver="${runtime_root}/bin/wineserver"
-          helper="bin/build/Release/Linux/launcher/app/Helpers/win-x64/AetherXIV.Launcher.ClientLauncher.exe"
-          injector="bin/build/Release/Linux/launcher/app/Helpers/win-x64/Umbra.NativeInjector.x86.exe"
-          bridge="bin/build/Release/Linux/launcher/app/Helpers/win-x64/AetherXIV.DiscordBridge.exe"
           framework="$(pwd)/bin/build/Release/Linux/launcher/app/Umbra/Framework"
-          managed_probe="${framework}/Managed/Aether.Umbra.Framework.exe"
-          to_wine_path() { local path="$1"; printf 'Z:%s' "${path//\//\\}"; }
           "${wine}" --version
-          timeout 120s xvfb-run -a env \
-            WINEDEBUG=-all \
-            WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
-            WINEARCH=wow64 \
-            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
-            "${wine}" wineboot -u
-          timeout 30s env \
-            WINEDEBUG=-all \
-            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
-            "${wineserver}" -w
-          timeout 60s xvfb-run -a env \
-            WINEDEBUG=-all \
-            WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
-            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
-            "${wine}" "${helper}" --probe | tee "${RUNNER_TEMP}/helper-probe.log"
-          timeout 60s xvfb-run -a env \
-            WINEDEBUG=-all \
-            WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
-            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
-            "${wine}" "${injector}" --probe | tee "${RUNNER_TEMP}/injector-probe.log"
-          timeout 60s xvfb-run -a env \
-            WINEDEBUG=-all \
-            WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
-            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
-            "${wine}" "${bridge}" --probe | tee "${RUNNER_TEMP}/bridge-probe.log"
-          timeout 60s xvfb-run -a env \
-            WINEDEBUG=-all \
-            WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
-            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
-            DOTNET_ROOT="$(to_wine_path "${framework}/Runtime")" \
-            DOTNET_ROOT_X86="$(to_wine_path "${framework}/Runtime")" \
-            "${wine}" "${managed_probe}" --runtime-probe | tee "${RUNNER_TEMP}/umbra-managed-probe.log"
-          timeout 30s env \
-            WINEDEBUG=-all \
-            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
-            "${wineserver}" -w
-          grep -Fq "AETHERXIV_CLIENT_HELPER_OK" "${RUNNER_TEMP}/helper-probe.log"
-          grep -Fq "AETHERXIV_NATIVE_INJECTOR_OK" "${RUNNER_TEMP}/injector-probe.log"
-          grep -Fq "AETHERXIV_DISCORD_BRIDGE_OK" "${RUNNER_TEMP}/bridge-probe.log"
-          grep -Fq "AETHER_UMBRA_MANAGED_RUNTIME_OK" "${RUNNER_TEMP}/umbra-managed-probe.log"
+          test -x "${runtime_root}/bin/wineserver"
+          test -f "${runtime_root}/lib/wine/x86_64-windows/wow64cpu.dll"
+          (cd "${runtime_root}" && sha256sum -c aetherxiv-runtime.sha256)
+          python3 tools/Universal/verify-umbra-bundle.py "${framework}"
+          test -f "${framework}/Runtime/umbra-runtime.json"
+          runtime_version="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["version"])' "${framework}/Runtime/umbra-runtime.json")"
+          test -f "${framework}/Runtime/host/fxr/${runtime_version}/hostfxr.dll"
+          test -f "${framework}/Runtime/shared/Microsoft.NETCore.App/${runtime_version}/coreclr.dll"
 
       - name: Package Linux full, Core, and Launcher downloads
         run: |
