@@ -13,9 +13,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-using System.Text.Json;
-using System.Text.Json.Serialization;
-
 namespace AetherXIV.Launcher.Core;
 
 public sealed record UmbraSettings
@@ -31,9 +28,13 @@ public sealed record UmbraSettings
 
     public string PluginDirectory { get; init; } = "";
 
-    public bool UseOfficialRepository { get; init; } = true;
-
-    public IReadOnlyList<string> CustomRepositoryUrls { get; init; } = Array.Empty<string>();
+    /// <summary>
+    /// Launcher-side intent for the built-in Discord Rich Presence plugin. The
+    /// live switch is the plugin manifest's <c>enabled</c> field; this value is
+    /// the fallback when the plugin is not yet installed and the checkbox's
+    /// persisted state.
+    /// </summary>
+    public bool DiscordRichPresenceEnabled { get; init; }
 
     public static UmbraSettings Default => new();
 
@@ -44,8 +45,7 @@ public sealed record UmbraSettings
             LoadDelayMilliseconds = Math.Clamp(LoadDelayMilliseconds, 0, MaximumLoadDelayMilliseconds),
             PluginDirectory = string.IsNullOrWhiteSpace(PluginDirectory)
                 ? UmbraInstallStore.PluginsRoot
-                : Path.GetFullPath(PluginDirectory),
-            CustomRepositoryUrls = UmbraRepositoryOptions.NormalizeCustomRepositoryUrls(CustomRepositoryUrls)
+                : Path.GetFullPath(PluginDirectory)
         };
     }
 }
@@ -58,8 +58,9 @@ public sealed record UmbraLaunchOptions(
     string FrameworkPath,
     string PluginDirectory,
     string LogPath,
-    IReadOnlyList<string> RepositoryUrls,
-    bool EnableManagedOnWine = false)
+    bool EnableManagedOnWine = false,
+    string SupportedRepositoryUrl = "",
+    string BundledRepositoryPath = "")
 {
     public static UmbraLaunchOptions Disabled => new(
         false,
@@ -68,13 +69,7 @@ public sealed record UmbraLaunchOptions(
         "",
         "",
         "",
-        "",
-        Array.Empty<string>());
-
-    public IReadOnlyList<UmbraRepositorySource> RepositorySources { get; init; } =
-        UmbraRepositorySource.FromUrls(RepositoryUrls, UmbraRepositorySource.Custom);
-
-    public string RepositoriesJson => UmbraRepositorySource.ToJson(RepositorySources);
+        "");
 
     public bool HasRequiredPaths =>
         !string.IsNullOrWhiteSpace(BootstrapPath)
@@ -84,84 +79,9 @@ public sealed record UmbraLaunchOptions(
 
     public UmbraLaunchOptions Normalize()
     {
-        IReadOnlyList<UmbraRepositorySource> repositorySources = UmbraRepositorySource.Normalize(
-            RepositorySources.Count == 0
-                ? UmbraRepositorySource.FromUrls(RepositoryUrls, UmbraRepositorySource.Custom)
-                : RepositorySources);
-
         return this with
         {
-            LoadDelayMilliseconds = Math.Clamp(LoadDelayMilliseconds, 0, UmbraSettings.MaximumLoadDelayMilliseconds),
-            RepositoryUrls = repositorySources.Select(source => source.Url).ToArray(),
-            RepositorySources = repositorySources
+            LoadDelayMilliseconds = Math.Clamp(LoadDelayMilliseconds, 0, UmbraSettings.MaximumLoadDelayMilliseconds)
         };
-    }
-}
-
-public sealed record UmbraRepositorySource(
-    [property: JsonPropertyName("url")] string Url,
-    [property: JsonPropertyName("source")] string Source,
-    [property: JsonPropertyName("name")] string? Name = null)
-{
-    public const string Supported = "supported";
-    public const string Custom = "custom";
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        WriteIndented = false
-    };
-
-    public static IReadOnlyList<UmbraRepositorySource> FromUrls(
-        IEnumerable<string>? urls,
-        string source)
-    {
-        if (urls is null)
-            return Array.Empty<UmbraRepositorySource>();
-
-        return urls
-            .Select(url => new UmbraRepositorySource(url, source))
-            .ToArray();
-    }
-
-    public static IReadOnlyList<UmbraRepositorySource> Normalize(IEnumerable<UmbraRepositorySource>? sources)
-    {
-        if (sources is null)
-            return Array.Empty<UmbraRepositorySource>();
-
-        List<UmbraRepositorySource> normalized = new();
-        HashSet<string> seen = new(StringComparer.OrdinalIgnoreCase);
-        foreach (UmbraRepositorySource source in sources)
-        {
-            string url = (source.Url ?? "").Trim();
-            if (string.IsNullOrWhiteSpace(url))
-                continue;
-
-            IReadOnlyList<string> normalizedUrl = UmbraRepositoryOptions.NormalizeCustomRepositoryUrls(new[] { url });
-            if (normalizedUrl.Count == 0 || !seen.Add(normalizedUrl[0]))
-                continue;
-
-            string sourceName = string.Equals(source.Source, Supported, StringComparison.OrdinalIgnoreCase)
-                ? Supported
-                : Custom;
-            string? name = string.IsNullOrWhiteSpace(source.Name) ? null : source.Name.Trim();
-            normalized.Add(new UmbraRepositorySource(normalizedUrl[0], sourceName, name));
-        }
-
-        return normalized;
-    }
-
-    public static string ToJson(IEnumerable<UmbraRepositorySource>? sources)
-    {
-        return JsonSerializer.Serialize(Normalize(sources), JsonOptions);
-    }
-
-    public static IReadOnlyList<UmbraRepositorySource> FromJson(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json))
-            return Array.Empty<UmbraRepositorySource>();
-
-        IReadOnlyList<UmbraRepositorySource>? sources = JsonSerializer.Deserialize<IReadOnlyList<UmbraRepositorySource>>(json, JsonOptions);
-        return Normalize(sources);
     }
 }

@@ -13,7 +13,7 @@ WHERE `id`=1090265;
 INSERT INTO `server_npc_spawn_evidence`
 (`evidenceId`,`service`,`spawnId`,`actorClassId`,`zoneId`,`privateAreaName`,`positionX`,`positionY`,`positionZ`,`rotation`,`classPath`,`appearanceId`,`evidenceSource`,`evidenceReference`,`clientBuild`,`confidenceStatus`)
 VALUES
-('company-office-entrance-immortal-flames','grand-company-office-entrance',104,1090265,175,'',-235,189,50.5,0,'/Chara/Npc/Object/MarketEntrance',1090265,'client-actor-catalog-reviewed-seed-and-official-trigger-packet','server_spawn_locations:104; MarketEntrance.lua Ul''dah trigger metadata; ffxiv_traces/moving_around_gridania.pcapng frame:93 validates 0x0175 field semantics','2012.09.19.0001','RepoConfirmed')
+('company-office-entrance-immortal-flames','grand-company-office-entrance',104,1090265,175,'',-235,189,50.5,0,'/Chara/Npc/Object/MarketEntrance',1090265,'client-actor-catalog-reviewed-seed-and-official-trigger-packet','server_spawn_locations:104; MarketEntrance.lua Ul''dah trigger metadata; reviewed-local-validation frame:93 validates 0x0175 field semantics','2012.09.19.0001','RepoConfirmed')
 ON DUPLICATE KEY UPDATE
 `service`=VALUES(`service`),`spawnId`=VALUES(`spawnId`),`actorClassId`=VALUES(`actorClassId`),
 `zoneId`=VALUES(`zoneId`),`privateAreaName`=VALUES(`privateAreaName`),

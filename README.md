@@ -1,49 +1,73 @@
-# AetherXIV 2.0
+# AetherXIV 2.1
 
-AetherXIV 2.0 is a modern, cross-platform server and launcher stack for a
-user-owned Final Fantasy XIV 1.23b client. It combines the Lobby, World, Map,
-Launcher Services, AetherXIV Core management app, AetherXIV Launcher, database
-tooling, and the Umbra plugin framework in one workspace.
+AetherXIV is a cross-platform server, launcher, and Umbra framework stack for
+a user-owned Final Fantasy XIV 1.23b client. The 2.1 release candidate combines
+the Lobby, World, Map, and Launcher Services hosts; AetherXIV Core; AetherXIV
+Launcher; Direct Core database tooling; and Umbra in one workspace.
 
-## Supported release targets
+## Supported targets
 
 - macOS 14 or later on Apple silicon
 - Windows 11 x64
 - Ubuntu 22.04/24.04 x64
-- SteamOS in Desktop Mode
+- SteamOS Desktop Mode
 
-## Getting started
+Windows uses the native client launch path. macOS, Linux, and SteamOS full
+packages include the project compatibility runtime. AetherXIV never distributes
+the game client, patches, or Square Enix assets.
 
-- [Documentation index](docs/README.md)
+## Start here
+
+- [2.1 documentation index](docs/README.md)
+- [2.1 release notes](docs/AETHERXIV_2.1_RELEASE_NOTES.md)
 - [AetherXIV Core guide](docs/AETHERXIV_CORE_GUIDE.md)
 - [Launcher guide](docs/LAUNCHER_GUIDE.md)
 - [Database setup and migration](docs/DATABASE_SETUP_AND_MIGRATION.md)
-- [Optional Docker server deployment for Linux/VPS hosts](docs/DOCKER_SERVER.md)
-- [Build and runtime dependencies](docs/BUILD_AND_RUNTIME_DEPENDENCIES.md)
-- [AetherXIV 2.0 release notes](docs/AETHERXIV_2.0_RELEASE_NOTES.md)
+- [Umbra SDK and plugin development](docs/UMBRA_SDK.md)
 
-## Build and test
+## Build from source
 
-The repository pins .NET SDK `10.0.203` in `global.json`. Run the complete
-managed verification suite from the repository root:
+Every platform supports two explicit build scopes:
+
+- `core` packages the server stack, Core application, configurations, Direct
+  Core database package, migrations, and startup tooling.
+- `full` adds Launcher, Umbra, bundled framework/plugin assets, client helpers,
+  and the non-Windows compatibility runtime.
+
+## Release downloads
+
+Each 2.1 platform build publishes three archives:
+
+- **Full** — Core stack and UI, database package, Launcher, Umbra, client
+  helpers, and the bundled compatibility runtime on macOS/Linux/SteamOS.
+- **Core** — the server stack, Core UI, database package, migrations, and
+  startup tooling; it does not contain Launcher, Umbra, or a compatibility
+  runtime.
+- **Launcher** — AetherXIV Launcher, Umbra, helpers, and on macOS/Linux/SteamOS
+  the bundled Aether.3 compatibility runtime; it does not contain Core, server
+  hosts, or the database package.
+
+Windows Launcher archives remain native and therefore contain no Wine runtime.
+
+Use the platform guides for exact prerequisites, opt-in dependency installation,
+and package verification:
+
+- [macOS](docs/build/MACOS.md)
+- [Windows](docs/build/WINDOWS.md)
+- [Linux](docs/build/LINUX.md)
+- [SteamOS](docs/build/STEAMOS.md)
+
+The repository pins .NET SDK `10.0.203` in `global.json`. Run the managed
+verification suite from the repository root:
 
 ```sh
 ./tools/Development/verify-aetherxiv.sh
 ```
 
-Platform release builds use the dedicated scripts under `tools/MacOS`,
-`tools/Linux`, `tools/SteamOS`, and `tools/Windows`. Generated release output is
-written beneath the ignored `bin/build/Release` directory.
+## Client ownership and licensing
 
-## Client ownership
-
-AetherXIV does not distribute the Final Fantasy XIV client, patches, or Square
-Enix assets. Each user must provide a legally obtained Final Fantasy XIV 1.23b
-client and any required patch library.
-
-## License and attribution
-
-AetherXIV is free software licensed under the
+Each operator must supply a legally obtained Final Fantasy XIV 1.23b client and
+any required patch library. AetherXIV is licensed under the
 [GNU Affero General Public License, version 3 or later](LICENSE).
 
 - [Development and modification notice](MODIFICATIONS.md)

@@ -10,8 +10,11 @@ namespace AetherXIV.Core.Map.packets.send.actor
         public const uint PACKET_SIZE = 0x28;
         
         public static SubPacket BuildPacket(uint sourceActorId, uint targetID)
-        {            
-            return new SubPacket(OPCODE, sourceActorId, BitConverter.GetBytes((ulong)targetID));
+        {
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetActorTargetAnimatedPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetActorTargetAnimatedPacket(targetID));
         }
     }
 }

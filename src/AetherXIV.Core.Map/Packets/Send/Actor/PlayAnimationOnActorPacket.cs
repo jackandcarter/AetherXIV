@@ -10,7 +10,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
 
         public static SubPacket BuildPacket(uint sourceActorId, uint animationID)
         {
-            return new SubPacket(OPCODE, sourceActorId, BitConverter.GetBytes((ulong)animationID));
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.PlayAnimationOnActorPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.PlayAnimationOnActorPacket(animationID));
         }
     }
 }

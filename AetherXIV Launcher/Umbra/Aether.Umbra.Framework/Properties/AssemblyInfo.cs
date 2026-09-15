@@ -16,3 +16,4 @@
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("AetherXIV.Launcher.Tests")]
+[assembly: InternalsVisibleTo("Aether.Umbra.Framework.Tests")]

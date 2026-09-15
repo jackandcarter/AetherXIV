@@ -35,8 +35,11 @@ namespace AetherXIV.Core.Map.Actors
         public NpcWork npcWork = new NpcWork();
         public NpcSpawnType npcSpawnType;
 
-        public Npc(int actorNumber, ActorClass actorClass, string uniqueId, Area spawnedArea, float posX, float posY, float posZ, float rot, ushort actorState, uint animationId, string customDisplayName)
-            : base((4 << 28 | spawnedArea.actorId << 19 | (uint)actorNumber))  
+        public Npc(int actorNumber, ActorClass actorClass, string uniqueId, Area spawnedArea, float posX, float posY, float posZ, float rot, ushort actorState, uint animationId, string customDisplayName, bool usesNativeSlot = false)
+            : base(NativeActorId.Compose(
+                NativeActorId.NonPlayerKind,
+                spawnedArea.GetActorNamespaceId(),
+                (uint)actorNumber))
         {
             this.positionX = posX;
             this.positionY = posY;
@@ -50,7 +53,7 @@ namespace AetherXIV.Core.Map.Actors
 
             this.uniqueIdentifier = uniqueId;
 
-            this.zoneId = spawnedArea.actorId;
+            this.zoneId = spawnedArea.GetTerritoryId();
             this.zone = spawnedArea;
 
             this.actorClassId = actorClass.actorClassId;
@@ -92,12 +95,15 @@ namespace AetherXIV.Core.Map.Actors
                     isStatic = true;
                 }
             }
-            GenerateActorName((int)actorNumber);
+            GenerateActorName(spawnedArea.ResolveObjectNameOrdinal((uint)actorNumber, usesNativeSlot));
             this.aiContainer = new AIContainer(this, null, new PathFind(this), new TargetFind(this));
         }
 
-        public Npc(int actorNumber, ActorClass actorClass, string uniqueId, Area spawnedArea, float posX, float posY, float posZ, float rot, uint layout, uint instance)
-            : base((4 << 28 | spawnedArea.actorId << 19 | (uint)actorNumber))
+        public Npc(int actorNumber, ActorClass actorClass, string uniqueId, Area spawnedArea, float posX, float posY, float posZ, float rot, uint layout, uint instance, bool usesNativeSlot = false)
+            : base(NativeActorId.Compose(
+                NativeActorId.NonPlayerKind,
+                spawnedArea.GetActorNamespaceId(),
+                (uint)actorNumber))
         {
             this.positionX = posX;
             this.positionY = posY;
@@ -110,7 +116,7 @@ namespace AetherXIV.Core.Map.Actors
 
             this.uniqueIdentifier = uniqueId;
 
-            this.zoneId = spawnedArea.actorId;
+            this.zoneId = spawnedArea.GetTerritoryId();
             this.zone = spawnedArea;
 
             this.actorClassId = actorClass.actorClassId;
@@ -130,7 +136,7 @@ namespace AetherXIV.Core.Map.Actors
             this.layout = layout;
             this.instance = instance;
 
-            GenerateActorName((int)actorNumber);
+            GenerateActorName(spawnedArea.ResolveObjectNameOrdinal((uint)actorNumber, usesNativeSlot));
             this.aiContainer = new AIContainer(this, null, new PathFind(this), new TargetFind(null));
         }
 
@@ -168,7 +174,12 @@ namespace AetherXIV.Core.Map.Actors
                 lParams = LuaUtils.CreateLuaParamList(classPathFake, false, false, false, false, false, 0xF47F6, false, false, 0, 0);
                 isStatic = true;
                 //ActorInstantiatePacket.BuildPacket(actorId, actorName, classNameFake, lParams).DebugPrintSubPacket();
-                return ActorInstantiatePacket.BuildPacket(actorId, actorName, classNameFake, lParams);
+                return ActorInstantiatePacket.BuildPacket(
+                    actorId,
+                    actorName,
+                    classNameFake,
+                    lParams,
+                    GetActorInstantiationAreaKey(player));
             }
             else
             {
@@ -182,7 +193,12 @@ namespace AetherXIV.Core.Map.Actors
             }
 
             //ActorInstantiatePacket.BuildPacket(actorId, actorName, className, lParams).DebugPrintSubPacket();
-            return ActorInstantiatePacket.BuildPacket(actorId, actorName, className, lParams);
+            return ActorInstantiatePacket.BuildPacket(
+                actorId,
+                actorName,
+                className,
+                lParams,
+                GetActorInstantiationAreaKey(player));
         }
 
         public override List<SubPacket> GetSpawnPackets(Player player, ushort spawnType)
@@ -192,6 +208,7 @@ namespace AetherXIV.Core.Map.Actors
             subpackets.AddRange(GetEventConditionPackets());
             subpackets.Add(CreateSpeedPacket());            
             subpackets.Add(CreateSpawnPositonPacket(0x0));
+            subpackets.Add(CreatePositionUpdatePacket());
 
             if (isMapObj)
                 subpackets.Add(SetActorBGPropertiesPacket.BuildPacket(actorId, instance, layout));

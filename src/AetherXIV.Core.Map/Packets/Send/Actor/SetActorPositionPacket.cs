@@ -21,27 +21,17 @@ namespace AetherXIV.Core.Map.packets.send.actor
         
         public static SubPacket BuildPacket(uint sourceActorId, uint actorId, float x, float y, float z, float rotation, ushort spawnType, bool isZoningPlayer)
         {
-            byte[] data = new byte[PACKET_SIZE-0x20];
-
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    binWriter.Write((Int32)0);                    
-                    binWriter.Write((Int32)actorId);
-                    binWriter.Write((Single)x);
-                    binWriter.Write((Single)y);
-                    binWriter.Write((Single)z);
-                    binWriter.Write((Single)rotation);
-
-                    binWriter.BaseStream.Seek(0x24, SeekOrigin.Begin);
-
-                    binWriter.Write((UInt16)spawnType);
-                    binWriter.Write((UInt16)(isZoningPlayer ? 1 : 0));
-                }
-            }
-
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetActorPositionPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetActorPositionPacket(
+                    actorId,
+                    x,
+                    y,
+                    z,
+                    rotation,
+                    spawnType,
+                    isZoningPlayer));
         }
 
     }

@@ -9,10 +9,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
 
         public static SubPacket BuildPacket(uint sourceActorId, byte val)
         {
-            byte[] data = new byte[PACKET_SIZE-0x20];
-            data[0] = val; //Why?
-
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.AddActorPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.AddActorPacket(val));
         }
 
     }

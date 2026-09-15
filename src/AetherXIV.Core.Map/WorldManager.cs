@@ -41,46 +41,19 @@ namespace AetherXIV.Core.Map
         private Dictionary<uint, ModifierList> battleNpcSpawnMods = new Dictionary<uint, ModifierList>();
         private Dictionary<uint, List<uint>> battleNpcSkillLists = new Dictionary<uint, List<uint>>();
         private Dictionary<uint, List<uint>> battleNpcSpellLists = new Dictionary<uint, List<uint>>();
+        private Dictionary<uint, List<uint>> battleNpcMobSkillLists = new Dictionary<uint, List<uint>>();
 
         private Server mServer;
 
         private const int MILIS_LOOPTIME = 333;
-        private const int TRANSITION_LOOPTIME = 20;
         private Timer mZoneTimer;
-        private Timer mTransitionTimer;
-
-        private enum PendingBootstrapPhase
-        {
-            AwaitingRoomExit,
-            StreamingActors
-        }
-
-        private sealed class PendingLocalZoneBootstrap
-        {
-            public long token;
-            public Player player;
-            public Area destinationArea;
-            public ushort spawnType;
-            public ZoneTransitionReloadRecipe reloadRecipe;
-            public DateTime requestedAtUtc;
-            public DateTime nextActionAtUtc;
-            public PendingBootstrapPhase phase;
-            public List<Actor> actors;
-            public int actorIndex;
-            public int batchNumber;
-        }
-
-        private readonly Object pendingBootstrapLock = new Object();
-        private readonly Dictionary<uint, PendingLocalZoneBootstrap> pendingBootstraps =
-            new Dictionary<uint, PendingLocalZoneBootstrap>();
-        private long nextPendingBootstrapToken;
 
         //Zone Server Groups
         public Dictionary<ulong, Group> mContentGroups = new Dictionary<ulong, Group>();
         public Dictionary<ulong, RelationGroup> mRelationGroups = new Dictionary<ulong, RelationGroup>();
         public Dictionary<ulong, TradeGroup> mTradeGroups = new Dictionary<ulong, TradeGroup>();
         private Object groupLock = new Object();
-        public ulong groupIndexId = 1;
+        private readonly RuntimeGroupIdAllocator groupIdAllocator = new RuntimeGroupIdAllocator();
 
         public WorldManager(Server server)
         {
@@ -128,7 +101,9 @@ namespace AetherXIV.Core.Map
                         {
                             Zone zone = new Zone(reader.GetUInt32(0), reader.GetString(1), reader.GetUInt16(2), reader.GetString(3), reader.GetUInt16(4), reader.GetUInt16(5),
                                 reader.GetUInt16(6), reader.GetBoolean(7), reader.GetBoolean(8), reader.GetBoolean(9), reader.GetBoolean(10), reader.GetBoolean(11), reader.GetBoolean(12));
-                            zoneList[zone.actorId] = zone;
+                            // The registry is keyed by the database territory ID. The
+                            // area-master actor ID is a separate client-visible identity.
+                            zoneList[zone.GetTerritoryId()] = zone;
                             count1++;
                         }
                     }
@@ -387,6 +362,7 @@ namespace AetherXIV.Core.Map
 
                     string query = @"
                                     SELECT 
+                                    id,
                                     actorClassId,  
                                     uniqueId,                                  
                                     zoneId,      
@@ -399,7 +375,8 @@ namespace AetherXIV.Core.Map
                                     actorState,
                                     animationId,
                                     customDisplayName
-                                    FROM server_spawn_locations                                    
+                                    FROM server_spawn_locations
+                                    ORDER BY zoneId, privateAreaName, privateAreaLevel, id
                                     ";
 
                     MySqlCommand cmd = new MySqlCommand(query, conn);
@@ -408,6 +385,7 @@ namespace AetherXIV.Core.Map
                     {
                         while (reader.Read())
                         {                            
+                            uint spawnId = reader.GetUInt32("id");
                             uint zoneId = reader.GetUInt32("zoneId");
                             uint classId = reader.GetUInt32("actorClassId");
                             if (!actorClasses.ContainsKey(classId))
@@ -419,10 +397,13 @@ namespace AetherXIV.Core.Map
                                 continue;
 
                             string customName = null;
-                            if (!reader.IsDBNull(11))
+                            int customNameOrd = reader.GetOrdinal("customDisplayName");
+                            if (!reader.IsDBNull(customNameOrd))
                                 customName = reader.GetString("customDisplayName");
-                            string uniqueId = reader.GetString("uniqueId");                          
-                            string privAreaName = reader.GetString("privateAreaName");
+                            int uniqueIdOrd = reader.GetOrdinal("uniqueId");
+                            string uniqueId = reader.IsDBNull(uniqueIdOrd) ? null : reader.GetString("uniqueId");
+                            int privAreaOrd = reader.GetOrdinal("privateAreaName");
+                            string privAreaName = reader.IsDBNull(privAreaOrd) ? null : reader.GetString("privateAreaName");
                             uint privAreaLevel = reader.GetUInt32("privateAreaLevel");
                             float x = reader.GetFloat("positionX");
                             float y = reader.GetFloat("positionY");
@@ -431,7 +412,20 @@ namespace AetherXIV.Core.Map
                             ushort state = reader.GetUInt16("actorState");
                             uint animId = reader.GetUInt32("animationId");
                             
-                            SpawnLocation spawn = new SpawnLocation(classId, uniqueId, zoneId, privAreaName, privAreaLevel, x, y, z, rot, state, animId);
+                            SpawnLocation spawn = new SpawnLocation(
+                                spawnId,
+                                classId,
+                                uniqueId,
+                                zoneId,
+                                privAreaName,
+                                privAreaLevel,
+                                x,
+                                y,
+                                z,
+                                rot,
+                                state,
+                                animId,
+                                null);
 
                             zone.AddSpawnLocation(spawn);
 
@@ -468,7 +462,7 @@ namespace AetherXIV.Core.Map
                     bgr.groupId, bgr.poolId, bgr.scriptName, bgr.minLevel, bgr.maxLevel, bgr.respawnTime, bgr.hp, bgr.mp,
                     bgr.dropListId, bgr.allegiance, bgr.spawnType, bgr.animationId, bgr.actorState, bgr.privateAreaName, bgr.privateAreaLevel, bgr.zoneId,
                     bpo.poolId, bpo.genusId, bpo.actorClassId, bpo.currentJob, bpo.combatSkill, bpo.combatDelay, bpo.combatDmgMult, bpo.aggroType,
-                    bpo.immunity, bpo.linkType, bpo.skillListId, bpo.spellListId,
+                    bpo.immunity, bpo.linkType, bpo.skillListId, bpo.spellListId, bpo.mobSkillListId,
                     bge.genusId, bge.modelSize, bge.speed, bge.kindredId, bge.detection, bge.hpp, bge.mpp, bge.tpp, bge.str, bge.vit, bge.dex,
                     bge.int, bge.mnd, bge.pie, bge.att, bge.acc, bge.def, bge.eva, bge.slash, bge.pierce, bge.h2h, bge.blunt,
                     bge.fire, bge.ice, bge.wind, bge.lightning, bge.earth, bge.water, bge.element
@@ -476,7 +470,7 @@ namespace AetherXIV.Core.Map
                     INNER JOIN server_battlenpc_groups bgr ON bsl.groupId = bgr.groupId
                     INNER JOIN server_battlenpc_pools bpo ON bgr.poolId = bpo.poolId
                     INNER JOIN server_battlenpc_genus bge ON bpo.genusId = bge.genusId
-                    WHERE bgr.zoneId = @zoneId GROUP BY bsl.bnpcId;
+                    WHERE bgr.zoneId = @zoneId GROUP BY bsl.bnpcId ORDER BY bsl.bnpcId;
                     ";
 
                     var count = 0;
@@ -544,6 +538,7 @@ namespace AetherXIV.Core.Map
                                 battleNpc.dropListId = reader.GetUInt32("dropListId");
                                 battleNpc.spellListId = reader.GetUInt32("spellListId");
                                 battleNpc.skillListId = reader.GetUInt32("skillListId");
+                                battleNpc.mobSkillListId = reader.GetUInt32("mobSkillListId");
                                 AttachBattleNpcActionLists(battleNpc);
                                 ApplyBattleNpcModifierLists(battleNpc);
                                 battleNpc.SetRespawnTime(reader.GetUInt32("respawnTime"));
@@ -622,7 +617,7 @@ namespace AetherXIV.Core.Map
                     bgr.groupId, bgr.poolId, bgr.scriptName, bgr.minLevel, bgr.maxLevel, bgr.respawnTime, bgr.hp, bgr.mp,
                     bgr.dropListId, bgr.allegiance, bgr.spawnType, bgr.animationId, bgr.actorState, bgr.privateAreaName, bgr.privateAreaLevel, bgr.zoneId,
                     bpo.poolId, bpo.genusId, bpo.actorClassId, bpo.currentJob, bpo.combatSkill, bpo.combatDelay, bpo.combatDmgMult, bpo.aggroType,
-                    bpo.immunity, bpo.linkType, bpo.skillListId, bpo.spellListId,
+                    bpo.immunity, bpo.linkType, bpo.skillListId, bpo.spellListId, bpo.mobSkillListId,
                     bge.genusId, bge.modelSize, bge.speed, bge.kindredId, bge.detection, bge.hpp, bge.mpp, bge.tpp, bge.str, bge.vit, bge.dex,
                     bge.int, bge.mnd, bge.pie, bge.att, bge.acc, bge.def, bge.eva, bge.slash, bge.pierce, bge.h2h, bge.blunt,
                     bge.fire, bge.ice, bge.wind, bge.lightning, bge.earth, bge.water, bge.element
@@ -630,7 +625,7 @@ namespace AetherXIV.Core.Map
                     INNER JOIN server_battlenpc_groups bgr ON bsl.groupId = bgr.groupId
                     INNER JOIN server_battlenpc_pools bpo ON bgr.poolId = bpo.poolId
                     INNER JOIN server_battlenpc_genus bge ON bpo.genusId = bge.genusId
-                    WHERE bsl.bnpcId = @bnpcId GROUP BY bsl.bnpcId;
+                    WHERE bsl.bnpcId = @bnpcId GROUP BY bsl.bnpcId ORDER BY bsl.bnpcId;
                     ";
 
                     var count = 0;
@@ -643,7 +638,6 @@ namespace AetherXIV.Core.Map
                         while (reader.Read())
                         {
                             area = area ?? Server.GetWorldManager().GetZone(reader.GetUInt16("zoneId"));
-                            int actorId = checked((int)area.AllocateSpawnedActorNumber());
                             bnpc = area.GetBattleNpcById(id);
 
                             if (bnpc != null)
@@ -651,6 +645,8 @@ namespace AetherXIV.Core.Map
                                 bnpc.ForceRespawn();
                                 break;
                             }
+
+                            int actorId = checked((int)area.AllocateSpawnedActorNumber());
 
                             // todo: add to private areas, set up immunity, mob linking,
                             // - load skill/spell/drop lists, set detection icon, load pool/family/group mods
@@ -711,6 +707,7 @@ namespace AetherXIV.Core.Map
                             battleNpc.dropListId = reader.GetUInt32("dropListId");
                             battleNpc.spellListId = reader.GetUInt32("spellListId");
                             battleNpc.skillListId = reader.GetUInt32("skillListId");
+                            battleNpc.mobSkillListId = reader.GetUInt32("mobSkillListId");
                             AttachBattleNpcActionLists(battleNpc);
                             battleNpc.SetBattleNpcId(reader.GetUInt32("bnpcId"));
                             battleNpc.SetRespawnTime(reader.GetUInt32("respawnTime"));
@@ -766,9 +763,11 @@ namespace AetherXIV.Core.Map
         {
             battleNpcSkillLists.Clear();
             battleNpcSpellLists.Clear();
+            battleNpcMobSkillLists.Clear();
 
             LoadBattleNpcActionList("server_battlenpc_skill_list", "skillListId", "skillId", battleNpcSkillLists);
             LoadBattleNpcActionList("server_battlenpc_spell_list", "spellListId", "spellId", battleNpcSpellLists);
+            LoadBattleNpcActionList("server_battlenpc_mob_skill_list", "mobSkillListId", "skillId", battleNpcMobSkillLists);
         }
 
         private void LoadBattleNpcActionList(string tableName, string listColumn, string commandColumn, Dictionary<uint, List<uint>> list)
@@ -816,9 +815,11 @@ namespace AetherXIV.Core.Map
 
             battleNpc.skillList.Clear();
             battleNpc.spellList.Clear();
+            battleNpc.mobSkillList.Clear();
 
             AttachBattleNpcActionList(battleNpc, battleNpc.skillListId, battleNpcSkillLists, battleNpc.skillList, "skill");
             AttachBattleNpcActionList(battleNpc, battleNpc.spellListId, battleNpcSpellLists, battleNpc.spellList, "spell");
+            AttachBattleNpcActionList(battleNpc, battleNpc.mobSkillListId, battleNpcMobSkillLists, battleNpc.mobSkillList, "mobSkill");
 
             DevDiagnostics.Trace(
                 "battle.npc.actionLists",
@@ -830,7 +831,9 @@ namespace AetherXIV.Core.Map
                 "skillListId", battleNpc.skillListId,
                 "skillCount", battleNpc.skillList.Count,
                 "spellListId", battleNpc.spellListId,
-                "spellCount", battleNpc.spellList.Count);
+                "spellCount", battleNpc.spellList.Count,
+                "mobSkillListId", battleNpc.mobSkillListId,
+                "mobSkillCount", battleNpc.mobSkillList.Count);
         }
 
         private void AttachBattleNpcActionList(BattleNpc battleNpc, uint listId, Dictionary<uint, List<uint>> sourceList, Dictionary<uint, BattleCommand> targetList, string listType)
@@ -1038,7 +1041,7 @@ namespace AetherXIV.Core.Map
 
             mergedZone.AddActorToZone(player);
             player.zone2 = mergedZone;
-            player.zoneId2 = mergedZone.actorId;
+            player.zoneId2 = mergedZone.GetTerritoryId();
 
             DevDiagnostics.Trace(
                 "zone.seamless.merge",
@@ -1291,7 +1294,6 @@ namespace AetherXIV.Core.Map
         {
             uint currentZoneId = player.zoneId;
             string currentPrivateArea = player.privateArea ?? "";
-            uint currentPrivateAreaType = player.privateAreaType;
             Program.Log.Info("Zone change requested: player={0} fromZone={1} fromPrivateArea={2} toZone={3} toPrivateArea={4} toPrivateAreaType={5} spawnType={6} position=({7}, {8}, {9}, {10})",
                 player.customDisplayName,
                 currentZoneId,
@@ -1307,6 +1309,7 @@ namespace AetherXIV.Core.Map
             DevDiagnostics.Trace(
                 "zone.change.request",
                 "player", player.customDisplayName,
+                "fromAreaKind", player.zone == null ? "" : player.zone.GetType().Name,
                 "fromZone", currentZoneId,
                 "fromPrivateArea", currentPrivateArea,
                 "fromPrivateAreaType", player.privateAreaType,
@@ -1362,7 +1365,7 @@ namespace AetherXIV.Core.Map
             newArea.AddActorToZone(player);
 
             //Update player actor's properties
-            player.zoneId = newArea is PrivateArea ? ((PrivateArea)newArea).GetParentZone().actorId : newArea.actorId;
+            player.zoneId = newArea is PrivateArea ? ((PrivateArea)newArea).GetParentZone().GetTerritoryId() : newArea.GetTerritoryId();
 
             player.privateArea = newArea is PrivateArea ? ((PrivateArea)newArea).GetPrivateAreaName() : null;
             player.privateAreaType = newArea is PrivateArea ? ((PrivateArea)newArea).GetPrivateAreaType() : 0;
@@ -1391,30 +1394,22 @@ namespace AetherXIV.Core.Map
             if (oldZone is PrivateAreaContent oldContentArea)
                 oldContentArea.CheckDestroy();
 
-            // A private-area boundary is a room exit even when both areas
-            // share the same numeric zone. The official room-exit capture is
-            // EndEvent -> 0x00E2(0x0F) -> destination bootstrap -> actor
-            // keep-list. It does not wipe the actor table or use the 0x10
-            // in-place/content latch.
-            ZoneTransitionReloadRecipe reloadRecipe =
-                ZoneTransitionReloadPolicy.Select(
+            // Same-zone public/private and private/private changes replace
+            // resident geometry. Retail uses the content-style forced reload
+            // for that family: wipe, 0x00E2(0x10), then an immediate bundle
+            // without a trailing keep-list commit. A 0x00E2(0x02) full-map
+            // reload cannot finish when the destination map is already
+            // resident, leaving the client under the Now Loading veil.
+            ZoneTransitionRecipePolicy.ZoneTransitionRecipeDecision reloadRecipe =
+                ZoneTransitionRecipePolicy.Classify(
+                    seamlessBoundryList,
                     currentZoneId,
-                    currentPrivateArea,
-                    currentPrivateAreaType,
                     destinationZoneId,
+                    currentPrivateArea,
                     destinationPrivateArea,
-                    (uint)destinationPrivateAreaType);
-            if (reloadRecipe == ZoneTransitionReloadRecipe.PrivateAreaBoundary)
-            {
-                player.playerSession.QueuePacket(_0xE2Packet.BuildPacket(player.actorId, 0x0F));
-                ScheduleLocalZoneBootstrap(
-                    player,
-                    newArea,
-                    spawnType,
-                    reloadRecipe);
-                return;
-            }
-            else if (reloadRecipe == ZoneTransitionReloadRecipe.ResidentGeometry)
+                    player.zone == null ? (ushort)0 : player.zone.regionId,
+                    newArea.regionId);
+            if (reloadRecipe.UsesResidentGeometryRecipe)
             {
                 player.playerSession.QueuePacket(DeleteAllActorsPacket.BuildPacket(player.actorId));
                 player.playerSession.QueuePacket(_0xE2Packet.BuildPacket(player.actorId, 0x10));
@@ -1422,8 +1417,6 @@ namespace AetherXIV.Core.Map
                     this,
                     spawnType,
                     ZoneInventoryRefreshMode.RetainKnownItemDefinitions);
-                player.playerSession.ClearInstance();
-                player.SendInstanceUpdate(true);
             }
             else
             {
@@ -1433,8 +1426,6 @@ namespace AetherXIV.Core.Map
                 // a deleted player object.
                 player.playerSession.QueuePacket(_0xE2Packet.BuildPacket(player.actorId, 0x2));
                 player.SendZoneInPackets(this, spawnType);
-                player.playerSession.ClearInstance();
-                player.SendInstanceUpdate(true);
                 player.SendZoneInstanceSnapshot(this);
             }
 
@@ -1445,331 +1436,18 @@ namespace AetherXIV.Core.Map
                 "zone", player.zoneId,
                 "privateArea", player.privateArea ?? "",
                 "privateAreaType", player.privateAreaType,
-                "reloadRecipe", reloadRecipe.ToString(),
+                "areaKind", player.zone == null ? "" : player.zone.GetType().Name,
+                "reloadRecipe", reloadRecipe.RecipeName,
                 "areaActorCount", player.zone == null ? 0 : player.zone.GetActorCount(),
-                "instanceActorCount", player.playerSession.actorInstanceList.Count);
+                "instanceActorCount", player.playerSession.actorInstanceList.Count,
+                "miounnePublished", player.playerSession.actorInstanceList.Any(actor => actor is Npc npc && npc.GetActorClassId() == 1000230),
+                "vkorolonPublished", player.playerSession.actorInstanceList.Any(actor => actor is Npc npc && npc.GetActorClassId() == 1000458));
 
             //Send "You have entered an instance" if it's a Private Area
             if (newArea is PrivateArea)
                 player.SendGameMessage(GetActor(), 34108, 0x20);
 
             LuaEngine.GetInstance().CallLuaFunction(player, newArea, "onZoneIn", true);
-        }
-
-        private void ScheduleLocalZoneBootstrap(
-            Player player,
-            Area destinationArea,
-            ushort spawnType,
-            ZoneTransitionReloadRecipe reloadRecipe)
-        {
-            DateTime requestedAtUtc = DateTime.UtcNow;
-            PendingLocalZoneBootstrap pending = new PendingLocalZoneBootstrap
-            {
-                token = Interlocked.Increment(ref nextPendingBootstrapToken),
-                player = player,
-                destinationArea = destinationArea,
-                spawnType = spawnType,
-                reloadRecipe = reloadRecipe,
-                requestedAtUtc = requestedAtUtc,
-                nextActionAtUtc =
-                    ZoneTransitionBootstrapPolicy.GetBootstrapDueAt(requestedAtUtc),
-                phase = PendingBootstrapPhase.AwaitingRoomExit,
-                actors = new List<Actor>(),
-                actorIndex = 0,
-                batchNumber = 0
-            };
-
-            PendingLocalZoneBootstrap replaced = null;
-            lock (pendingBootstrapLock)
-            {
-                pendingBootstraps.TryGetValue(player.actorId, out replaced);
-                pendingBootstraps[player.actorId] = pending;
-            }
-
-            if (replaced != null)
-            {
-                DevDiagnostics.Trace(
-                    "zone.change.bootstrap.replaced",
-                    "player", player.customDisplayName,
-                    "oldToken", replaced.token,
-                    "newToken", pending.token,
-                    "oldPhase", replaced.phase.ToString());
-            }
-
-            DevDiagnostics.Trace(
-                "zone.change.bootstrap.deferred",
-                "player", player.customDisplayName,
-                "token", pending.token,
-                "zone", player.zoneId,
-                "privateArea", player.privateArea ?? "",
-                "privateAreaType", player.privateAreaType,
-                "reloadRecipe", reloadRecipe.ToString(),
-                "delayMilliseconds",
-                    ZoneTransitionBootstrapPolicy.RoomExitDelayMilliseconds,
-                "requestedAtUtc", requestedAtUtc.ToString("O"),
-                "dueAtUtc", pending.nextActionAtUtc.ToString("O"));
-        }
-
-        private void ProcessPendingLocalZoneBootstraps(DateTime nowUtc)
-        {
-            PendingLocalZoneBootstrap[] candidates;
-            lock (pendingBootstrapLock)
-            {
-                candidates = pendingBootstraps.Values
-                    .Where(pending => pending.nextActionAtUtc <= nowUtc)
-                    .ToArray();
-            }
-
-            foreach (PendingLocalZoneBootstrap pending in candidates)
-            {
-                if (!IsCurrentPendingBootstrap(pending))
-                    continue;
-
-                if (!IsPendingBootstrapValid(pending, out string invalidReason))
-                {
-                    CancelPendingBootstrap(pending, invalidReason);
-                    continue;
-                }
-
-                try
-                {
-                    if (pending.phase == PendingBootstrapPhase.AwaitingRoomExit)
-                        BeginPendingBootstrap(pending, nowUtc);
-                    else
-                        SendPendingBootstrapActorBatch(pending, nowUtc);
-                }
-                catch (Exception exception)
-                {
-                    Program.Log.Error(
-                        exception,
-                        "Deferred zone bootstrap failed: player={0} token={1} phase={2}",
-                        pending.player.customDisplayName,
-                        pending.token,
-                        pending.phase);
-                    CancelPendingBootstrap(pending, "bootstrap exception");
-                }
-            }
-        }
-
-        private bool IsCurrentPendingBootstrap(PendingLocalZoneBootstrap pending)
-        {
-            lock (pendingBootstrapLock)
-            {
-                return pending != null
-                    && pendingBootstraps.TryGetValue(
-                        pending.player.actorId,
-                        out PendingLocalZoneBootstrap current)
-                    && Object.ReferenceEquals(current, pending);
-            }
-        }
-
-        public bool IsLocalZoneBootstrapPending(Player player)
-        {
-            if (player == null)
-                return false;
-
-            lock (pendingBootstrapLock)
-                return pendingBootstraps.ContainsKey(player.actorId);
-        }
-
-        private bool IsPendingBootstrapValid(
-            PendingLocalZoneBootstrap pending,
-            out string invalidReason)
-        {
-            if (pending.player == null || pending.player.playerSession == null)
-            {
-                invalidReason = "player session missing";
-                return false;
-            }
-
-            if (pending.player.playerSession.isEnding)
-            {
-                invalidReason = "session ending";
-                return false;
-            }
-
-            if (!Object.ReferenceEquals(
-                    pending.player.zone,
-                    pending.destinationArea))
-            {
-                invalidReason = "destination area changed";
-                return false;
-            }
-
-            invalidReason = "";
-            return true;
-        }
-
-        private void BeginPendingBootstrap(
-            PendingLocalZoneBootstrap pending,
-            DateTime nowUtc)
-        {
-            Player player = pending.player;
-            player.SendZoneInPackets(this, pending.spawnType);
-            player.playerSession.ClearInstance();
-
-            List<Actor> destinationActors =
-                pending.destinationArea.GetActorsAroundActor(player, 50);
-            if (player.zone2 != null
-                && !Object.ReferenceEquals(player.zone2, pending.destinationArea))
-            {
-                destinationActors.AddRange(
-                    player.zone2.GetActorsAroundActor(player, 50));
-            }
-
-            pending.actors = destinationActors
-                .Where(actor => actor != null && actor.actorId != player.actorId)
-                .GroupBy(actor => actor.actorId)
-                .Select(group => group.First())
-                .ToList();
-            pending.actorIndex = 0;
-            pending.batchNumber = 0;
-            pending.phase = PendingBootstrapPhase.StreamingActors;
-            pending.nextActionAtUtc =
-                ZoneTransitionBootstrapPolicy.GetFirstActorBatchDueAt(nowUtc);
-
-            DevDiagnostics.Trace(
-                "zone.change.bootstrap.release",
-                "player", player.customDisplayName,
-                "token", pending.token,
-                "zone", player.zoneId,
-                "privateArea", player.privateArea ?? "",
-                "privateAreaType", player.privateAreaType,
-                "elapsedMilliseconds",
-                    (nowUtc - pending.requestedAtUtc).TotalMilliseconds,
-                "destinationActorCount", pending.actors.Count,
-                "firstActorBatchDelayMilliseconds",
-                    ZoneTransitionBootstrapPolicy.FirstActorBatchDelayMilliseconds,
-                "actorsPerBatch",
-                    ZoneTransitionBootstrapPolicy.ActorsPerBatch,
-                "actorBatchIntervalMilliseconds",
-                    ZoneTransitionBootstrapPolicy.ActorBatchIntervalMilliseconds);
-
-            FlushMapToWorldPackets();
-
-            if (pending.actors.Count == 0)
-                CompletePendingBootstrap(pending, nowUtc);
-        }
-
-        private void SendPendingBootstrapActorBatch(
-            PendingLocalZoneBootstrap pending,
-            DateTime nowUtc)
-        {
-            int startIndex = pending.actorIndex;
-            pending.actorIndex =
-                pending.player.playerSession.SendInstanceBootstrapBatch(
-                    pending.actors,
-                    pending.actorIndex,
-                    ZoneTransitionBootstrapPolicy.ActorsPerBatch,
-                    out int spawnedActors);
-            pending.batchNumber++;
-
-            DevDiagnostics.Trace(
-                "zone.change.bootstrap.actorBatch",
-                "player", pending.player.customDisplayName,
-                "token", pending.token,
-                "batch", pending.batchNumber,
-                "startIndex", startIndex,
-                "nextIndex", pending.actorIndex,
-                "spawnedActors", spawnedActors,
-                "totalActors", pending.actors.Count,
-                "elapsedMilliseconds",
-                    (nowUtc - pending.requestedAtUtc).TotalMilliseconds);
-
-            FlushMapToWorldPackets();
-
-            if (pending.actorIndex >= pending.actors.Count)
-            {
-                CompletePendingBootstrap(pending, nowUtc);
-                return;
-            }
-
-            pending.nextActionAtUtc =
-                ZoneTransitionBootstrapPolicy.GetNextActorBatchDueAt(nowUtc);
-        }
-
-        private void CompletePendingBootstrap(
-            PendingLocalZoneBootstrap pending,
-            DateTime nowUtc)
-        {
-            Player player = pending.player;
-            player.SendZoneInstanceSnapshot(this);
-            player.playerSession.LockUpdates(false);
-
-            lock (pendingBootstrapLock)
-            {
-                if (pendingBootstraps.TryGetValue(
-                        player.actorId,
-                        out PendingLocalZoneBootstrap current)
-                    && Object.ReferenceEquals(current, pending))
-                {
-                    pendingBootstraps.Remove(player.actorId);
-                }
-            }
-
-            DevDiagnostics.Trace(
-                "zone.change.local.end",
-                "player", player.customDisplayName,
-                "token", pending.token,
-                "zone", player.zoneId,
-                "privateArea", player.privateArea ?? "",
-                "privateAreaType", player.privateAreaType,
-                "reloadRecipe", pending.reloadRecipe.ToString(),
-                "areaActorCount", player.zone == null
-                    ? 0
-                    : player.zone.GetActorCount(),
-                "instanceActorCount",
-                    player.playerSession.actorInstanceList.Count,
-                "actorBatches", pending.batchNumber,
-                "elapsedMilliseconds",
-                    (nowUtc - pending.requestedAtUtc).TotalMilliseconds);
-
-            if (pending.destinationArea is PrivateArea)
-                player.SendGameMessage(GetActor(), 34108, 0x20);
-
-            LuaEngine.GetInstance().CallLuaFunction(
-                player,
-                pending.destinationArea,
-                "onZoneIn",
-                true);
-            FlushMapToWorldPackets();
-        }
-
-        private void CancelPendingBootstrap(
-            PendingLocalZoneBootstrap pending,
-            string reason)
-        {
-            bool removed = false;
-            lock (pendingBootstrapLock)
-            {
-                if (pending != null
-                    && pending.player != null
-                    && pendingBootstraps.TryGetValue(
-                        pending.player.actorId,
-                        out PendingLocalZoneBootstrap current)
-                    && Object.ReferenceEquals(current, pending))
-                {
-                    pendingBootstraps.Remove(pending.player.actorId);
-                    removed = true;
-                }
-            }
-
-            if (!removed)
-                return;
-
-            DevDiagnostics.Trace(
-                "zone.change.bootstrap.cancelled",
-                "player", pending.player.customDisplayName,
-                "token", pending.token,
-                "phase", pending.phase.ToString(),
-                "reason", reason);
-        }
-
-        private static void FlushMapToWorldPackets()
-        {
-            ZoneConnection connection = Server.GetWorldConnection();
-            if (connection != null)
-                connection.FlushQueuedSendPackets();
         }
 
         //Moves actor within zone to spawn position
@@ -1832,6 +1510,71 @@ namespace AetherXIV.Core.Map
             }            
         }
 
+        // Lua-facing quest warp contract. These entry points intentionally
+        // delegate to the existing zone and movement transactions so there is
+        // only one authority for actor removal, placement, and packet order.
+        public void WarpToPrivateArea(Player player, string name, int type)
+        {
+            WarpToPrivateArea(
+                player,
+                name,
+                type,
+                player.positionX,
+                player.positionY,
+                player.positionZ,
+                player.rotation);
+        }
+
+        public void WarpToPrivateArea(
+            Player player,
+            string name,
+            int type,
+            float x,
+            float y,
+            float z,
+            float rotation)
+        {
+            DoZoneChange(player, player.CurrentArea.ZoneId, name, type, 15, x, y, z, rotation);
+        }
+
+        public void WarpToPublicArea(Player player)
+        {
+            WarpToPublicArea(
+                player,
+                player.positionX,
+                player.positionY,
+                player.positionZ,
+                player.rotation);
+        }
+
+        public void WarpToPublicArea(
+            Player player,
+            float x,
+            float y,
+            float z,
+            float rotation)
+        {
+            if (player.CurrentArea.IsPrivate())
+                DoZoneChange(player, player.CurrentArea.ZoneId, null, 0, 15, x, y, z, rotation);
+        }
+
+        public void WarpToPosition(
+            Player player,
+            float x,
+            float y,
+            float z,
+            float rotation,
+            bool debugInstant = false)
+        {
+            DoPlayerMoveInZone(
+                player,
+                x,
+                y,
+                z,
+                rotation,
+                debugInstant ? (byte)0 : (byte)0xF);
+        }
+
         //Moves actor to new zone, and sends packets to spawn at the given coords.
         public void DoZoneChangeContent(Player player, PrivateAreaContent contentArea, float spawnX, float spawnY, float spawnZ, float spawnRotation, ushort spawnType = SetActorPositionPacket.SPAWNTYPE_WARP_DUTY)
         {
@@ -1878,7 +1621,7 @@ namespace AetherXIV.Core.Map
             contentArea.AddActorToZone(player);
 
             //Update player actor's properties
-            player.zoneId = contentArea.GetParentZone().actorId;
+            player.zoneId = contentArea.GetParentZone().GetTerritoryId();
 
             player.privateArea = contentArea.GetPrivateAreaName();
             player.privateAreaType = contentArea.GetPrivateAreaType();
@@ -1892,6 +1635,11 @@ namespace AetherXIV.Core.Map
             //Send "You have entered an instance" if it's a Private Area
             player.SendGameMessage(GetActor(), 34108, 0x20);
 
+            // Publish the content-group/director state before the client-side
+            // actor wipe. The destination bundle must not be the first place
+            // the client learns about the content roster.
+            player.EmitContentWarpPreWarpSequence(contentArea.GetContentDirector());
+
             //Send packets
             player.playerSession.QueuePacket(DeleteAllActorsPacket.BuildPacket(player.actorId));
             player.playerSession.QueuePacket(_0xE2Packet.BuildPacket(player.actorId, 0x10));
@@ -1899,8 +1647,6 @@ namespace AetherXIV.Core.Map
                 this,
                 spawnType,
                 ZoneInventoryRefreshMode.RetainKnownItemDefinitions);
-            player.playerSession.ClearInstance();
-            player.SendInstanceUpdate(true);
 
             player.playerSession.LockUpdates(false);
             DevDiagnostics.Trace(
@@ -2003,10 +1749,18 @@ namespace AetherXIV.Core.Map
             player.SendZoneInPackets(this, spawnType);
             Database.SavePlayerPosition(player);
 
-            player.playerSession.ClearInstance();
-            player.SendInstanceUpdate(true);
             if (!isLogin)
                 player.SendZoneInstanceSnapshot(this);
+
+            // Initial login is not an actor-replacement warp. The opening
+            // director already rode the complete zone-in bundle, so publish
+            // its parked notice at this boundary. Waiting for 0x0007(-1)
+            // here deadlocks the client under Now Loading: it cannot finish
+            // the opening lifecycle that produces that acknowledgement until
+            // the notice has started. Ordinary/content warps remain owned by
+            // the readiness-ack path in PacketProcessor.
+            if (isLogin)
+                player.ReleaseDeferredContentKickEvent();
 
             player.playerSession.LockUpdates(false);
             DevDiagnostics.Trace(
@@ -2112,7 +1866,6 @@ namespace AetherXIV.Core.Map
                 return false;
 
             Director director = contentArea.GetContentDirector();
-            director.StartDirector(false);
             player.SetLoginDirector(director);
             player.DeferContentKickEvent(director, "noticeEvent", true);
             restoredArea = contentArea;
@@ -2149,11 +1902,10 @@ namespace AetherXIV.Core.Map
                         initialMembers[i] = actors[i].actorId;
                 }
 
-                groupIndexId = groupIndexId | 0x3000000000000000;
+                ulong groupId = groupIdAllocator.AllocateContent();
 
-                ContentGroup contentGroup = new ContentGroup(groupIndexId, director, initialMembers);
-                mContentGroups.Add(groupIndexId, contentGroup);
-                groupIndexId++;
+                ContentGroup contentGroup = new ContentGroup(groupId, director, initialMembers);
+                mContentGroups.Add(groupId, contentGroup);
                 if (initialMembers != null && initialMembers.Length != 0)
                     contentGroup.SendAll();
 
@@ -2177,11 +1929,10 @@ namespace AetherXIV.Core.Map
                         initialMembers[i] = actors[i].actorId;
                 }
 
-                groupIndexId = groupIndexId | 0x3000000000000000;
+                ulong groupId = groupIdAllocator.AllocateContent();
 
-                ContentGroup contentGroup = new ContentGroup(groupIndexId, director, initialMembers);
-                mContentGroups.Add(groupIndexId, contentGroup);
-                groupIndexId++;
+                ContentGroup contentGroup = new ContentGroup(groupId, director, initialMembers);
+                mContentGroups.Add(groupId, contentGroup);
                 if (initialMembers != null && initialMembers.Length != 0)
                     contentGroup.SendAll();
 
@@ -2205,11 +1956,10 @@ namespace AetherXIV.Core.Map
                         initialMembers[i] = actors[i].actorId;
                 }
 
-                groupIndexId = groupIndexId | 0x2000000000000000;
+                ulong groupId = groupIdAllocator.AllocateGuildleveContent();
 
-                GLContentGroup contentGroup = new GLContentGroup(groupIndexId, director, initialMembers);
-                mContentGroups.Add(groupIndexId, contentGroup);
-                groupIndexId++;
+                GLContentGroup contentGroup = new GLContentGroup(groupId, director, initialMembers);
+                mContentGroups.Add(groupId, contentGroup);
                 if (initialMembers != null && initialMembers.Length != 0)
                     contentGroup.SendAll();
 
@@ -2233,11 +1983,10 @@ namespace AetherXIV.Core.Map
         {
             lock (groupLock)
             {                
-                groupIndexId = groupIndexId | 0x0000000000000000;
+                ulong groupId = groupIdAllocator.AllocateRelation();
 
-                RelationGroup group = new RelationGroup(groupIndexId, inviter.actorId, invitee.actorId, 0, groupType);
-                mRelationGroups.Add(groupIndexId, group);
-                groupIndexId++;
+                RelationGroup group = new RelationGroup(groupId, inviter.actorId, invitee.actorId, 0, groupType);
+                mRelationGroups.Add(groupId, group);
 
                 group.SendGroupPacketsAll(inviter.actorId, invitee.actorId);
 
@@ -2289,11 +2038,10 @@ namespace AetherXIV.Core.Map
             //Create a trade group between these two players
             lock (groupLock)
             {
-                groupIndexId = groupIndexId | 0x0000000000000000;
+                ulong groupId = groupIdAllocator.AllocateRelation();
 
-                TradeGroup group = new TradeGroup(groupIndexId, inviter.actorId, invitee.actorId);
-                mTradeGroups.Add(groupIndexId, group);
-                groupIndexId++;
+                TradeGroup group = new TradeGroup(groupId, inviter.actorId, invitee.actorId);
+                mTradeGroups.Add(groupId, group);
 
                 group.SendGroupPacketsAll(inviter.actorId, invitee.actorId);
 
@@ -2783,6 +2531,61 @@ namespace AetherXIV.Core.Map
             player.QueuePacket(packet);
         }
 
+        public List<Zone> GetSeamlessPartnerZones(ushort regionId, uint zoneId)
+        {
+            List<Zone> partners = new List<Zone>();
+            if (seamlessBoundryList == null || !seamlessBoundryList.TryGetValue(regionId, out List<SeamlessBoundry> boundaries))
+                return partners;
+
+            foreach (SeamlessBoundry boundary in boundaries)
+            {
+                uint partnerId = 0;
+                if (boundary.zoneId1 == zoneId)
+                    partnerId = boundary.zoneId2;
+                else if (boundary.zoneId2 == zoneId)
+                    partnerId = boundary.zoneId1;
+
+                if (partnerId == 0 || !zoneList.TryGetValue(partnerId, out Zone partner) || partners.Contains(partner))
+                    continue;
+
+                partners.Add(partner);
+            }
+
+            return partners;
+        }
+
+        public List<Actor> GetSeamlessPartnerActorsAround(Player player, int checkDistance)
+        {
+            List<Actor> actors = new List<Actor>();
+            if (player == null || player.zone == null)
+                return actors;
+
+            foreach (Zone partner in GetSeamlessPartnerZones(
+                player.zone.regionId,
+                player.zone.GetTerritoryId()))
+            {
+                actors.AddRange(partner.GetActorsAroundPoint(
+                    player.positionX,
+                    player.positionY,
+                    checkDistance));
+            }
+
+            return actors;
+        }
+
+        public RetainerMeetingRelationGroup CreateRetainerMeetingRelationGroup(Player player, Retainer retainer)
+        {
+            if (player == null || retainer == null)
+                return null;
+
+            lock (groupLock)
+            {
+                RetainerMeetingRelationGroup group =
+                    new RetainerMeetingRelationGroup(groupIdAllocator.AllocateRelation(), player, retainer);
+                return group;
+            }
+        }
+
         private void RequestWorldServerZoneChange(Player player, uint destinationZoneId, byte spawnType, float spawnX, float spawnY, float spawnZ, float spawnRotation)
         {
             Program.Log.Info(
@@ -2869,31 +2672,12 @@ namespace AetherXIV.Core.Map
         public void StartZoneThread()
         {
             mZoneTimer = new Timer(ZoneThreadLoop, null, 0, MILIS_LOOPTIME);
-            mTransitionTimer =
-                new Timer(
-                    TransitionThreadLoop,
-                    null,
-                    TRANSITION_LOOPTIME,
-                    TRANSITION_LOOPTIME);
             Program.Log.Info("Zone Loop has started");
         }
 
         public bool StopZoneThread(int timeoutMilliseconds)
         {
-            bool transitionStopped =
-                StopTimer(ref mTransitionTimer, timeoutMilliseconds);
-            bool zoneStopped =
-                StopTimer(ref mZoneTimer, timeoutMilliseconds);
-
-            lock (pendingBootstrapLock)
-                pendingBootstraps.Clear();
-
-            return transitionStopped && zoneStopped;
-        }
-
-        private static bool StopTimer(ref Timer timerField, int timeoutMilliseconds)
-        {
-            Timer timer = Interlocked.Exchange(ref timerField, null);
+            Timer timer = Interlocked.Exchange(ref mZoneTimer, null);
             if (timer == null)
                 return true;
 
@@ -2904,21 +2688,6 @@ namespace AetherXIV.Core.Map
                     return true;
 
                 return callbacksFinished.WaitOne(timeoutMilliseconds);
-            }
-        }
-
-        private void TransitionThreadLoop(Object state)
-        {
-            try
-            {
-                lock (zoneList)
-                    ProcessPendingLocalZoneBootstraps(DateTime.UtcNow);
-            }
-            catch (Exception exception)
-            {
-                Program.Log.Error(
-                    exception,
-                    "Deferred zone bootstrap loop failed.");
             }
         }
         
@@ -3000,6 +2769,25 @@ namespace AetherXIV.Core.Map
                     return null;
 
                 return zoneList[zoneId].GetPrivateArea(privateArea, privateAreaType);
+            }
+        }
+
+        public Area GetArea(
+            uint zoneId,
+            string privateAreaName = "",
+            int privateAreaType = 0)
+        {
+            lock (zoneList)
+            {
+                if (!zoneList.ContainsKey(zoneId))
+                    return null;
+
+                if (String.IsNullOrEmpty(privateAreaName))
+                    return zoneList[zoneId];
+
+                return zoneList[zoneId].GetPrivateArea(
+                    privateAreaName,
+                    (uint)privateAreaType);
             }
         }
 

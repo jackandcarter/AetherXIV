@@ -44,13 +44,11 @@ public sealed partial class MainWindow : Window
     private CancellationTokenSource? patchCancellation;
     private bool runtimeBusy;
     private LauncherConfig? launcherConfig;
-    private LauncherConfig? umbraDevUnitConfig;
-    private RuntimeArtifact? selectedRuntimeArtifact;
     private ManagedRuntimeInstall? managedRuntimeInstall;
+    private UmbraFrameworkChannelManifest? umbraFrameworkChannel;
     private UmbraFrameworkCatalog? umbraFrameworkCatalog;
     private UmbraFrameworkArtifact? selectedUmbraFrameworkArtifact;
     private UmbraFrameworkInstall? umbraFrameworkInstall;
-    private IReadOnlyList<RuntimeCandidate> runtimeCandidates = Array.Empty<RuntimeCandidate>();
     private string? currentSessionId;
     private string? currentSessionUsername;
     private bool launchInProgress;
@@ -59,6 +57,9 @@ public sealed partial class MainWindow : Window
     private bool isLoadingProfile;
     private bool runtimeSetupPromptShown;
     private CancellationTokenSource? umbraCancellation;
+    private UmbraPluginInstallService? umbraPluginInstallService;
+    private FileSystemWatcher? umbraDiscordPluginWatcher;
+    private bool umbraDiscordPresenceBusy;
     private readonly DispatcherTimer homeReelTimer;
     private readonly DispatcherTimer particleTimer;
     private readonly List<AmbientParticle> ambientParticles = [];
@@ -93,8 +94,6 @@ public sealed partial class MainWindow : Window
         particleTimer.Start();
         LoadSavedProfile();
         AppendLog("AetherXIV Launcher initialized.");
-        selectedRuntimeArtifact = BuiltInRuntimeCatalog.Find(platform.RuntimeIdentifier);
-        ScanRuntimeCandidates(false);
         RefreshRuntimeSetupStatus();
         RefreshInstalledUmbraFrameworkStatus();
         ValidateClientIfSelected();
@@ -107,6 +106,8 @@ public sealed partial class MainWindow : Window
             particleTimer.Stop();
             foreach (HomeReelFrame image in homeReelImages)
                 image.Bitmap.Dispose();
+            umbraDiscordPluginWatcher?.Dispose();
+            umbraDiscordPluginWatcher = null;
             SaveCurrentProfile();
         };
         _ = InitializeAsync();
@@ -503,35 +504,25 @@ public sealed partial class MainWindow : Window
             if (platform.RequiresCompatibilityRuntime)
             {
                 SetFfxivSettingsProgress("Checking Wine runtime...", 30);
-                ManagedRuntimeStatus.Text = "Validating runtime before opening FFXIV settings...";
-                RuntimeValidationResult validation = await RuntimeValidator.ValidateAsync(
-                    runtimeProfile,
-                    RuntimeInstallStore.ManagedPrefixPath);
-                AppendLog($"Runtime validation: {validation.Message}");
-                AppendLog($"Runtime validation log: {validation.LogPath}");
-                if (!validation.IsReady)
+                ManagedRuntimeStatus.Text = "Checking verified runtime readiness before opening FFXIV settings...";
+                RuntimePreparationResult preparation = await RuntimePreparationService.PrepareAsync(
+                    CreateRuntimeReadinessContext(
+                        runtimeProfile,
+                        ReadUmbraSettings().Enabled ? umbraFrameworkInstall : null));
+                AppendRuntimePreparationLog("FFXIV settings runtime", preparation);
+                if (!preparation.IsReady)
                 {
                     SetFfxivSettingsProgress("FFXIV settings blocked: Wine runtime is not ready.", 0);
-                    ManagedRuntimeStatus.Text = validation.Message;
+                    ManagedRuntimeStatus.Text = preparation.Message;
                     AppendLog("FFXIV settings blocked: runtime validation failed.");
                     return;
                 }
 
-                SetFfxivSettingsProgress("Preparing Wine prefix...", 55);
-                WineRuntimeConfigurationResult configuration = await WineRuntimeConfigurator.ConfigureAsync(
-                    runtimeProfile,
-                    RuntimeInstallStore.ManagedPrefixPath,
-                    new WineRuntimeConfigurationSettings(platform.OperatingSystem));
-                AppendLog($"Runtime config: {configuration.Message}");
-                AppendLog($"Runtime config target: {configuration.RuntimeTarget}");
-                AppendLog($"Runtime config log: {configuration.LogPath}");
-                if (!configuration.IsReady)
-                {
-                    SetFfxivSettingsProgress("FFXIV settings blocked: Wine setup failed.", 0);
-                    ManagedRuntimeStatus.Text = configuration.Message;
-                    AppendLog("FFXIV settings blocked: runtime setup failed.");
-                    return;
-                }
+                SetFfxivSettingsProgress(
+                    preparation.ValidationWasCached && preparation.ConfigurationWasCached
+                        ? "Using verified Wine setup..."
+                        : "Wine runtime prepared...",
+                    55);
 
                 SetFfxivSettingsProgress("Locating FFXIV config files...", 75);
                 if (!FfxivClientSettingsStore.TryResolveWineTarget(
@@ -590,6 +581,104 @@ public sealed partial class MainWindow : Window
     {
         MainTabs.SelectedIndex = 2;
         await SelectClientExecutableAsync();
+    }
+
+    private async void InstallGameClient_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (runtimeBusy)
+            return;
+
+        if (!StorageProvider.CanOpen)
+        {
+            ClientInstallerStatus.Text = "Installer selection is not available on this platform.";
+            AppendLog(ClientInstallerStatus.Text);
+            return;
+        }
+
+        FilePickerFileType installerType = new("Official FFXIV 1.x installer")
+        {
+            Patterns = new[] { FfxivInstallerMedia.BootstrapFileName, "*.exe" },
+            AppleUniformTypeIdentifiers = new[] { "public.executable", "com.microsoft.windows-executable", "public.item" }
+        };
+
+        IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Select the top-level ffxivsetup.exe",
+            AllowMultiple = false,
+            SuggestedFileType = installerType,
+            FileTypeFilter = new[] { installerType, FilePickerFileTypes.All }
+        });
+
+        if (files.Count == 0)
+        {
+            ClientInstallerStatus.Text = "Installer selection cancelled.";
+            AppendLog(ClientInstallerStatus.Text);
+            return;
+        }
+
+        string? selectedPath = files[0].TryGetLocalPath();
+        if (string.IsNullOrWhiteSpace(selectedPath))
+        {
+            ClientInstallerStatus.Text = "Installer selection failed: a local file path is required.";
+            AppendLog(ClientInstallerStatus.Text);
+            return;
+        }
+
+        FfxivInstallerMediaReport media = FfxivInstallerMedia.Validate(selectedPath);
+        if (!media.IsValid)
+        {
+            ClientInstallerStatus.Text = media.DisplayText;
+            AppendLog("FFXIV installer media validation failed.");
+            foreach (string error in media.Errors)
+                AppendLog($"Installer media: {error}");
+            return;
+        }
+
+        SetRuntimeBusy(true);
+        try
+        {
+            WineRuntimeProfile runtimeProfile = ReadRuntimeProfile();
+            if (platform.RequiresCompatibilityRuntime)
+            {
+                ClientInstallerStatus.Text = "Checking the bundled AetherXIV runtime...";
+                ManagedRuntimeStatus.Text = "Checking verified runtime readiness for the FFXIV installer...";
+                RuntimePreparationResult preparation = await RuntimePreparationService.PrepareAsync(
+                    CreateRuntimeReadinessContext(
+                        runtimeProfile,
+                        ReadUmbraSettings().Enabled ? umbraFrameworkInstall : null));
+                AppendRuntimePreparationLog("Installer runtime", preparation);
+                if (!preparation.IsReady)
+                {
+                    ClientInstallerStatus.Text = $"Installer blocked: {preparation.Message}";
+                    ManagedRuntimeStatus.Text = preparation.Message;
+                    return;
+                }
+
+                ClientInstallerStatus.Text = preparation.ValidationWasCached && preparation.ConfigurationWasCached
+                    ? "Using verified managed Wine setup..."
+                    : "Managed Wine setup is ready...";
+            }
+
+            ProcessStartInfo startInfo = FfxivInstallerLauncher.CreateStartInfo(media, runtimeProfile);
+            string logPath = RuntimeLaunchDiagnostics.CreateLogPath("client-installer");
+            RuntimeLaunchResult result = RuntimeLaunchDiagnostics.StartWithLogging(startInfo, logPath);
+            ClientInstallerStatus.Text = platform.RequiresCompatibilityRuntime
+                ? "Installer opened through the bundled AetherXIV runtime. Complete or cancel the Square Enix wizard."
+                : "Installer opened. Complete or cancel the Square Enix wizard.";
+            AppendLog($"FFXIV installer started: pid {result.ProcessId}");
+            AppendLog($"FFXIV installer media: {media.MediaRoot}");
+            AppendLog($"FFXIV installer log: {result.LogPath}");
+        }
+        catch (Exception ex)
+        {
+            ClientInstallerStatus.Text = $"Installer launch failed: {ex.Message}";
+            AppendLog(ClientInstallerStatus.Text);
+        }
+        finally
+        {
+            SetRuntimeBusy(false);
+            UpdateRuntimeUiState();
+        }
     }
 
     private async void BrowseClient_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -1077,105 +1166,6 @@ public sealed partial class MainWindow : Window
         LaunchLogBox.Text = "";
     }
 
-    private void ScanRuntime_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        ScanRuntimeCandidates(true);
-    }
-
-    private async void InstallRuntime_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        if (runtimeBusy)
-            return;
-
-        if (!platform.RequiresCompatibilityRuntime)
-        {
-            ManagedRuntimeStatus.Text = "Windows builds launch the client directly.";
-            return;
-        }
-
-        selectedRuntimeArtifact ??= BuiltInRuntimeCatalog.Find(platform.RuntimeIdentifier);
-        if (selectedRuntimeArtifact is null)
-        {
-            OpenRuntimeSetupGuidance();
-            return;
-        }
-
-        SetRuntimeBusy(true);
-        RuntimeProgressBar.IsIndeterminate = false;
-        RuntimeProgressBar.Value = 0;
-
-        try
-        {
-            Progress<RuntimeDownloadProgress> progress = new(update =>
-            {
-                ManagedRuntimeStatus.Text = update.Message;
-                if (update.TotalBytes > 0)
-                {
-                    double percent = (double)update.BytesDownloaded / update.TotalBytes * 100;
-                    RuntimeProgressBar.Value = Math.Clamp(percent, 0, 100);
-                }
-
-                if (update.LogMessage)
-                    AppendLog(update.Message);
-            });
-
-            RuntimeDownloadResult installResult = await RuntimeDownloadService.DownloadAndInstallAsync(
-                selectedRuntimeArtifact,
-                httpClient,
-                progress);
-            managedRuntimeInstall = installResult.Install;
-            foreach (string message in installResult.Messages)
-                AppendLog(message);
-
-            ManagedRuntimeStatus.Text = RuntimePrerequisiteStatusText("Runtime installed");
-            AppendLog(ManagedRuntimeStatus.Text);
-            RuntimeProgressBar.IsIndeterminate = true;
-            RuntimeValidationResult validation = await RuntimeValidator.ValidateAsync(
-                managedRuntimeInstall,
-                RuntimeInstallStore.ManagedPrefixPath);
-            RuntimeProgressBar.IsIndeterminate = false;
-            RuntimeProgressBar.Value = validation.IsReady ? 100 : 0;
-            ManagedRuntimeStatus.Text = validation.IsReady
-                ? $"Ready: {validation.VersionText}. {validation.Message}"
-                : $"Installed, but validation failed: {validation.Message}";
-            AppendLog($"Managed runtime validation: {validation.Message}");
-            AppendLog($"Managed runtime validation log: {validation.LogPath}");
-            SaveCurrentProfile();
-        }
-        catch (Exception ex)
-        {
-            RuntimeProgressBar.IsIndeterminate = false;
-            ManagedRuntimeStatus.Text = $"Runtime installation failed: {ex.Message}";
-            AppendLog($"Runtime installation failed: {ex.Message}");
-        }
-        finally
-        {
-            SetRuntimeBusy(false);
-            UpdateRuntimeUiState();
-        }
-    }
-
-    private void OpenRuntimeSetupGuidance()
-    {
-        RuntimeSetupGuidance guidance = RuntimeSetupGuidance.ForCurrentPlatform();
-        RuntimeCatalogStatus.Text = guidance.Summary;
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = guidance.GuideUri.AbsoluteUri,
-                UseShellExecute = true
-            });
-            ManagedRuntimeStatus.Text = "Finish Wine setup, then select Scan Runtimes and Validate Runtime.";
-            AppendLog($"Opened platform Wine setup guidance: {guidance.GuideUri}");
-        }
-        catch (Exception ex)
-        {
-            ManagedRuntimeStatus.Text = "Could not open the Wine setup guide.";
-            AppendLog($"Wine setup guide failed to open: {ex.Message}");
-        }
-    }
-
     private async void ValidateRuntime_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (!platform.RequiresCompatibilityRuntime)
@@ -1192,15 +1182,18 @@ public sealed partial class MainWindow : Window
             WineRuntimeProfile runtimeProfile = ReadRuntimeProfile();
             ManagedRuntimeStatus.Text = RuntimePrerequisiteStatusText("Validating runtime");
             AppendLog(ManagedRuntimeStatus.Text);
-            RuntimeValidationResult result = await RuntimeValidator.ValidateAsync(
-                runtimeProfile,
-                RuntimeInstallStore.ManagedPrefixPath);
+            UmbraFrameworkInstall? validationUmbra = ReadUmbraSettings().Enabled
+                ? umbraFrameworkInstall
+                : null;
+            RuntimePreparationResult preparation = await RuntimePreparationService.PrepareAsync(
+                CreateRuntimeReadinessContext(runtimeProfile, validationUmbra),
+                forceValidation: true,
+                configure: false);
+            AppendRuntimePreparationLog("Runtime", preparation);
 
-            ManagedRuntimeStatus.Text = result.IsReady
-                ? $"Ready: {result.VersionText}. {result.Message}"
-                : result.Message;
-            AppendLog($"Runtime validation: {result.Message}");
-            AppendLog($"Runtime validation log: {result.LogPath}");
+            ManagedRuntimeStatus.Text = preparation.IsReady
+                ? $"Ready: {preparation.Validation?.VersionText}. {preparation.Message}"
+                : preparation.Message;
         }
         catch (Exception ex)
         {
@@ -1342,64 +1335,12 @@ public sealed partial class MainWindow : Window
         return await dialog.ShowDialog<bool>(this);
     }
 
-    private void SaveRuntimeSettings_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        SaveCurrentProfile();
-        ManagedRuntimeStatus.Text = "Runtime settings saved. Select Validate Runtime to test this executable and prefix.";
-        AppendLog($"Runtime settings saved: {ProfileStore.DefaultProfilePath}");
-    }
-
-    private async void BrowseRuntime_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        if (!StorageProvider.CanOpen)
-        {
-            AppendLog("Runtime executable picker is not available on this platform.");
-            return;
-        }
-
-        IReadOnlyList<IStorageFile> files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
-        {
-            Title = "Select Wine runtime executable",
-            AllowMultiple = false,
-            FileTypeFilter = new[] { FilePickerFileTypes.All }
-        });
-        string? selectedPath = files.FirstOrDefault()?.TryGetLocalPath();
-        if (String.IsNullOrWhiteSpace(selectedPath))
-            return;
-
-        RuntimeCommandBox.Text = selectedPath;
-        SaveCurrentProfile();
-        AppendLog($"Custom runtime executable selected: {selectedPath}");
-    }
-
-    private async void BrowseRuntimePrefix_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-    {
-        if (!StorageProvider.CanPickFolder)
-        {
-            AppendLog("Wine prefix folder picker is not available on this platform.");
-            return;
-        }
-
-        IReadOnlyList<IStorageFolder> folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
-        {
-            Title = "Select Wine prefix folder",
-            AllowMultiple = false
-        });
-        string? selectedPath = folders.FirstOrDefault()?.TryGetLocalPath();
-        if (String.IsNullOrWhiteSpace(selectedPath))
-            return;
-
-        RuntimeValueBox.Text = selectedPath;
-        SaveCurrentProfile();
-        AppendLog($"Custom Wine prefix selected: {selectedPath}");
-    }
-
     private void ResetPrefix_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         try
         {
             RuntimeInstallStore.ResetManagedPrefix();
-            ManagedRuntimeStatus.Text = "Runtime prefix reset. Validate the selected Wine runtime to recreate it.";
+            ManagedRuntimeStatus.Text = "Runtime prefix reset. Validate the AetherXIV runtime to recreate it.";
             AppendLog($"Runtime prefix reset: {RuntimeInstallStore.ManagedPrefixPath}");
         }
         catch (Exception ex)
@@ -1407,15 +1348,6 @@ public sealed partial class MainWindow : Window
             ManagedRuntimeStatus.Text = "Runtime prefix reset failed.";
             AppendLog($"Runtime prefix reset failed: {ex.Message}");
         }
-    }
-
-    private void RuntimeMode_SelectionChanged(object? sender, SelectionChangedEventArgs e)
-    {
-        if (!isInitialized || isLoadingProfile)
-            return;
-
-        UpdateRuntimeUiState();
-        SaveCurrentProfile();
     }
 
     private void ClientLaunchSettings_SelectionChanged(object? sender, SelectionChangedEventArgs e)
@@ -1433,6 +1365,145 @@ public sealed partial class MainWindow : Window
             return;
 
         SaveCurrentProfile();
+    }
+
+    private async void UmbraDiscordRichPresence_Toggled(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (!isInitialized || isLoadingProfile || umbraDiscordPresenceBusy)
+            return;
+
+        SaveCurrentProfile();
+        bool enabled = UmbraDiscordRichPresenceBox.IsChecked == true;
+        umbraDiscordPresenceBusy = true;
+        try
+        {
+            if (enabled)
+            {
+                AppendLog("Discord Rich Presence enabled: ensuring the supported plugin is installed...");
+                bool installed = await EnsureUmbraPluginInstallService().EnsureInstalledAsync(
+                    ReadUmbraSettings().PluginDirectory,
+                    UmbraPluginInstallService.DiscordRichPresencePluginId);
+                if (!installed)
+                {
+                    AppendLog(
+                        "Discord Rich Presence toggle failed: the plugin is not available from the Umbra service or the bundled catalog.");
+                    UmbraDiscordRichPresenceBox.IsChecked = false;
+                    return;
+                }
+
+                StartDiscordRichPresenceWatcher();
+            }
+
+            EnsureUmbraPluginInstallService().SetEnabled(
+                ReadUmbraSettings().PluginDirectory,
+                UmbraPluginInstallService.DiscordRichPresencePluginId,
+                enabled);
+            AppendLog(enabled
+                ? "Discord Rich Presence enabled. It also appears as an installed plugin in the in-game Umbra Plugin Library."
+                : "Discord Rich Presence disabled.");
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"Discord Rich Presence toggle failed: {ex.Message}");
+            RefreshDiscordRichPresenceToggle();
+        }
+        finally
+        {
+            umbraDiscordPresenceBusy = false;
+        }
+    }
+
+    private UmbraPluginInstallService EnsureUmbraPluginInstallService()
+    {
+        return umbraPluginInstallService ??= new UmbraPluginInstallService(httpClient);
+    }
+
+    private void RefreshDiscordRichPresenceToggle()
+    {
+        try
+        {
+            UmbraSettings settings = ReadUmbraSettings();
+            bool? enabled = EnsureUmbraPluginInstallService().ReadEnabled(
+                settings.PluginDirectory,
+                UmbraPluginInstallService.DiscordRichPresencePluginId);
+            if (enabled is null)
+                return; // Not installed yet; keep the launcher setting as-is.
+
+            UmbraDiscordRichPresenceBox.IsChecked = enabled.Value;
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"Discord Rich Presence state refresh failed: {ex.Message}");
+        }
+    }
+
+    private void StartDiscordRichPresenceWatcher()
+    {
+        try
+        {
+            umbraDiscordPluginWatcher?.Dispose();
+            umbraDiscordPluginWatcher = null;
+
+            UmbraSettings settings = ReadUmbraSettings();
+            string manifestPath = UmbraPluginInstallService.ManifestPathFor(
+                settings.PluginDirectory,
+                UmbraPluginInstallService.DiscordRichPresencePluginId);
+            string? directory = Path.GetDirectoryName(manifestPath);
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+                return;
+
+            FileSystemWatcher watcher = new(directory)
+            {
+                Filter = Path.GetFileName(manifestPath),
+                NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size
+            };
+            watcher.Changed += (_, _) => Dispatcher.UIThread.Post(() =>
+            {
+                if (!isInitialized || isLoadingProfile || umbraDiscordPresenceBusy)
+                    return;
+
+                RefreshDiscordRichPresenceToggle();
+            });
+            watcher.EnableRaisingEvents = true;
+            umbraDiscordPluginWatcher = watcher;
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"Discord Rich Presence manifest watch failed: {ex.Message}");
+        }
+    }
+
+    private async Task EnsureDiscordRichPresenceForLaunchAsync()
+    {
+        try
+        {
+            UmbraSettings settings = ReadUmbraSettings();
+            UmbraPluginInstallService service = EnsureUmbraPluginInstallService();
+            if (service.IsInstalled(settings.PluginDirectory, UmbraPluginInstallService.DiscordRichPresencePluginId))
+                return;
+
+            AppendLog("Ensuring the Discord Rich Presence plugin is installed...");
+            bool installed = await service.EnsureInstalledAsync(
+                settings.PluginDirectory,
+                UmbraPluginInstallService.DiscordRichPresencePluginId);
+            if (!installed)
+            {
+                AppendLog(
+                    "Discord Rich Presence is enabled but the plugin is not available from the Umbra service or the bundled catalog.");
+                return;
+            }
+
+            service.SetEnabled(
+                settings.PluginDirectory,
+                UmbraPluginInstallService.DiscordRichPresencePluginId,
+                true);
+            StartDiscordRichPresenceWatcher();
+            RefreshDiscordRichPresenceToggle();
+        }
+        catch (Exception ex)
+        {
+            AppendLog($"Discord Rich Presence plugin install failed: {ex.Message}");
+        }
     }
 
     private async void InstallUmbra_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -1490,29 +1561,10 @@ public sealed partial class MainWindow : Window
             ServerXmlWriter.Write(RuntimeInstallStore.ServerProfilePath, new[] { serverProfile });
             SetLaunchInProgress("Signing in...", "Signing in...");
             string sessionId = await EnsureSessionAsync();
-
-            if (platform.RequiresCompatibilityRuntime)
-            {
-                SetLaunchInProgress("Checking runtime...", "Checking Wine runtime...");
-                ManagedRuntimeStatus.Text = "Validating runtime before launch...";
-                RuntimeValidationResult validation = await RuntimeValidator.ValidateAsync(
-                    runtimeProfile,
-                    RuntimeInstallStore.ManagedPrefixPath);
-                AppendLog($"Runtime validation: {validation.Message}");
-                AppendLog($"Runtime validation log: {validation.LogPath}");
-
-                if (!validation.IsReady)
-                {
-                    ManagedRuntimeStatus.Text = validation.Message;
-                    AppendLog("Launch blocked: runtime validation failed.");
-                    HomeLoginStatus.Text = "Runtime validation failed.";
-                    return;
-                }
-            }
-
-            SetLaunchInProgress("Launching game...", "Launching game...");
+            if (ReadUmbraSettings().DiscordRichPresenceEnabled)
+                await EnsureDiscordRichPresenceForLaunchAsync();
+            UmbraLaunchOptions umbraLaunchOptions = ResolveUmbraLaunchOptionsForLaunch(clientInstall);
             ClientLaunchHelperMode helperMode = ReadLaunchHelperMode();
-            UmbraLaunchOptions umbraLaunchOptions = await ResolveUmbraLaunchOptionsForLaunchAsync(clientInstall);
             ClientLaunchHelperMode effectiveHelperMode = ClientLaunchHelperLocator.ResolveEffectiveMode(
                 helperMode,
                 platform.RequiresCompatibilityRuntime);
@@ -1524,28 +1576,43 @@ public sealed partial class MainWindow : Window
                 helperMode = effectiveHelperMode;
             }
 
+            string helperPath = ClientLaunchHelperLocator.FindLaunchHelperRequired(helperMode);
             if (platform.RequiresCompatibilityRuntime)
             {
-                SetLaunchInProgress("Configuring Wine...", "Configuring Wine runtime...");
-                WineRuntimeConfigurationResult configuration = await WineRuntimeConfigurator.ConfigureAsync(
+                RuntimeReadinessContext readinessContext = CreateRuntimeReadinessContext(
                     runtimeProfile,
-                    RuntimeInstallStore.ManagedPrefixPath,
-                    new WineRuntimeConfigurationSettings(platform.OperatingSystem));
-                AppendLog($"Runtime config: {configuration.Message}");
-                AppendLog($"Runtime config target: {configuration.RuntimeTarget}");
-                AppendLog($"Runtime config log: {configuration.LogPath}");
+                    umbraLaunchOptions.Enabled ? umbraFrameworkInstall : null,
+                    helperPath);
+                RuntimeReadinessAssessment initialAssessment = RuntimeReadinessStore.Assess(readinessContext);
+                SetLaunchInProgress(
+                    initialAssessment.ValidationIsCurrent && initialAssessment.ConfigurationIsCurrent
+                        ? "Runtime ready..."
+                        : "Preparing runtime...",
+                    initialAssessment.ValidationIsCurrent && initialAssessment.ConfigurationIsCurrent
+                        ? "Using verified Wine runtime..."
+                        : "Validating and preparing Wine runtime...");
+                ManagedRuntimeStatus.Text = initialAssessment.ValidationIsCurrent
+                    ? "Using the verified runtime readiness receipt."
+                    : RuntimePrerequisiteStatusText("Validating runtime before launch");
 
-                if (!configuration.IsReady)
+                RuntimePreparationResult preparation = await RuntimePreparationService.PrepareAsync(
+                    readinessContext);
+                AppendRuntimePreparationLog("Launch runtime", preparation);
+                if (!preparation.IsReady)
                 {
-                    ManagedRuntimeStatus.Text = configuration.Message;
-                    AppendLog("Launch blocked: runtime setup failed.");
-                    HomeLoginStatus.Text = "Runtime setup failed.";
+                    ManagedRuntimeStatus.Text = preparation.Message;
+                    AppendLog("Launch blocked: runtime preparation failed.");
+                    HomeLoginStatus.Text = "Runtime preparation failed.";
                     return;
                 }
+
+                ManagedRuntimeStatus.Text = preparation.ValidationWasCached
+                    && preparation.ConfigurationWasCached
+                        ? "Runtime ready from verified receipt."
+                        : "Runtime fully validated and prepared.";
             }
 
             SetLaunchInProgress("Launching game...", "Launching game...");
-            string helperPath = ClientLaunchHelperLocator.FindLaunchHelperRequired(helperMode);
             LaunchPlan plan = LaunchPlan.CreateWithHelper(
                 clientInstall,
                 serverProfile,
@@ -1820,6 +1887,11 @@ public sealed partial class MainWindow : Window
                         ? $"{errorType}: "
                         : "";
                     AppendLog($"Launch helper error: {helperErrorType}{helperErrorMessage}");
+                    if (platform.RequiresCompatibilityRuntime)
+                    {
+                        RuntimeReadinessStore.Invalidate();
+                        AppendLog("Runtime readiness receipt invalidated after a launch-helper failure.");
+                    }
                     HomeLoginStatus.Text = $"Launch helper error: {helperErrorMessage}";
                     HomeProgressBar.Value = 0;
                     return;
@@ -1841,7 +1913,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task<UmbraLaunchOptions> ResolveUmbraLaunchOptionsForLaunchAsync(ClientInstall clientInstall)
+    private UmbraLaunchOptions ResolveUmbraLaunchOptionsForLaunch(ClientInstall clientInstall)
     {
         UmbraSettings settings = ReadUmbraSettings();
         if (!settings.Enabled)
@@ -1863,7 +1935,7 @@ public sealed partial class MainWindow : Window
         Directory.CreateDirectory(settings.PluginDirectory);
         Directory.CreateDirectory(UmbraInstallStore.LogsRoot);
 
-        UmbraFrameworkInstall? install = await EnsureUmbraFrameworkForLaunchAsync(gameSha256);
+        UmbraFrameworkInstall? install = EnsureUmbraFrameworkForLaunch(gameSha256);
         if (install is null)
         {
             AppendLog("Umbra disabled for this launch: no verified framework is installed.");
@@ -1874,15 +1946,6 @@ public sealed partial class MainWindow : Window
         AppendLog($"Umbra enabled for launch: {install.Name} {install.Version}");
         AppendLog($"Umbra log: {logPath}");
 
-        IReadOnlyList<string> officialCatalogUrls =
-            umbraDevUnitConfig?.PluginCatalogUrls is { Count: > 0 } configuredCatalogs
-                ? configuredCatalogs
-                : new[] { "umbra/plugin-catalog" };
-        IReadOnlyList<UmbraRepositorySource> repositorySources = UmbraRepositoryOptions.BuildEffectiveRepositorySources(
-            settings,
-            officialCatalogUrls,
-            LauncherProfile.DemiDevUnitLauncherServiceUrl);
-
         return new UmbraLaunchOptions(
             true,
             settings.SafeMode,
@@ -1891,18 +1954,15 @@ public sealed partial class MainWindow : Window
             install.FrameworkPath,
             settings.PluginDirectory,
             logPath,
-            repositorySources.Select(source => source.Url).ToArray(),
-            EnableManagedOnWine: platform.RequiresCompatibilityRuntime)
-        {
-            RepositorySources = repositorySources
-        };
+            EnableManagedOnWine: platform.RequiresCompatibilityRuntime,
+            SupportedRepositoryUrl: UmbraRepositoryOptions.OfficialRepositoryUrl,
+            BundledRepositoryPath: File.Exists(UmbraInstallStore.BundledRepositoryPath)
+                ? UmbraInstallStore.BundledRepositoryPath
+                : "");
     }
 
-    private async Task<UmbraFrameworkInstall?> EnsureUmbraFrameworkForLaunchAsync(string gameSha256)
+    private UmbraFrameworkInstall? EnsureUmbraFrameworkForLaunch(string gameSha256)
     {
-        using CancellationTokenSource timeout = new(TimeSpan.FromSeconds(5));
-        await RefreshUmbraFrameworkCatalogAsync(timeout.Token);
-
         if (selectedUmbraFrameworkArtifact is not null
             && selectedUmbraFrameworkArtifact.SupportsGameHash(gameSha256))
         {
@@ -1913,28 +1973,15 @@ public sealed partial class MainWindow : Window
                 RefreshInstalledUmbraFrameworkStatus();
                 return selectedInstall;
             }
-
-            UmbraFrameworkInstall? installed = await InstallSelectedUmbraFrameworkAsync();
-            if (installed is not null && installed.SupportsGameHash(gameSha256))
-                return installed;
         }
 
-        UmbraFrameworkInstall? latest = UmbraInstallStore.FindLatestInstalled();
-        if (latest is not null && latest.SupportsGameHash(gameSha256))
+        UmbraFrameworkInstall? bestAvailable = UmbraInstallStore.FindBestAvailable(gameSha256);
+        if (bestAvailable is not null)
         {
-            umbraFrameworkInstall = latest;
+            umbraFrameworkInstall = bestAvailable;
             RefreshInstalledUmbraFrameworkStatus();
-            AppendLog($"Umbra using installed framework fallback: {latest.Name} {latest.Version}");
-            return latest;
-        }
-
-        UmbraFrameworkInstall? bundled = UmbraInstallStore.FindBundled();
-        if (bundled is not null && bundled.SupportsGameHash(gameSha256))
-        {
-            umbraFrameworkInstall = bundled;
-            RefreshInstalledUmbraFrameworkStatus();
-            AppendLog($"Umbra using bundled framework fallback: {bundled.Name} {bundled.Version}");
-            return bundled;
+            AppendLog($"Umbra using {(bestAvailable.IsBundled ? "bundled" : "installed")} framework: {bestAvailable.Name} {bestAvailable.Version}");
+            return bestAvailable;
         }
 
         return null;
@@ -2039,48 +2086,54 @@ public sealed partial class MainWindow : Window
         if (platform.UsesNativeWindowsClient)
             return WineRuntimeProfile.NativeWindows();
 
-        RuntimeSelectionMode mode = ReadRuntimeMode();
-        if (mode == RuntimeSelectionMode.DetectedRuntime)
-        {
-            int index = DetectedRuntimeBox.SelectedIndex;
-            if (index >= 0 && index < runtimeCandidates.Count)
-                return ApplyGraphicsTarget(NormalizeRuntimeProfile(RuntimeProfileResolver.CandidateToProfile(runtimeCandidates[index], RuntimeInstallStore.ManagedPrefixPath)));
-        }
-
         WineRuntimeProfile profile = RuntimeProfileResolver.Resolve(
-            mode,
             managedRuntimeInstall,
-            runtimeCandidates,
-            ReadCustomRuntimeProfile(),
             RuntimeInstallStore.ManagedPrefixPath);
-        return ApplyGraphicsTarget(NormalizeRuntimeProfile(profile));
+        return ApplyGraphicsTarget(profile);
     }
 
-    private static WineRuntimeProfile NormalizeRuntimeProfile(WineRuntimeProfile profile)
+    private RuntimeReadinessContext CreateRuntimeReadinessContext(
+        WineRuntimeProfile runtimeProfile,
+        UmbraFrameworkInstall? umbraInstall,
+        string? helperPath = null)
     {
-        if (!string.IsNullOrWhiteSpace(profile.Command)
-            && !Path.IsPathFullyQualified(profile.Command))
+        if (managedRuntimeInstall is null)
         {
-            string? resolvedCommand = RuntimeDiscovery.ResolveExecutable(
-                profile.Command,
-                File.Exists,
-                RuntimeDiscovery.BuildExecutableSearchPath());
-            if (!string.IsNullOrWhiteSpace(resolvedCommand))
-                profile = profile with { Command = resolvedCommand };
+            throw new InvalidOperationException(
+                "The bundled AetherXIV compatibility runtime is unavailable.");
         }
 
-        if (profile.Kind == WineRuntimeKind.WhiskyBottle
-            && !string.IsNullOrWhiteSpace(profile.BottleName)
-            && WhiskyRuntimeEnvironment.TryCreateWineProfile(
-                profile.Command,
-                profile.BottleName,
-                out WineRuntimeProfile whiskyWineProfile,
-                out _))
+        return new RuntimeReadinessContext(
+            managedRuntimeInstall,
+            runtimeProfile,
+            RuntimeInstallStore.ManagedPrefixPath,
+            umbraInstall,
+            new WineRuntimeConfigurationSettings(platform.OperatingSystem),
+            helperPath);
+    }
+
+    private void AppendRuntimePreparationLog(
+        string label,
+        RuntimePreparationResult preparation)
+    {
+        AppendLog($"{label}: {preparation.Message}");
+        AppendLog($"{label} validation: {(preparation.ValidationWasCached ? "verified receipt" : "full validation")}");
+        if (preparation.Validation is not null)
         {
-            return whiskyWineProfile;
+            AppendLog($"{label} validation result: {preparation.Validation.Message}");
+            AppendLog($"{label} validation log: {preparation.Validation.LogPath}");
         }
 
-        return profile;
+        if (preparation.Configuration is not null)
+        {
+            AppendLog($"{label} config: {preparation.Configuration.Message}");
+            AppendLog($"{label} config target: {preparation.Configuration.RuntimeTarget}");
+            AppendLog($"{label} config log: {preparation.Configuration.LogPath}");
+        }
+        else if (preparation.IsReady && preparation.ConfigurationWasCached)
+        {
+            AppendLog($"{label} config: verified receipt");
+        }
     }
 
     private WineRuntimeProfile ApplyGraphicsTarget(WineRuntimeProfile profile)
@@ -2091,32 +2144,11 @@ public sealed partial class MainWindow : Window
         return profile.WithGraphicsTarget(ReadGraphicsTarget());
     }
 
-    private WineRuntimeProfile ReadCustomRuntimeProfile()
-    {
-        string name = RuntimeNameBox.Text ?? "Local Wine Runtime";
-        string command = RuntimeCommandBox.Text ?? "wine";
-        string value = RuntimeValueBox.Text ?? "";
-
-        return CustomRuntimeKindBox.SelectedIndex switch
-        {
-            0 => WineRuntimeProfile.WinePrefix(
-                name,
-                string.IsNullOrWhiteSpace(value) ? RuntimeInstallStore.ManagedPrefixPath : value,
-                command),
-            _ => WineRuntimeProfile.Custom(name, command)
-        };
-    }
-
     private RuntimeSelectionMode ReadRuntimeMode()
     {
-        if (platform.UsesNativeWindowsClient)
-            return RuntimeSelectionMode.CustomRuntime;
-
-        return RuntimeModeBox.SelectedIndex switch
-        {
-            1 => RuntimeSelectionMode.CustomRuntime,
-            _ => RuntimeSelectionMode.AutomaticManaged
-        };
+        return platform.UsesNativeWindowsClient
+            ? RuntimeSelectionMode.CustomRuntime
+            : RuntimeSelectionMode.AutomaticManaged;
     }
 
     private void ValidatePatchLibrary()
@@ -2193,17 +2225,25 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshUmbraFrameworkCatalogAsync(CancellationToken cancellationToken = default)
     {
+        if (!LauncherProfile.DemiDevUnitUmbraServicesEnabled)
+        {
+            AppendLog("Umbra online updates are not enabled; the bundled base framework remains available.");
+            RefreshInstalledUmbraFrameworkStatus();
+            UpdateUmbraUiState();
+            return;
+        }
+
         try
         {
             AppendLog("Umbra framework package check started against Demi Dev Unit.");
-            LauncherApiClient client = new(
-                httpClient,
-                LauncherProfile.DemiDevUnitLauncherServiceUrl);
-            umbraDevUnitConfig = await client.GetConfigAsync(cancellationToken);
-            umbraFrameworkCatalog = await client.GetUmbraFrameworkCatalogAsync(
-                "win-x86",
-                umbraDevUnitConfig?.ClientPluginFrameworkCatalogUrl,
+            UmbraOfficialUpdateClient client = new(httpClient);
+            umbraFrameworkChannel = await client.GetFrameworkChannelAsync(
+                UmbraFrameworkChannelManifest.StableChannel,
                 cancellationToken);
+            long highestInstalledSequence = UmbraInstallStore.GetHighestInstalledChannelSequence();
+            if (umbraFrameworkChannel.Sequence < highestInstalledSequence)
+                throw new InvalidDataException("Umbra framework channel attempted to roll back to older metadata.");
+            umbraFrameworkCatalog = umbraFrameworkChannel.ValidateAndCreateCatalog();
             selectedUmbraFrameworkArtifact = umbraFrameworkCatalog?.SelectDefault();
 
             if (selectedUmbraFrameworkArtifact is null)
@@ -2257,7 +2297,9 @@ public sealed partial class MainWindow : Window
                 selectedUmbraFrameworkArtifact,
                 httpClient,
                 progress,
-                umbraCancellation.Token);
+                umbraCancellation.Token,
+                channelSequence: umbraFrameworkChannel?.Sequence ?? 0,
+                signingKeyId: UmbraOfficialTrust.StableSigningKeyId);
 
             umbraFrameworkInstall = result.Install;
             foreach (string message in result.Messages)
@@ -2287,23 +2329,21 @@ public sealed partial class MainWindow : Window
     {
         if (runtimeSetupPromptShown
             || !platform.RequiresCompatibilityRuntime
-            || ReadRuntimeMode() != RuntimeSelectionMode.AutomaticManaged
-            || managedRuntimeInstall is not null
-            || runtimeCandidates.Count > 0)
+            || managedRuntimeInstall is not null)
         {
             return;
         }
 
         runtimeSetupPromptShown = true;
 
-        Button installButton = new()
+        Button runtimeButton = new()
         {
-            Content = "Install Runtime",
+            Content = "Open Runtime Status",
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
-        Button customButton = new()
+        Button closeButton = new()
         {
-            Content = "Custom Runtime",
+            Content = "Close",
             HorizontalAlignment = HorizontalAlignment.Stretch
         };
 
@@ -2326,13 +2366,13 @@ public sealed partial class MainWindow : Window
                 {
                     new TextBlock
                     {
-                        Text = "No Wine runtime was found.",
+                        Text = "AetherXIV runtime is unavailable.",
                         FontSize = 20,
                         FontWeight = Avalonia.Media.FontWeight.SemiBold
                     },
                     new TextBlock
                     {
-                        Text = "AetherXIV Launcher can download, verify, install, and validate its tested Wine runtime for this computer. You can also point it at a custom runtime.",
+                        Text = "This Launcher build must contain its matching AetherXIV compatibility runtime. Game launch is blocked because the bundle is missing or invalid. Reinstall or repair this AetherXIV build; the Launcher will not switch to another Wine installation.",
                         TextWrapping = Avalonia.Media.TextWrapping.Wrap,
                         Foreground = Avalonia.Media.Brushes.LightGray
                     },
@@ -2343,8 +2383,8 @@ public sealed partial class MainWindow : Window
                         HorizontalAlignment = HorizontalAlignment.Stretch,
                         Children =
                         {
-                            installButton,
-                            customButton
+                            runtimeButton,
+                            closeButton
                         }
                     }
                 }
@@ -2355,21 +2395,14 @@ public sealed partial class MainWindow : Window
         Grid.SetRow(contentGrid.Children[1], 1);
         Grid.SetRow(contentGrid.Children[2], 3);
 
-        installButton.Click += (_, _) => dialog.Close("install");
-        customButton.Click += (_, _) => dialog.Close("custom");
+        runtimeButton.Click += (_, _) => dialog.Close(true);
+        closeButton.Click += (_, _) => dialog.Close(false);
 
-        string? choice = await dialog.ShowDialog<string?>(this);
-        if (choice == "install")
+        bool openRuntimeStatus = await dialog.ShowDialog<bool>(this);
+        if (openRuntimeStatus)
         {
-            MainTabs.SelectedItem = RuntimeTab;
-            InstallRuntime_Click(this, new Avalonia.Interactivity.RoutedEventArgs());
-        }
-        else if (choice == "custom")
-        {
-            RuntimeModeBox.SelectedIndex = 1;
             MainTabs.SelectedItem = RuntimeTab;
             UpdateRuntimeUiState();
-            SaveCurrentProfile();
         }
     }
 
@@ -2571,8 +2604,6 @@ public sealed partial class MainWindow : Window
             SelectServerPresetForProfile(profile);
             ApplyLaunchHelperMode(profile.LaunchHelperMode);
             ApplyGraphicsTarget(profile.GraphicsTarget);
-            ApplyRuntimeMode(profile.RuntimeMode);
-            ApplyRuntimeProfile(profile.RuntimeProfile);
             ApplyUmbraSettings(profile.EffectiveUmbra);
         }
         catch (Exception ex)
@@ -2580,39 +2611,16 @@ public sealed partial class MainWindow : Window
             AppendLog($"Profile load failed: {ex.Message}");
             ApplyLaunchHelperMode(LauncherProfile.LocalDefault().LaunchHelperMode);
             ApplyGraphicsTarget(LauncherProfile.LocalDefault().GraphicsTarget);
-            ApplyRuntimeMode(LauncherProfile.LocalDefault().RuntimeMode);
-            ApplyRuntimeProfile(LauncherProfile.LocalDefault().RuntimeProfile);
             ApplyUmbraSettings(LauncherProfile.LocalDefault().EffectiveUmbra);
             SelectServerPresetForProfile(LauncherProfile.LocalDefault());
         }
         finally
         {
             isLoadingProfile = false;
+            RefreshDiscordRichPresenceToggle();
+            StartDiscordRichPresenceWatcher();
             UpdateServerPresetUiState();
         }
-    }
-
-    private void ApplyRuntimeMode(RuntimeSelectionMode runtimeMode)
-    {
-        RuntimeModeBox.SelectedIndex = runtimeMode switch
-        {
-            RuntimeSelectionMode.CustomRuntime => 1,
-            _ => 0
-        };
-        UpdateRuntimeUiState();
-    }
-
-    private void ApplyRuntimeProfile(WineRuntimeProfile runtimeProfile)
-    {
-        RuntimeNameBox.Text = runtimeProfile.Name;
-        RuntimeCommandBox.Text = string.IsNullOrWhiteSpace(runtimeProfile.Command) ? "wine" : runtimeProfile.Command;
-        RuntimeValueBox.Text = runtimeProfile.BottleName ?? runtimeProfile.PrefixPath ?? "";
-        CustomRuntimeKindBox.SelectedIndex = runtimeProfile.Kind switch
-        {
-            WineRuntimeKind.WinePrefix => 0,
-            WineRuntimeKind.CustomCommand => 1,
-            _ => 1
-        };
     }
 
     private void ApplyLaunchHelperMode(ClientLaunchHelperMode helperMode)
@@ -2629,9 +2637,9 @@ public sealed partial class MainWindow : Window
     {
         GraphicsTargetBox.SelectedIndex = graphicsTarget switch
         {
-            ClientGraphicsTarget.WineDefault => 1,
-            ClientGraphicsTarget.OpenGLThreaded => 2,
-            ClientGraphicsTarget.WineD3DVulkan => 3,
+            ClientGraphicsTarget.OpenGLThreaded => 1,
+            // Wine default, and the legacy OpenGLCompatibility value that is
+            // normalized to it, both map to the top entry.
             _ => 0
         };
     }
@@ -2641,6 +2649,7 @@ public sealed partial class MainWindow : Window
         UmbraSettings normalized = settings.Normalize();
         UmbraEnabledBox.IsChecked = normalized.Enabled;
         UmbraSafeModeBox.IsChecked = normalized.SafeMode;
+        UmbraDiscordRichPresenceBox.IsChecked = normalized.DiscordRichPresenceEnabled;
     }
 
     private void SaveCurrentProfile()
@@ -2676,31 +2685,8 @@ public sealed partial class MainWindow : Window
             PluginDirectory = UmbraInstallStore.PluginsRoot,
             SafeMode = UmbraSafeModeBox.IsChecked == true,
             LoadDelayMilliseconds = UmbraSettings.DefaultLoadDelayMilliseconds,
-            UseOfficialRepository = true,
-            CustomRepositoryUrls = Array.Empty<string>()
+            DiscordRichPresenceEnabled = UmbraDiscordRichPresenceBox.IsChecked == true
         }.Normalize();
-    }
-
-    private void ScanRuntimeCandidates(bool appendLog)
-    {
-        if (!platform.RequiresCompatibilityRuntime)
-        {
-            RuntimeCandidatesBox.Text = "Windows builds launch the client directly.";
-            return;
-        }
-
-        runtimeCandidates = RuntimeDiscovery.Discover();
-        RuntimeCandidatesBox.Text = runtimeCandidates.Count == 0
-            ? "No approved detected runtime found."
-            : string.Join(Environment.NewLine, runtimeCandidates.Select(FormatRuntimeCandidate));
-        DetectedRuntimeBox.ItemsSource = runtimeCandidates.Select(FormatRuntimeCandidate).ToArray();
-        if (runtimeCandidates.Count > 0 && DetectedRuntimeBox.SelectedIndex < 0)
-            DetectedRuntimeBox.SelectedIndex = 0;
-
-        if (appendLog)
-            AppendLog($"Wine runtime scan found {runtimeCandidates.Count} candidate(s).");
-
-        RefreshRuntimeSetupStatus();
     }
 
     private void UpdateHomeState()
@@ -2776,9 +2762,23 @@ public sealed partial class MainWindow : Window
             info.Environment["AETHER_UMBRA_LOG"] = plan.Umbra.LogPath;
             info.Environment["AETHER_UMBRA_SAFE_MODE"] = plan.Umbra.SafeMode ? "1" : "0";
             info.Environment["AETHER_UMBRA_LOAD_DELAY_MS"] = plan.Umbra.LoadDelayMilliseconds.ToString();
-            info.Environment["AETHER_UMBRA_REPOSITORY_URLS"] = string.Join(";", plan.Umbra.RepositoryUrls);
-            info.Environment["AETHER_UMBRA_REPOSITORIES_JSON"] = plan.Umbra.RepositoriesJson;
             info.Environment["AETHER_UMBRA_ENABLE_MANAGED_ON_WINE"] = plan.Umbra.EnableManagedOnWine ? "1" : "0";
+            if (!string.IsNullOrWhiteSpace(plan.Umbra.SupportedRepositoryUrl))
+                info.Environment["AETHER_UMBRA_SUPPORTED_REPOSITORY"] = plan.Umbra.SupportedRepositoryUrl;
+            if (!string.IsNullOrWhiteSpace(plan.Umbra.BundledRepositoryPath))
+                info.Environment["AETHER_UMBRA_BUNDLED_REPOSITORY"] = plan.Umbra.BundledRepositoryPath;
+        }
+
+        // Under Wine the in-game Umbra Discord Rich Presence plugin can only
+        // reach the host Discord client through the Discord IPC bridge, so the
+        // launcher tells the Wine helper where Discord's Unix sockets live.
+        // On native Windows the plugin connects to Discord's named pipe directly
+        // and no bridge (or environment) is needed.
+        if (platform.RequiresCompatibilityRuntime && ReadUmbraSettings().DiscordRichPresenceEnabled)
+        {
+            string? discordIpcDirectory = DiscordBridgeHost.FindDiscordIpcDirectory();
+            if (!string.IsNullOrWhiteSpace(discordIpcDirectory))
+                info.Environment[DiscordBridgeHost.DiscordIpcDirectoryEnvironmentVariable] = discordIpcDirectory;
         }
 
         return info;
@@ -2793,25 +2793,13 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        selectedRuntimeArtifact ??= BuiltInRuntimeCatalog.Find(platform.RuntimeIdentifier);
-        if (selectedRuntimeArtifact is null)
-        {
-            RuntimeSetupGuidance guidance = RuntimeSetupGuidance.ForCurrentPlatform();
-            RuntimeCatalogStatus.Text = guidance.Summary;
-            ManagedRuntimeStatus.Text = runtimeCandidates.Count == 0
-                ? "No managed package or local Wine runtime is available for this platform."
-                : $"Detected {runtimeCandidates.Count} local runtime candidate(s); validate the selected runtime.";
-            UpdateRuntimeUiState();
-            return;
-        }
-
-        managedRuntimeInstall = RuntimeInstallStore.FindInstalled(selectedRuntimeArtifact);
-        RuntimeCatalogStatus.Text = $"Managed package: {FormatRuntimeArtifact(selectedRuntimeArtifact)}";
-        ManagedRuntimeStatus.Text = managedRuntimeInstall is not null
-            ? $"Installed: {managedRuntimeInstall.Name} {managedRuntimeInstall.Version}; validate before launch."
-            : runtimeCandidates.Count == 0
-                ? "Not installed. Select Install Runtime to download and validate Wine."
-                : $"Managed runtime not installed; {runtimeCandidates.Count} local candidate(s) detected.";
+        managedRuntimeInstall = BundledRuntimeLocator.FindCurrent(out string error);
+        RuntimeCatalogStatus.Text = managedRuntimeInstall is null
+            ? "Bundled AetherXIV compatibility runtime"
+            : $"Bundled with Launcher: {managedRuntimeInstall.Name} {managedRuntimeInstall.Version} ({managedRuntimeInstall.PlatformRid})";
+        ManagedRuntimeStatus.Text = managedRuntimeInstall is null
+            ? error
+            : "Bundle found. Validate it before launch to check Rosetta or Linux libraries, the isolated prefix, client helper, and Umbra.";
         UpdateRuntimeUiState();
     }
 
@@ -2819,11 +2807,9 @@ public sealed partial class MainWindow : Window
     {
         if (selectedUmbraFrameworkArtifact is not null)
             umbraFrameworkInstall = UmbraInstallStore.FindInstalled(selectedUmbraFrameworkArtifact)
-                ?? UmbraInstallStore.FindLatestInstalled()
-                ?? UmbraInstallStore.FindBundled();
+                ?? UmbraInstallStore.FindBestAvailable();
         else
-            umbraFrameworkInstall = UmbraInstallStore.FindLatestInstalled()
-                ?? UmbraInstallStore.FindBundled();
+            umbraFrameworkInstall = UmbraInstallStore.FindBestAvailable();
 
         if (umbraFrameworkInstall is null)
             AppendLog("Umbra framework: not installed.");
@@ -2836,21 +2822,11 @@ public sealed partial class MainWindow : Window
     private void SetRuntimeBusy(bool isBusy)
     {
         runtimeBusy = isBusy;
-        InstallRuntimeButton.IsEnabled = !isBusy
-            && platform.RequiresCompatibilityRuntime
-            && ReadRuntimeMode() == RuntimeSelectionMode.AutomaticManaged;
-        ValidateRuntimeButton.IsEnabled = !isBusy;
-        VerifyDependenciesButton.IsEnabled = !isBusy;
+        InstallGameClientButton.IsEnabled = !isBusy;
+        UseExistingClientButton.IsEnabled = !isBusy;
+        ValidateRuntimeButton.IsEnabled = !isBusy && managedRuntimeInstall is not null;
+        VerifyDependenciesButton.IsEnabled = !isBusy && managedRuntimeInstall is not null;
         ResetPrefixButton.IsEnabled = !isBusy;
-        RuntimeModeBox.IsEnabled = !isBusy;
-        DetectedRuntimeBox.IsEnabled = !isBusy;
-        CustomRuntimeKindBox.IsEnabled = !isBusy;
-        RuntimeNameBox.IsEnabled = !isBusy;
-        RuntimeCommandBox.IsEnabled = !isBusy;
-        RuntimeValueBox.IsEnabled = !isBusy;
-        BrowseRuntimeButton.IsEnabled = !isBusy;
-        BrowseRuntimePrefixButton.IsEnabled = !isBusy;
-        SaveRuntimeButton.IsEnabled = !isBusy;
     }
 
     private void SetUmbraBusy(bool isBusy)
@@ -2863,6 +2839,8 @@ public sealed partial class MainWindow : Window
     private void UpdateRuntimeUiState()
     {
         bool isBusy = runtimeBusy;
+        InstallGameClientButton.IsEnabled = !isBusy;
+        UseExistingClientButton.IsEnabled = !isBusy;
         LaunchHelperModeBox.IsEnabled = !isBusy;
 
         if (!platform.RequiresCompatibilityRuntime)
@@ -2871,48 +2849,25 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        RuntimeSelectionMode mode = ReadRuntimeMode();
-        bool automatic = mode == RuntimeSelectionMode.AutomaticManaged;
-        bool custom = mode == RuntimeSelectionMode.CustomRuntime;
-        bool customWinePrefix = custom && CustomRuntimeKindBox.SelectedIndex == 0;
-
-        InstallRuntimeButton.IsEnabled = !isBusy && automatic;
-        ValidateRuntimeButton.IsEnabled = !isBusy;
-        VerifyDependenciesButton.IsEnabled = !isBusy;
+        ValidateRuntimeButton.IsEnabled = !isBusy && managedRuntimeInstall is not null;
+        VerifyDependenciesButton.IsEnabled = !isBusy && managedRuntimeInstall is not null;
         ResetPrefixButton.IsEnabled = !isBusy;
         LaunchHelperModeBox.IsEnabled = !isBusy;
         GraphicsTargetBox.IsEnabled = !isBusy && platform.RequiresCompatibilityRuntime;
-        DetectedRuntimeBox.IsEnabled = !isBusy && automatic && runtimeCandidates.Count > 0;
-        CustomRuntimeKindBox.IsEnabled = !isBusy && custom;
-        RuntimeNameBox.IsEnabled = !isBusy && custom;
-        RuntimeCommandBox.IsEnabled = !isBusy && custom;
-        RuntimeValueBox.IsEnabled = !isBusy && customWinePrefix;
-        BrowseRuntimeButton.IsEnabled = !isBusy && custom;
-        BrowseRuntimePrefixButton.IsEnabled = !isBusy && customWinePrefix;
-        SaveRuntimeButton.IsEnabled = !isBusy && custom;
-
-        if (automatic)
-        {
-            RuntimeCatalogStatus.Text = selectedRuntimeArtifact is null
-                ? RuntimeSetupGuidance.ForCurrentPlatform().Summary
-                : $"Managed package: {FormatRuntimeArtifact(selectedRuntimeArtifact)}";
-        }
     }
 
     private void UpdateUmbraUiState()
     {
         bool isBusy = umbraCancellation is not null;
-        InstallUmbraButton.IsEnabled = !isBusy;
+        InstallUmbraButton.IsEnabled = !isBusy && LauncherProfile.DemiDevUnitUmbraServicesEnabled;
+        InstallUmbraButton.Content = LauncherProfile.DemiDevUnitUmbraServicesEnabled
+            ? "Check for Umbra Updates"
+            : "Umbra Updates (Service Offline)";
         UmbraEnabledBox.IsEnabled = !isBusy;
         UmbraSafeModeBox.IsEnabled = !isBusy;
     }
 
     private static string FormatUmbraFrameworkArtifact(UmbraFrameworkArtifact artifact)
-    {
-        return $"{artifact.Name} {artifact.Version} ({artifact.PlatformRid}, {artifact.SizeBytes} bytes)";
-    }
-
-    private static string FormatRuntimeArtifact(RuntimeArtifact artifact)
     {
         return $"{artifact.Name} {artifact.Version} ({artifact.PlatformRid}, {artifact.SizeBytes} bytes)";
     }
@@ -2943,14 +2898,6 @@ public sealed partial class MainWindow : Window
         return string.Join(", ", parts);
     }
 
-    private static string FormatRuntimeCandidate(RuntimeCandidate candidate)
-    {
-        string value = string.IsNullOrWhiteSpace(candidate.BottleOrPrefix)
-            ? $"isolated prefix: {RuntimeInstallStore.ManagedPrefixPath}"
-            : candidate.BottleOrPrefix;
-        return $"{candidate.Name} | {candidate.Kind} | {candidate.Command} | {value}";
-    }
-
     private ClientLaunchHelperMode ReadLaunchHelperMode()
     {
         return LaunchHelperModeBox.SelectedIndex switch
@@ -2965,10 +2912,8 @@ public sealed partial class MainWindow : Window
     {
         return GraphicsTargetBox.SelectedIndex switch
         {
-            1 => ClientGraphicsTarget.WineDefault,
-            2 => ClientGraphicsTarget.OpenGLThreaded,
-            3 => ClientGraphicsTarget.WineD3DVulkan,
-            _ => ClientGraphicsTarget.OpenGLCompatibility
+            1 => ClientGraphicsTarget.OpenGLThreaded,
+            _ => ClientGraphicsTarget.WineDefault
         };
     }
 
@@ -2987,10 +2932,8 @@ public sealed partial class MainWindow : Window
     {
         return target switch
         {
-            ClientGraphicsTarget.WineDefault => "Wine default",
             ClientGraphicsTarget.OpenGLThreaded => "OpenGL threaded",
-            ClientGraphicsTarget.WineD3DVulkan => "WineD3D Vulkan",
-            _ => "OpenGL compatibility"
+            _ => "Wine default"
         };
     }
 

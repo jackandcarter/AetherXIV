@@ -1,15 +1,27 @@
 param(
     [string]$Configuration = $(if ($env:AETHERXIV_BUILD_CONFIGURATION) { $env:AETHERXIV_BUILD_CONFIGURATION } else { "Release" }),
     [string]$ServerRid = $(if ($env:AETHERXIV_SERVER_RID) { $env:AETHERXIV_SERVER_RID } else { "win-x64" }),
-    [string]$LauncherRid = $(if ($env:AETHERXIV_LAUNCHER_RID) { $env:AETHERXIV_LAUNCHER_RID } else { "win-x64" })
+    [string]$LauncherRid = $(if ($env:AETHERXIV_LAUNCHER_RID) { $env:AETHERXIV_LAUNCHER_RID } else { "win-x64" }),
+    [ValidateSet('core', 'full')][string]$Scope = 'full',
+    [switch]$InstallDependencies
 )
 
 $ErrorActionPreference = "Stop"
 
 $rootDir = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+if ($InstallDependencies) {
+    & (Join-Path $PSScriptRoot 'install-build-dependencies.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
+}
+if ($Scope -eq 'core') {
+    & (Join-Path $PSScriptRoot 'build-core-only.ps1') -Configuration $Configuration -ServerRid $ServerRid
+    exit $LASTEXITCODE
+}
 if ($Configuration -notin @("Debug", "Release")) { throw "Configuration must be Debug or Release." }
-$OutputRoot = Join-Path $rootDir "bin\build\$Configuration\Windows"
+$FinalOutputRoot = Join-Path $rootDir "bin\build\$Configuration\Windows"
+$OutputRoot = Join-Path $rootDir "bin\build\$Configuration\.Windows.staging"
 $buildNumber = (Get-Content -Raw (Join-Path $rootDir "build-number.txt")).Trim()
+$buildCompleted = $false
 
 $dotnet = if ($env:DOTNET_BIN) { $env:DOTNET_BIN } else { "dotnet" }
 $python = $null
@@ -41,6 +53,12 @@ function Publish-Project {
     )
 
     $selfContainedValue = if ($SelfContained) { "true" } else { "false" }
+    $symbolArgs = if ($Configuration -eq "Release") {
+        @("/p:DebugType=None", "/p:DebugSymbols=false")
+    }
+    else {
+        @()
+    }
     New-Item -ItemType Directory -Force -Path $OutputPath | Out-Null
     & $dotnet publish $ProjectPath `
         --configuration $Configuration `
@@ -51,19 +69,19 @@ function Publish-Project {
         /p:NuGetAudit=false `
         /p:PublishSingleFile=false `
         /p:UseAppHost=true `
+        @symbolArgs `
         @ExtraArgs
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet publish failed: $ProjectPath"
+    }
 }
 
 function Reset-OutputRoot {
     $binRoot = Join-Path $rootDir "bin"
     $buildRoot = Join-Path $binRoot "build"
     New-Item -ItemType Directory -Force -Path $buildRoot | Out-Null
-    Get-ChildItem -Force $binRoot | Where-Object { $_.Name -ne "build" } | Remove-Item -Recurse -Force
-    $workRoot = Join-Path $buildRoot ".work"
-    if (Test-Path $workRoot) { Remove-Item -Recurse -Force $workRoot }
-    Get-ChildItem -Force $buildRoot | Where-Object { $_.Name -notin @("Debug", "Release") } | Remove-Item -Recurse -Force
-    # A platform package is a complete release image. Recreate it so stale
-    # diagnostics or superseded payloads cannot survive a later build.
+    # Build into an isolated sibling. The last verified release remains intact
+    # until this package has passed every check.
     if (Test-Path $OutputRoot) { Remove-Item -Recurse -Force $OutputRoot }
     New-Item -ItemType Directory -Force -Path $OutputRoot | Out-Null
 }
@@ -138,7 +156,7 @@ function Build-NativeUmbraWithMinGw {
         (Join-Path $imgui "imgui_widgets.cpp") `
         (Join-Path $imgui "backends\imgui_impl_dx9.cpp") `
         (Join-Path $imgui "backends\imgui_impl_win32.cpp") `
-        -lgdi32 -ldwmapi
+        -lgdi32 -ldwmapi -lws2_32
     if ($LASTEXITCODE -ne 0) { throw "MinGW Umbra bootstrap build failed." }
 
     Copy-NativeUmbraPayloads $injectorPath $bootstrapPath
@@ -169,8 +187,15 @@ function Copy-NativeUmbraPayloads {
     Set-Content -Path (Join-Path $frameworkRoot "version.txt") -Value $umbraVersion
 }
 
+try {
 Assert-BuildPrerequisites
 Reset-OutputRoot
+
+# Validate all non-build release inputs before spending time publishing binaries.
+& $python @pythonPrefixArgs (Join-Path $rootDir "tools\Universal\create-direct-core-database-package.py") `
+    --repo-root $rootDir `
+    --output-dir (Join-Path $OutputRoot "Database")
+if ($LASTEXITCODE -ne 0) { throw "Database package creation failed." }
 
 Write-Host "Publishing server hosts..."
 Publish-Project (Join-Path $rootDir "src\AetherXIV.Core.Map\AetherXIV.Core.Map.csproj") (Join-Path $OutputRoot "servers\map") @("--runtime", $ServerRid)
@@ -191,20 +216,29 @@ Publish-Project (Join-Path $launcherRoot "AetherXIV.Launcher.ClientLauncher\Aeth
 Write-Host "Publishing AetherXIV Core app..."
 Publish-Project (Join-Path $rootDir "src\AetherXIV.UI.App\AetherXIV.UI.App.csproj") (Join-Path $OutputRoot "core\app") @("--runtime", $LauncherRid) -SelfContained
 
-Write-Host "Publishing managed Umbra payload..."
-Publish-Project (Join-Path $launcherRoot "Umbra\Aether.Umbra.Framework\Aether.Umbra.Framework.csproj") (Join-Path $OutputRoot "launcher\app\Umbra\Framework\Managed") @("--runtime", "win-x86") -SelfContained
+Write-Host "Publishing bundled Umbra base framework and private .NET runtime..."
+Publish-Project `
+    (Join-Path $launcherRoot "Umbra\Aether.Umbra.Framework\Aether.Umbra.Framework.csproj") `
+    (Join-Path $OutputRoot "launcher\app\Umbra\Framework\Managed") `
+    @("--runtime", "win-x86")
+& $python @pythonPrefixArgs (Join-Path $rootDir "tools\Universal\stage-umbra-dotnet-runtime.py") `
+    --managed (Join-Path $OutputRoot "launcher\app\Umbra\Framework\Managed") `
+    --runtime (Join-Path $OutputRoot "launcher\app\Umbra\Framework\Runtime") `
+    --dotnet $dotnet
+if ($LASTEXITCODE -ne 0) { throw "Private Umbra .NET runtime staging failed." }
 
 $msbuild = Resolve-MSBuild
 if ($msbuild) {
-    Write-Host "Building native injector and Umbra bootstrap with MSBuild..."
+    Write-Host "Building native injector and bundled Umbra bootstrap with MSBuild..."
     $nativeRoot = Join-Path $OutputRoot "native"
     $nativeInjectorOutput = Join-Path $nativeRoot "injector"
     $bootstrapOutput = Join-Path $nativeRoot "umbra-bootstrap"
     New-Item -ItemType Directory -Force -Path $nativeInjectorOutput, $bootstrapOutput | Out-Null
 
     & $msbuild (Join-Path $launcherRoot "AetherXIV.Launcher.NativeInjector\AetherXIV.Launcher.NativeInjector.vcxproj") /p:Configuration=$Configuration /p:Platform=Win32 /m:1 "/p:OutDir=$nativeInjectorOutput\" /p:TargetName=Umbra.NativeInjector.x86
+    if ($LASTEXITCODE -ne 0) { throw "MSBuild native injector build failed." }
     & $msbuild (Join-Path $launcherRoot "Umbra\Aether.Umbra.Bootstrap\Aether.Umbra.Bootstrap.vcxproj") /p:Configuration=$Configuration /p:Platform=Win32 /m:1 "/p:OutDir=$bootstrapOutput\" /p:TargetName=Aether.Umbra.Bootstrap.x86
-
+    if ($LASTEXITCODE -ne 0) { throw "MSBuild Umbra bootstrap build failed." }
     Copy-NativeUmbraPayloads `
         (Join-Path $nativeInjectorOutput "Umbra.NativeInjector.x86.exe") `
         (Join-Path $bootstrapOutput "Aether.Umbra.Bootstrap.x86.dll")
@@ -215,18 +249,13 @@ else {
     Build-NativeUmbraWithMinGw
 }
 
-& $python @pythonPrefixArgs (Join-Path $rootDir "tools\Universal\create-direct-core-database-package.py") `
-    --repo-root $rootDir `
-    --output-dir (Join-Path $OutputRoot "Database")
-if ($LASTEXITCODE -ne 0) { throw "Database package creation failed." }
-
 $mapCorePath = Join-Path $OutputRoot "servers\map\AetherXIV.Core.Map.dll"
 $mapCoreHash = (Get-FileHash -Algorithm SHA256 $mapCorePath).Hash.ToLowerInvariant()
 @(
     "schema=aetherxiv.build.manifest.v1"
     "built_at_utc=$([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ'))"
     "configuration=$Configuration"
-    "product_version=2.0"
+    "product_version=2.1"
     "build_number=$buildNumber"
     "server_rid=$ServerRid"
     "map_core_sha256=$mapCoreHash"
@@ -236,6 +265,21 @@ $mapCoreHash = (Get-FileHash -Algorithm SHA256 $mapCorePath).Hash.ToLowerInvaria
 if ($Configuration -eq "Release") {
     Get-ChildItem -Path $OutputRoot -Recurse -File -Filter *.pdb | Remove-Item -Force
 }
+& $dotnet run `
+    --project (Join-Path $launcherRoot "AetherXIV.Umbra.BundleFetcher\AetherXIV.Umbra.BundleFetcher.csproj") `
+    --configuration $Configuration `
+    -- `
+    --stamp-local (Join-Path $OutputRoot "launcher\app\Umbra\Framework") $umbraVersion
+if ($LASTEXITCODE -ne 0) { throw "Bundled Umbra framework integrity stamping failed." }
+Write-Host "Packaging built-in Umbra plugins..."
+& $python @pythonPrefixArgs (Join-Path $rootDir "tools\Universal\package-bundled-plugins.py") `
+    --output (Join-Path $OutputRoot "launcher\app\Umbra\BundledPlugins") `
+    --dotnet $dotnet
+if ($LASTEXITCODE -ne 0) { throw "Bundled Umbra plugin packaging failed." }
+& $python @pythonPrefixArgs (Join-Path $rootDir "tools\Universal\verify-umbra-bundle.py") `
+    (Join-Path $OutputRoot "launcher\app\Umbra\Framework")
+if ($LASTEXITCODE -ne 0) { throw "Bundled Umbra framework receipt verification failed." }
+
 Copy-Item -LiteralPath (Join-Path $rootDir "LICENSE") -Destination (Join-Path $OutputRoot "LICENSE") -Force
 Copy-Item -LiteralPath (Join-Path $rootDir "THIRD_PARTY_NOTICES.md") -Destination (Join-Path $OutputRoot "THIRD_PARTY_NOTICES.md") -Force
 Copy-Item -LiteralPath (Join-Path $rootDir "MODIFICATIONS.md") -Destination (Join-Path $OutputRoot "MODIFICATIONS.md") -Force
@@ -268,22 +312,74 @@ $requiredReleaseFiles = @(
     "core\app\AetherXIV.Core.App.exe",
     "launcher\app\AetherXIV.Launcher.App.exe",
     "servers\map\scripts\player.lua",
+    "servers\map\scripts\directors\AfterQuestWarpDirector.lua",
+    "servers\map\scripts\directors\WeatherDirector.lua",
     "servers\map\staticactors.bin",
     "servers\map\scripts.manifest.json",
     "servers\map\navmesh\wil0Field01.snb",
     "servers\map\navmesh\SHARPNAV_LICENSE",
     "Database\ffxiv_server.sql",
+    "Database\ffxiv_server.sql.sha256",
     "Database\baseline-history.sha256",
+    "Database\baseline-manifest.json",
+    "Database\setup.sh",
     "Database\setup.ps1",
+    "Database\migrations\20260724_000027_correct_1x_player_baselines.sql",
+    "Database\migrations\20260724_000028_social_state_persistence.sql",
+    "Database\migrations\20260727_000029_separate_umbra_control_plane.sql",
+    "Database\migrations\20260727_000030_native_actor_slots.sql",
+    "Database\migrations\20260728_000031_private_area_spawn_contract.sql",
+    "Database\migrations\20260802_000032_quest_runtime_contract.sql",
     "launcher\app\Helpers\win-x64\Umbra.NativeInjector.x86.exe",
     "launcher\app\Helpers\win-x86\Umbra.NativeInjector.x86.exe",
-    "launcher\app\Umbra\Framework\Aether.Umbra.Bootstrap.x86.dll"
+    "launcher\app\Umbra\Framework\Aether.Umbra.Bootstrap.x86.dll",
+    "launcher\app\Umbra\Framework\Managed\Aether.Umbra.Framework.exe",
+    "launcher\app\Umbra\Framework\umbra-framework.json"
 )
 foreach ($relativePath in $requiredReleaseFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $OutputRoot $relativePath) -PathType Leaf)) {
         throw "Windows release is missing required file: $relativePath"
     }
 }
+$buildManifest = Get-Content -Raw (Join-Path $OutputRoot "build-manifest.txt")
+if ($buildManifest -notmatch '(?m)^product_version=2\.1\r?$' -or
+    $buildManifest -notmatch "(?m)^build_number=$([regex]::Escape($buildNumber))\r?$") {
+    throw "Windows release build manifest has the wrong product or build identity."
+}
+$databaseBaseline = Get-Content -Raw (Join-Path $OutputRoot "Database\ffxiv_server.sql")
+if ($databaseBaseline -notmatch 'aetherxiv-direct-core-v2' -or
+    $databaseBaseline -notmatch 'CREATE TABLE IF NOT EXISTS server_battlenpc_spawn_audit_pins') {
+    throw "Windows release database baseline omits a required runtime compatibility contract."
+}
 
+$previousOutputRoot = "$FinalOutputRoot.previous"
+if (Test-Path $previousOutputRoot) {
+    Remove-Item -Recurse -Force $previousOutputRoot
+}
+if (Test-Path $FinalOutputRoot) {
+    Move-Item -LiteralPath $FinalOutputRoot -Destination $previousOutputRoot
+}
+try {
+    Move-Item -LiteralPath $OutputRoot -Destination $FinalOutputRoot
+    $buildCompleted = $true
+    if (Test-Path $previousOutputRoot) {
+        Remove-Item -Recurse -Force $previousOutputRoot
+    }
+}
+catch {
+    if ((Test-Path $previousOutputRoot) -and -not (Test-Path $FinalOutputRoot)) {
+        Move-Item -LiteralPath $previousOutputRoot -Destination $FinalOutputRoot
+    }
+    throw
+}
 Write-Host "AetherXIV Windows build complete."
-Write-Host "Output: $OutputRoot"
+Write-Host "Output: $FinalOutputRoot"
+}
+finally {
+    if (Test-Path $releaseWorkRoot) {
+        Remove-Item -Recurse -Force $releaseWorkRoot
+    }
+    if (-not $buildCompleted -and (Test-Path $OutputRoot)) {
+        Remove-Item -Recurse -Force $OutputRoot
+    }
+}

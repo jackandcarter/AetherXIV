@@ -236,12 +236,20 @@ namespace AetherXIV.Core.Common
 
         public static string ToStringBase63(int number)
         {
-            var lookup = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            const string lookup = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            int maximumValue = (lookup.Length * lookup.Length) - 1;
+            if (number < 0 || number > maximumValue)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(number),
+                    number,
+                    $"The two-character object-name token supports values from 0 through {maximumValue}.");
+            }
 
-            var secondDigit = lookup.Substring((int)Math.Floor(number / (double)lookup.Length), 1);
-            var firstDigit = lookup.Substring(number % lookup.Length, 1);
+            char secondDigit = lookup[number / lookup.Length];
+            char firstDigit = lookup[number % lookup.Length];
 
-            return secondDigit + firstDigit;
+            return String.Concat(secondDigit, firstDigit);
         }
 
         public static string ReadNullTermString(BinaryReader reader, int maxSize = 0x20)

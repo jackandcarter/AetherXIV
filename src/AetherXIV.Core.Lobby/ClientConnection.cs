@@ -39,6 +39,7 @@ namespace AetherXIV.Core.Lobby
 
         public void QueuePacket(BasePacket packet)
         {
+            DevDiagnostics.TraceWireBasePacket("Lobby", "server-to-client", packet);
             if (SendPacketQueue.Count == SendPacketQueue.BoundedCapacity - 1)
                 FlushQueuedSendPackets();
 

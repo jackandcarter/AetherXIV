@@ -105,9 +105,22 @@ public static class LuaParameterCodec
     }
 
     public static IReadOnlyList<LuaParameter> Decode(ReadOnlySpan<byte> payload)
+        => Decode(payload, out _);
+
+    /// <summary>
+    /// Decodes a typed Lua parameter list, reporting the index of its 0x0F
+    /// terminator within <paramref name="payload"/> (payload.Length when the
+    /// terminator is absent). The terminator position lets the EventStart
+    /// codec tell a genuine compact list (terminates inside the name field)
+    /// from command padding that merely happens to parse as a list.
+    /// </summary>
+    public static IReadOnlyList<LuaParameter> Decode(
+        ReadOnlySpan<byte> payload,
+        out int terminatorOffset)
     {
         List<LuaParameter> parameters = new();
         int offset = 0;
+        terminatorOffset = payload.Length;
 
         while (offset < payload.Length)
         {
@@ -131,7 +144,10 @@ public static class LuaParameterCodec
             };
 
             if (type == (LuaParameterType)0x0F)
+            {
+                terminatorOffset = offset - 1;
                 break;
+            }
 
             parameters.Add(new LuaParameter(type, value));
         }

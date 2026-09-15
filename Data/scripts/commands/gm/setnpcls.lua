@@ -10,13 +10,13 @@ function onTrigger(player, argc, lsId, state)
     local id = tonumber(lsId) or 0;
 	
 	if (state == "alert") then	
-		player:SetNpcLS(id, NPCLS_ALERT);
+		player:SetNpcLs(id, NPCLS_ALERT);
 	elseif (state == "active") then
-		player:SetNpcLS(id, NPCLS_ACTIVE);
+		player:SetNpcLs(id, NPCLS_ACTIVE);
 	elseif (state == "inactive") then
-		player:SetNpcLS(id, NPCLS_INACTIVE);
+		player:SetNpcLs(id, NPCLS_INACTIVE);
 	elseif (state == "gone") then
-		player:SetNpcLS(id, NPCLS_GONE);
+		player:SetNpcLs(id, NPCLS_GONE);
 	else
 		player:SendMessage(0x20, "", "Invalid state argument");
 		return;

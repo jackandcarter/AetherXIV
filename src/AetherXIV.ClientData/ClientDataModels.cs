@@ -50,7 +50,25 @@ public enum ClientDataResourceFamily
     Unknown,
     SedbSscf,
     Gtex,
-    VersWrappedGtex
+    VersWrappedGtex,
+    FileSet,
+    MapLayout
+}
+
+public enum ClientFileSetStringKind
+{
+    Key,
+    ResourceType,
+    ResourcePath,
+    Other
+}
+
+public enum ClientMapLayoutStringKind
+{
+    Other,
+    Schema,
+    ResourceReference,
+    InstanceName
 }
 
 public enum ClientDataFieldObservationStatus
@@ -259,7 +277,9 @@ public sealed record ClientDataResourceProbe(
     bool? DeclaredSizeMatchesFileSize,
     int? PayloadOffsetBytes,
     ClientDataResourceLayoutProbe? LayoutProbe,
-    IReadOnlyList<ClientDataFieldObservation> Observations);
+    IReadOnlyList<ClientDataFieldObservation> Observations,
+    ClientFileSetDocument? FileSet = null,
+    ClientMapLayoutProbe? MapLayout = null);
 
 public sealed record ClientDataResourceLayoutProbe(
     string Name,
@@ -308,3 +328,43 @@ public sealed record ClientDataFieldObservation(
     long? UnsignedLittleEndianValue,
     ClientDataFieldObservationStatus Status,
     string Note);
+
+public sealed record ClientFileSetDocument(
+    bool HasFileSetHeader,
+    bool IsComplete,
+    int SourceLengthBytes,
+    IReadOnlyList<ClientFileSetEntry> Entries,
+    IReadOnlyList<ClientFileSetParseIssue> Issues);
+
+public sealed record ClientFileSetEntry(
+    int LineNumber,
+    int LineOffsetBytes,
+    string Key,
+    string ResourceType,
+    string ResourcePath,
+    int FieldCount);
+
+public sealed record ClientFileSetParseIssue(
+    int LineNumber,
+    int LineOffsetBytes,
+    string Reason);
+
+public sealed record ClientMapLayoutProbe(
+    string Magic,
+    string? Version,
+    bool IsComplete,
+    int SourceLengthBytes,
+    int ScannedLengthBytes,
+    IReadOnlyList<ClientMapLayoutStringObservation> Strings,
+    IReadOnlyList<ClientMapLayoutStringObservation> SchemaStrings,
+    IReadOnlyList<ClientMapLayoutStringObservation> ResourceReferences,
+    IReadOnlyList<ClientMapLayoutParseIssue> Issues);
+
+public sealed record ClientMapLayoutStringObservation(
+    int OffsetBytes,
+    ClientMapLayoutStringKind Kind,
+    string Value);
+
+public sealed record ClientMapLayoutParseIssue(
+    int OffsetBytes,
+    string Reason);

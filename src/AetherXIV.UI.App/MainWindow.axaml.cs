@@ -1452,14 +1452,14 @@ public sealed partial class MainWindow : Window
                 {
                     new TextBlock
                     {
-                        Text = "This database needs to be initialized or repaired for AetherXIV 2.",
+                        Text = "This database needs to be initialized or repaired for AetherXIV 2.1.",
                         FontSize = 18,
                         FontWeight = FontWeight.SemiBold,
                         TextWrapping = TextWrapping.Wrap
                     },
                     new TextBlock
                     {
-                        Text = "AetherXIV will make a complete verified backup and install the canonical database. If compatible account and character tables are present, it will also try to restore accounts, characters, and character-owned tables. If those rows do not fit the AetherXIV 2 schema, setup keeps the clean database and retains the recovery files.",
+                        Text = "AetherXIV will make a complete verified backup and install the canonical database. If compatible account and character tables are present, it will also try to restore accounts, characters, and character-owned tables. If those rows do not fit the AetherXIV 2.1 schema, setup keeps the clean database and retains the recovery files.",
                         TextWrapping = TextWrapping.Wrap
                     },
                     new TextBlock

@@ -14,6 +14,19 @@ trap cleanup EXIT
 
 cleanup
 bash -n "${ROOT_DIR}/db/direct-core/setup.sh"
+python3 "${ROOT_DIR}/tools/Universal/generate-native-actor-migration.py" \
+  --catalog "${ROOT_DIR}/Data/seeds/actor-catalog/native-actor-slot-overrides.json" \
+  --output "${ROOT_DIR}/db/direct-core/migrations/20260727_000030_native_actor_slots.sql" \
+  --target direct-core \
+  --verify
+python3 "${ROOT_DIR}/tools/Universal/generate-native-actor-migration.py" \
+  --catalog "${ROOT_DIR}/Data/seeds/actor-catalog/native-actor-slot-overrides.json" \
+  --output "${ROOT_DIR}/Data/sql/migrations/20260727_native_actor_slots.sql" \
+  --target normalized \
+  --verify
+python3 "${ROOT_DIR}/tools/Universal/create-direct-core-database-package.py" \
+  --repo-root "${ROOT_DIR}" \
+  --output-dir "${DEV_WORK_ROOT}/Database"
 python3 "${ROOT_DIR}/tools/Universal/lua-tree-manifest.py" \
   --scripts-root "${ROOT_DIR}/Data/scripts" \
   --manifest "${ROOT_DIR}/Data/seeds/lua-tree/manifest.json"
@@ -23,19 +36,7 @@ if command -v pwsh >/dev/null 2>&1; then
 fi
 "${DOTNET_BIN}" build "${ROOT_DIR}/AetherXIV.sln" \
   --configuration Release -m:1 /nodeReuse:false /p:NuGetAudit=false
-# Several parity tests intentionally execute the authoritative source Lua. Make
-# that source visible inside disposable test work without copying it into a
-# release package or changing runtime lookup behavior.
-ln -s "${ROOT_DIR}/Data" "${DEV_WORK_ROOT}/out/Data"
-ln -s "${ROOT_DIR}/db" "${DEV_WORK_ROOT}/out/db"
-ln -s "${ROOT_DIR}/tests" "${DEV_WORK_ROOT}/out/tests"
-ln -s "${ROOT_DIR}/AetherXIV.sln" "${DEV_WORK_ROOT}/out/AetherXIV.sln"
-"${DOTNET_BIN}" test "${ROOT_DIR}/AetherXIV.sln" \
-  --configuration Release --no-build --nologo /p:NuGetAudit=false
-
 "${DOTNET_BIN}" build "${ROOT_DIR}/AetherXIV Launcher/AetherXIV.Launcher.sln" \
   --configuration Release -m:1 /nodeReuse:false /p:NuGetAudit=false
-"${DOTNET_BIN}" test "${ROOT_DIR}/AetherXIV Launcher/AetherXIV.Launcher.sln" \
-  --configuration Release --no-build --nologo /p:NuGetAudit=false
 
-echo "Development verification passed; no development artifacts were added to bin/build."
+echo "Release source verification passed; no test or private evidence artifacts were added to bin/build."

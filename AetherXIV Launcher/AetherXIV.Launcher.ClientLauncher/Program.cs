@@ -59,6 +59,7 @@ internal static class Program
             File.AppendAllText(options.LogPath, $"working_directory_exists={Directory.Exists(options.WorkingDirectory)}{Environment.NewLine}");
             File.AppendAllText(options.LogPath, $"server_host={options.ServerHost}{Environment.NewLine}");
             File.AppendAllText(options.LogPath, $"observe_ms={options.ObservationTimeoutMilliseconds}{Environment.NewLine}");
+            File.AppendAllText(options.LogPath, $"compatibility_runtime={options.CompatibilityRuntime}{Environment.NewLine}");
             File.AppendAllText(options.LogPath, $"session_length={options.SessionId.Length}{Environment.NewLine}");
             File.AppendAllText(options.LogPath, $"umbra_requested={options.Umbra.Enabled}{Environment.NewLine}");
             if (options.Umbra.Enabled)
@@ -69,8 +70,6 @@ internal static class Program
                 File.AppendAllText(options.LogPath, $"umbra_log={options.Umbra.LogPath}{Environment.NewLine}");
                 File.AppendAllText(options.LogPath, $"umbra_safe_mode={options.Umbra.SafeMode}{Environment.NewLine}");
                 File.AppendAllText(options.LogPath, $"umbra_load_delay_ms={options.Umbra.LoadDelayMilliseconds}{Environment.NewLine}");
-                File.AppendAllText(options.LogPath, $"umbra_repository_count={options.Umbra.RepositoryUrls.Count}{Environment.NewLine}");
-                File.AppendAllText(options.LogPath, $"umbra_repository_source_count={options.Umbra.RepositorySources.Count}{Environment.NewLine}");
                 File.AppendAllText(options.LogPath, $"umbra_enable_managed_on_wine={options.Umbra.EnableManagedOnWine}{Environment.NewLine}");
             }
             AppendFileProbe(options.LogPath, options.GamePath);
@@ -236,6 +235,7 @@ internal sealed record LaunchOptions(
     string ServerHost,
     string LogPath,
     uint ObservationTimeoutMilliseconds,
+    bool CompatibilityRuntime,
     UmbraLaunchOptions Umbra)
 {
     private const uint DefaultObservationTimeoutMilliseconds = 5000;
@@ -264,6 +264,7 @@ internal sealed record LaunchOptions(
             Required(values, "server-host"),
             Required(values, "log"),
             ParseObservationTimeout(values),
+            ParseBoolean(values, "compatibility-runtime"),
             ParseUmbraOptions(values));
     }
 
@@ -291,12 +292,6 @@ internal sealed record LaunchOptions(
         if (!ParseBoolean(values, "umbra-enabled"))
             return UmbraLaunchOptions.Disabled;
 
-        IReadOnlyList<string> repositoryUrls = UmbraRepositoryOptions.ParseRepositoryList(
-            values.TryGetValue("umbra-repository-urls", out string? urls) ? urls : "");
-        IReadOnlyList<UmbraRepositorySource> repositorySources = values.TryGetValue("umbra-repositories-json", out string? repositoriesJson)
-            ? UmbraRepositorySource.FromJson(repositoriesJson)
-            : UmbraRepositorySource.FromUrls(repositoryUrls, UmbraRepositorySource.Custom);
-
         return new UmbraLaunchOptions(
             true,
             ParseBoolean(values, "umbra-safe-mode"),
@@ -305,11 +300,13 @@ internal sealed record LaunchOptions(
             Required(values, "umbra-framework"),
             Required(values, "umbra-plugin-dir"),
             Required(values, "umbra-log"),
-            repositoryUrls,
-            EnableManagedOnWine: ParseBoolean(values, "umbra-enable-managed-on-wine"))
-            {
-                RepositorySources = repositorySources
-            }
+            EnableManagedOnWine: ParseBoolean(values, "umbra-enable-managed-on-wine"),
+            SupportedRepositoryUrl: values.TryGetValue("umbra-supported-repository", out string? supportedRepository)
+                ? supportedRepository.Trim()
+                : "",
+            BundledRepositoryPath: values.TryGetValue("umbra-bundled-repository", out string? bundledRepository)
+                ? bundledRepository.Trim()
+                : "")
             .Normalize();
     }
 

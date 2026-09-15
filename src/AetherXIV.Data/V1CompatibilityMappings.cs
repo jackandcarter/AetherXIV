@@ -115,7 +115,8 @@ public sealed record V1StaticActorSpawnRow(
     uint AnimationId,
     string? CustomDisplayName,
     string SourceRef,
-    EvidenceStatus EvidenceStatus = EvidenceStatus.RepoConfirmed);
+    EvidenceStatus EvidenceStatus = EvidenceStatus.RepoConfirmed,
+    uint? NativeActorSlot = null);
 
 public static class V1CompatibilityMappings
 {
@@ -227,6 +228,7 @@ public static class V1CompatibilityMappings
             row.ActorState,
             row.AnimationId,
             row.CustomDisplayName,
-            new ProvenanceRef(row.EvidenceStatus, "v1-sql", row.SourceRef, "Ported from legacy v1 server_spawn_locations."));
+            new ProvenanceRef(row.EvidenceStatus, "v1-sql", row.SourceRef, "Ported from legacy v1 server_spawn_locations."),
+            NativeActorSlot: row.NativeActorSlot);
     }
 }

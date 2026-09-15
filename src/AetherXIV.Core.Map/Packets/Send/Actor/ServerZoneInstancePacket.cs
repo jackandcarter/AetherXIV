@@ -12,7 +12,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
         public const uint PACKET_SIZE = 0x28;
 
         public static SubPacket BuildPacket(uint sourceActorId) =>
-            new SubPacket(OPCODE, sourceActorId, new byte[PACKET_SIZE - 0x20]);
+            ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.ServerZoneInstanceBeginPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.ServerZoneInstanceBeginPacket());
     }
 
     /// <summary>
@@ -33,16 +36,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
                 throw new ArgumentOutOfRangeException(nameof(actorIds), actorIds.Count,
                     "A counted mass-delete keep-list packet must contain between one and eight actor IDs.");
 
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-            using (MemoryStream stream = new MemoryStream(data))
-            using (BinaryWriter writer = new BinaryWriter(stream))
-            {
-                writer.Write((uint)actorIds.Count);
-                for (int index = 0; index < actorIds.Count; index++)
-                    writer.Write(actorIds[index]);
-            }
-
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.ServerZoneInstanceActorsPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.ServerZoneInstanceActorsPacket(actorIds));
         }
     }
 
@@ -65,15 +62,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
                 throw new ArgumentOutOfRangeException(nameof(actorIds), actorIds.Count,
                     "A 32-entry mass-delete keep-list packet must contain exactly 32 actor IDs.");
 
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-            using (MemoryStream stream = new MemoryStream(data))
-            using (BinaryWriter writer = new BinaryWriter(stream))
-            {
-                for (int index = 0; index < actorIds.Count; index++)
-                    writer.Write(actorIds[index]);
-            }
-
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.ServerZoneInstanceKeepActorsX32PacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.ServerZoneInstanceKeepActorsX32Packet(actorIds));
         }
     }
 
@@ -84,6 +76,9 @@ namespace AetherXIV.Core.Map.packets.send.actor
         public const uint PACKET_SIZE = 0x28;
 
         public static SubPacket BuildPacket(uint sourceActorId) =>
-            new SubPacket(OPCODE, sourceActorId, new byte[PACKET_SIZE - 0x20]);
+            ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.ServerZoneInstanceEndPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.ServerZoneInstanceEndPacket());
     }
 }

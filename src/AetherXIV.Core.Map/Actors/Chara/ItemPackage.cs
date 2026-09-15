@@ -863,6 +863,47 @@ namespace AetherXIV.Core.Map.actors.chara.player
             return endOfListIndex;
         }
 
+        //Legacy script surface (PopulaceGuildShop.lua, gcseals.lua): total stacked
+        //quantity of an item across this package, regardless of quality.
+        public int GetItemQuantity(uint itemId)
+        {
+            int count = 0;
+
+            for (int i = endOfListIndex - 1; i >= 0; i--)
+            {
+                InventoryItem item = list[i];
+
+                if (item != null && item.itemId == itemId)
+                    count += item.quantity;
+            }
+
+            return count;
+        }
+
+        //Legacy script surface (retainer.lua: SendUpdatePackets(player, true)).
+        //Sends the full package contents to a viewing player rather than only
+        //the locally-dirty slots. Delegates to the ordinary SendUpdate packet
+        //builder so there is exactly one inventory-update packet path.
+        public void SendUpdatePackets(Player player, bool fullRefresh)
+        {
+            if (!fullRefresh)
+            {
+                SendUpdate(player);
+                return;
+            }
+
+            for (int i = 0; i < endOfListIndex; i++)
+            {
+                if (list[i] != null)
+                    isDirty[i] = true;
+            }
+
+            for (int i = endOfListIndex; i < list.Length; i++)
+                isDirty[i] = true;
+
+            SendUpdate(player);
+        }
+
         private void DoRealign(bool persistPositions = true)
         {
             List<InventoryItem> positionUpdate = new List<InventoryItem>();

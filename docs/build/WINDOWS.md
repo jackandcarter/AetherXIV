@@ -1,5 +1,10 @@
 # Build AetherXIV on Windows
 
+Use `./tools/Windows/build-aetherxiv.ps1 -Configuration Release -Scope full`
+for the complete native Windows package or `-Scope core` for the Core stack.
+`-InstallDependencies` explicitly invokes the Windows provisioning helper;
+Windows packages never contain Wine or the Aether.3 compatibility runtime.
+
 This build produces the complete Windows 11 x64 release: Core, Launcher, server
 services, database tooling, client helpers, and Umbra.
 
@@ -61,14 +66,24 @@ Windows\
 └── Database\
 ```
 
-The Launcher contains self-contained x64 and x86 helpers. Umbra's bootstrap is
-always built for the legacy x86 game process.
+The Launcher contains self-contained x64 and x86 helpers, the locally built x86
+injector, and a locally built, integrity-pinned Umbra base framework for the
+legacy x86 game process. The build does not require the future update service.
+The bundled Discord Rich Presence plugin compiles against `Aether.Umbra.PluginApi`
+from the repository-local NuGet feed (`.umbra-nuget/`); it is packed
+automatically when missing, and CI populates it before each platform build.
+
+A core-only build is written separately to `bin\build\Release\Windows-Core`.
+The standalone Launcher download is assembled from the verified `launcher\`
+directory and contains Umbra and client helpers, but no Core, server, database,
+or Wine payload.
 
 ## Output reset warning
 
-The script recreates the selected Windows release and removes unexpected
-top-level content beneath `bin`. Keep all personal files and diagnostics outside
-`bin`.
+The script uses an isolated Windows staging directory, verifies it, then
+replaces the prior Windows package atomically. A failed build leaves the last
+verified package and other platform outputs intact. Keep all personal files and
+diagnostics outside `bin`.
 
 ## Verification
 

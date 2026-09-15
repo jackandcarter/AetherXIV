@@ -16,6 +16,7 @@ namespace AetherXIV.Core.Lobby
 
         public void ProcessPacket(ClientConnection client, BasePacket packet)
         {
+            DevDiagnostics.TraceWireBasePacket("Lobby", "client-to-lobby", packet);
 
             if ((packet.header.packetSize == 0x288) && (packet.data[0x34] == 'T'))		//Test Ticket Data
             {

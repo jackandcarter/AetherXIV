@@ -1,5 +1,9 @@
 # Build AetherXIV on SteamOS
 
+Use `./tools/SteamOS/build-aetherxiv.sh Release --scope full` or `--scope core`.
+SteamOS is immutable: `install-build-dependencies.sh` provisions an
+`aetherxiv-build` distrobox rather than modifying the gaming host.
+
 SteamOS uses the Linux ABI and build implementation but writes an independent
 SteamOS release directory.
 
@@ -18,14 +22,17 @@ changes, prefer a persistent development container or user-owned tool location.
 
 ## Build
 
-From the repository root:
+From the repository root. The SteamOS entry point sets the platform name to
+`SteamOS` and delegates to the Linux build recipe, preventing the two package
+formats from drifting. The package build produces the compatibility runtime
+automatically when `AETHERXIV_WINE_RUNTIME_ROOT` is unset (recipe:
+`tools/runtime/build-linux.sh`); to reuse an existing runtime package instead:
 
 ```bash
-./tools/SteamOS/build-aetherxiv.sh Release
+runtime_root="/tmp/aetherxiv-runtime-linux-x64-wow64"
+./tools/runtime/build-linux.sh "$runtime_root"
+AETHERXIV_WINE_RUNTIME_ROOT="$runtime_root" ./tools/SteamOS/build-aetherxiv.sh Release
 ```
-
-The entry point sets the platform name to `SteamOS` and delegates to the Linux
-build recipe, preventing the two package formats from drifting.
 
 ## Output
 
@@ -36,14 +43,25 @@ bin/build/Release/SteamOS/
 ```
 
 It includes Core, Launcher, all services, database tools, the Windows x64
-managed helper, and native x86 Umbra payload. Path-dependent `.desktop`
-shortcuts are intentionally not packaged.
+managed helper, native x86 injector, and locally built, integrity-pinned Umbra
+base framework. Path-dependent
+Relocatable `.desktop` templates are packaged with `Terminal=false`; edit `Exec`
+to the installed absolute path before adding one in Desktop Mode. The bundled Discord Rich
+Presence plugin compiles against `Aether.Umbra.PluginApi` from the
+repository-local NuGet feed (`.umbra-nuget/`), packed automatically when
+missing; CI populates it before each platform build.
+
+A core-only build is written separately to `bin/build/Release/SteamOS-Core`.
+The standalone Launcher download contains the verified `launcher/` directory,
+its Launcher desktop entry, Umbra, and the bundled compatibility runtime, but
+no Core, server, or database payload.
 
 ## Output reset and verification
 
-The build recreates the selected release and cleans repository-owned `bin`
-content. The final layout is verified automatically. Run the full test suite
-when preparing a release:
+The build uses an isolated SteamOS staging directory, verifies it, then replaces
+the prior SteamOS package atomically. A failed build leaves the last verified
+package and other platform outputs intact. Run the full test suite when
+preparing a release:
 
 ```bash
 ./tools/Development/verify-aetherxiv.sh

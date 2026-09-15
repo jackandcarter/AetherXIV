@@ -47,10 +47,19 @@ namespace
 {
     struct UmbraTheme;
     using hostfxr_handle = void*;
-    using hostfxr_initialize_for_runtime_config_fn = int(__cdecl*)(const wchar_t*, const void*, hostfxr_handle*);
+    struct hostfxr_initialize_parameters
+    {
+        size_t size;
+        const wchar_t* hostPath;
+        const wchar_t* dotnetRoot;
+    };
+    using hostfxr_initialize_for_runtime_config_fn = int(__cdecl*)(
+        const wchar_t*,
+        const hostfxr_initialize_parameters*,
+        hostfxr_handle*);
     using hostfxr_get_runtime_delegate_fn = int(__cdecl*)(hostfxr_handle, int, void**);
     using hostfxr_close_fn = int(__cdecl*)(hostfxr_handle);
-    using load_assembly_and_get_function_pointer_fn = int(__cdecl*)(
+    using load_assembly_and_get_function_pointer_fn = int(__stdcall*)(
         const wchar_t*,
         const wchar_t*,
         const wchar_t*,
@@ -232,7 +241,6 @@ namespace
     volatile LONG NativeReadyLogged = 0;
     volatile LONG NativeUiShellLogged = 0;
     volatile LONG NativeUiViewportLogged = 0;
-    volatile LONG NativeLibraryRenderedLogged = 0;
     volatile LONG ImGuiInitializedLogged = 0;
     volatile LONG ImGuiRenderLogged = 0;
     volatile LONG ImGuiFirstFrameDiagnosticsClaimed = 0;
@@ -246,6 +254,7 @@ namespace
     volatile LONG NativeDevBridgePort = DevBridgeDefaultPort;
     HANDLE NativeDevBridgeThreadHandle = nullptr;
     SOCKET NativeDevBridgeListenSocket = INVALID_SOCKET;
+    char NativeDevBridgeToken[65]{};
     HMODULE UmbraModule = nullptr;
     ImFont* UmbraUiFont = nullptr;
     umbra_render_bridge_fn ManagedRenderBridge = nullptr;
@@ -281,11 +290,8 @@ namespace
     bool DevBridgeControlKnown = false;
     bool ShowPluginExecutionWarning = false;
     int UmbraThemeIndex = 0;
-    int UmbraLibrarySection = 0;
-    int UmbraLibrarySelectedCard = 0;
     int UmbraSettingsSection = 0;
     int UmbraDeveloperLogLevel = 1;
-    bool UmbraLibraryGridView = false;
     bool UmbraDeveloperBarVisible = false;
     bool UmbraDeveloperLogOpen = false;
     bool UmbraDeveloperMetricsVisible = false;
@@ -328,7 +334,12 @@ namespace
         DWORD flags);
     bool HookUmbraWindowProc();
     bool ResolveDevBridgeControlPath(wchar_t* output, DWORD outputChars);
-    bool ReadDevBridgeControlState(bool* enabled, int* port = nullptr);
+    bool ReadDevBridgeControlState(
+        bool* enabled,
+        int* port = nullptr,
+        char* token = nullptr,
+        DWORD tokenBytes = 0);
+    bool EnsureNativeDevBridgeControlState();
     void RefreshDevBridgeControlState(bool force);
     void WriteDevBridgeControlState(bool enabled);
     DWORD WINAPI NativeDevBridgeThread(LPVOID);
@@ -809,7 +820,6 @@ namespace
     {
         PluginInstallerOpen = true;
         PluginManagerSettingsRequestPending = settings;
-        UmbraLibrarySection = settings ? 4 : 0;
         UmbraDockExpanded = true;
         UmbraDockLastInteractionTicks = GetTickCount();
     }
@@ -1124,7 +1134,6 @@ namespace
     {
         PluginInstallerOpen = true;
         PluginManagerSettingsRequestPending = true;
-        UmbraLibrarySection = 4;
         UmbraDockExpanded = true;
         UmbraDockLastInteractionTicks = GetTickCount();
     }
@@ -2685,503 +2694,43 @@ namespace
         ImGui::EndChild();
     }
 
-    bool DrawUmbraLibraryButton(
-        const char* id,
-        const char* label,
-        int icon,
-        float width,
-        bool primary,
-        bool enabled = true)
-    {
-        const UmbraTheme& theme = GetUmbraTheme();
-        const float height = 38.0f;
-        bool pressed = ImGui::InvisibleButton(id, ImVec2(width, height)) && enabled;
-        bool hovered = ImGui::IsItemHovered() && enabled;
-        ImVec2 min = ImGui::GetItemRectMin();
-        ImVec2 max = ImGui::GetItemRectMax();
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        ImVec4 fill = enabled
-            ? (primary ? (hovered ? theme.accentHover : theme.accentActive) : (hovered ? theme.buttonHovered : theme.button))
-            : ImVec4(theme.frameBg.x, theme.frameBg.y, theme.frameBg.z, 0.48f);
-        ImVec4 border = enabled
-            ? (primary ? theme.accentHover : (hovered ? theme.accent : theme.border))
-            : ImVec4(theme.border.x, theme.border.y, theme.border.z, 0.42f);
-        ImVec4 foreground = enabled ? theme.text : theme.mutedText;
-        drawList->AddRectFilled(ImVec2(min.x + 2.0f, min.y + 3.0f), ImVec2(max.x + 2.0f, max.y + 3.0f), ColorU32(theme.shadow), 8.0f);
-        drawList->AddRectFilled(min, max, ColorU32(fill), 8.0f);
-        drawList->AddRect(min, max, ColorU32(border), 8.0f, 0, hovered ? 1.6f : 1.0f);
-        if (primary && enabled)
-            drawList->AddLine(ImVec2(min.x + 8.0f, min.y + 1.0f), ImVec2(max.x - 8.0f, min.y + 1.0f), ColorU32(ImVec4(1, 1, 1, 0.22f)), 1.0f);
 
-        ImVec2 textSize = ImGui::CalcTextSize(label);
-        float iconSize = icon > 0 ? 17.0f : 0.0f;
-        float contentWidth = textSize.x + (iconSize > 0.0f ? iconSize + 8.0f : 0.0f);
-        float x = min.x + (width - contentWidth) * 0.5f;
-        if (iconSize > 0.0f)
-        {
-            DrawUmbraSdkIcon(drawList, icon, ImVec2(x + iconSize * 0.5f, min.y + height * 0.5f), iconSize, ColorU32(foreground));
-            x += iconSize + 8.0f;
-        }
-        drawList->AddText(ImVec2(x, min.y + (height - textSize.y) * 0.5f), ColorU32(foreground), label);
-        return pressed;
-    }
 
-    void DrawUmbraLibraryBadge(const char* label, const ImVec4& color, int icon = 0)
-    {
-        const float height = 24.0f;
-        const float iconSize = icon > 0 ? 12.0f : 0.0f;
-        ImVec2 textSize = ImGui::CalcTextSize(label);
-        float width = textSize.x + 16.0f + (iconSize > 0.0f ? iconSize + 5.0f : 0.0f);
-        ImGui::Dummy(ImVec2(width, height));
-        ImVec2 min = ImGui::GetItemRectMin();
-        ImVec2 max = ImGui::GetItemRectMax();
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        drawList->AddRectFilled(min, max, ColorU32(ImVec4(color.x, color.y, color.z, 0.14f)), 6.0f);
-        drawList->AddRect(min, max, ColorU32(ImVec4(color.x, color.y, color.z, 0.64f)), 6.0f, 0, 1.0f);
-        float x = min.x + 8.0f;
-        if (iconSize > 0.0f)
-        {
-            DrawUmbraSdkIcon(drawList, icon, ImVec2(x + iconSize * 0.5f, min.y + height * 0.5f), iconSize, ColorU32(color));
-            x += iconSize + 5.0f;
-        }
-        drawList->AddText(ImVec2(x, min.y + (height - textSize.y) * 0.5f), ColorU32(color), label);
-    }
 
-    void DrawUmbraLibraryArtwork(int icon, const ImVec4& accent, float size)
-    {
-        const UmbraTheme& theme = GetUmbraTheme();
-        ImGui::Dummy(ImVec2(size, size));
-        ImVec2 min = ImGui::GetItemRectMin();
-        ImVec2 max = ImGui::GetItemRectMax();
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        drawList->AddRectFilled(ImVec2(min.x + 3.0f, min.y + 4.0f), ImVec2(max.x + 3.0f, max.y + 4.0f), ColorU32(theme.shadow), 11.0f);
-        drawList->AddRectFilled(min, max, ColorU32(ImVec4(accent.x * 0.32f, accent.y * 0.32f, accent.z * 0.40f, 0.98f)), 11.0f);
-        drawList->AddRectFilled(ImVec2(min.x + 5.0f, min.y + 5.0f), ImVec2(max.x - 5.0f, max.y - 5.0f), ColorU32(ImVec4(accent.x, accent.y, accent.z, 0.25f)), 8.0f);
-        drawList->AddRect(min, max, ColorU32(ImVec4(accent.x, accent.y, accent.z, 0.92f)), 11.0f, 0, 1.5f);
-        DrawUmbraSdkIcon(drawList, icon, ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f), size * 0.48f, ColorU32(ImVec4(0.96f, 0.94f, 1.0f, 1.0f)));
-    }
 
-    bool DrawUmbraLibraryNav(const char* id, const char* label, int icon, bool active)
-    {
-        const UmbraTheme& theme = GetUmbraTheme();
-        float width = ImGui::GetContentRegionAvail().x;
-        bool pressed = ImGui::InvisibleButton(id, ImVec2(width, 42.0f));
-        bool hovered = ImGui::IsItemHovered();
-        ImVec2 min = ImGui::GetItemRectMin();
-        ImVec2 max = ImGui::GetItemRectMax();
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        if (active || hovered)
-        {
-            ImVec4 fill = active ? ImVec4(theme.accent.x, theme.accent.y, theme.accent.z, 0.16f) : ImVec4(theme.buttonHovered.x, theme.buttonHovered.y, theme.buttonHovered.z, 0.64f);
-            drawList->AddRectFilled(min, max, ColorU32(fill), 8.0f);
-            drawList->AddRect(min, max, ColorU32(active ? theme.accent : theme.border), 8.0f, 0, active ? 1.3f : 1.0f);
-        }
-        DrawUmbraSdkIcon(drawList, icon, ImVec2(min.x + 20.0f, min.y + 21.0f), 18.0f, ColorU32(active ? theme.accentHover : theme.mutedText));
-        drawList->AddText(ImVec2(min.x + 42.0f, min.y + 12.0f), ColorU32(active ? theme.text : theme.mutedText), label);
-        return pressed;
-    }
 
-    bool DrawUmbraLibraryTopTab(const char* id, const char* label, int icon, bool active, float width)
-    {
-        const UmbraTheme& theme = GetUmbraTheme();
-        bool pressed = ImGui::InvisibleButton(id, ImVec2(width, 48.0f));
-        bool hovered = ImGui::IsItemHovered();
-        ImVec2 min = ImGui::GetItemRectMin();
-        ImVec2 max = ImGui::GetItemRectMax();
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        if (active || hovered)
-            drawList->AddRectFilled(min, max, ColorU32(ImVec4(theme.accent.x, theme.accent.y, theme.accent.z, active ? 0.14f : 0.07f)), 8.0f);
-        if (active)
-            drawList->AddRectFilled(ImVec2(min.x, max.y - 2.0f), ImVec2(max.x, max.y), ColorU32(theme.accent), 2.0f);
-        DrawUmbraSdkIcon(drawList, icon, ImVec2(min.x + 22.0f, min.y + 23.0f), 17.0f, ColorU32(active ? theme.accentHover : theme.mutedText));
-        ImVec2 textSize = ImGui::CalcTextSize(label);
-        drawList->AddText(ImVec2(min.x + 40.0f, min.y + (48.0f - textSize.y) * 0.5f), ColorU32(active ? theme.text : theme.mutedText), label);
-        return pressed;
-    }
 
-    void DrawUmbraLibraryToggle(const char* id, const char* label, bool* value)
-    {
-        const UmbraTheme& theme = GetUmbraTheme();
-        bool pressed = ImGui::InvisibleButton(id, ImVec2(ImGui::GetContentRegionAvail().x, 34.0f));
-        if (pressed)
-            *value = !*value;
-        ImVec2 min = ImGui::GetItemRectMin();
-        ImDrawList* drawList = ImGui::GetWindowDrawList();
-        drawList->AddText(ImVec2(min.x, min.y + 8.0f), ColorU32(theme.text), label);
-        float trackX = min.x + ImGui::GetItemRectSize().x - 46.0f;
-        ImVec4 track = *value ? theme.accentActive : theme.frameBg;
-        drawList->AddRectFilled(ImVec2(trackX, min.y + 5.0f), ImVec2(trackX + 44.0f, min.y + 29.0f), ColorU32(track), 12.0f);
-        drawList->AddRect(ImVec2(trackX, min.y + 5.0f), ImVec2(trackX + 44.0f, min.y + 29.0f), ColorU32(*value ? theme.accentHover : theme.border), 12.0f);
-        float knobX = *value ? trackX + 32.0f : trackX + 12.0f;
-        drawList->AddCircleFilled(ImVec2(knobX, min.y + 17.0f), 8.0f, ColorU32(ImVec4(0.96f, 0.96f, 1.0f, 1.0f)), 24);
-    }
 
-    void DrawUmbraLibraryCard(
-        int cardIndex,
-        const char* name,
-        const char* author,
-        const char* description,
-        const char* version,
-        int icon,
-        const ImVec4& artworkColor,
-        bool installed)
-    {
-        const UmbraTheme& theme = GetUmbraTheme();
-        bool selected = UmbraLibrarySelectedCard == cardIndex;
-        char childId[48]{};
-        wsprintfA(childId, "##UmbraLibraryCard%d", cardIndex);
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, selected ? ImVec4(theme.buttonActive.x, theme.buttonActive.y, theme.buttonActive.z, 0.42f) : theme.childBg);
-        ImGui::PushStyleColor(ImGuiCol_Border, selected ? theme.accent : theme.border);
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
-        if (ImGui::BeginChild(childId, ImVec2(0.0f, 164.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding))
-        {
-            DrawUmbraLibraryArtwork(icon, artworkColor, 96.0f);
-            ImGui::SameLine(0.0f, 16.0f);
-            ImGui::BeginGroup();
-            ImGui::PushFont(nullptr, 21.0f);
-            ImGui::TextUnformatted(name);
-            ImGui::PopFont();
-            ImGui::TextColored(theme.mutedText, "by %s", author);
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - 12.0f);
-            ImGui::TextColored(theme.mutedText, "%s", description);
-            ImGui::PopTextWrapPos();
-            DrawUmbraLibraryBadge(installed ? "Verified" : "SDK Preview", installed ? ImVec4(0.42f, 0.92f, 0.28f, 1.0f) : theme.accent, installed ? 9 : 15);
-            ImGui::SameLine();
-            DrawUmbraLibraryBadge("API 2.0", theme.accent, 15);
-            ImGui::SameLine();
-            DrawUmbraLibraryBadge(version, theme.mutedText);
-            ImGui::EndGroup();
 
-            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 142.0f, ImGui::GetWindowHeight() - 53.0f));
-            char buttonId[48]{};
-            wsprintfA(buttonId, "##UmbraCardDetails%d", cardIndex);
-            if (DrawUmbraLibraryButton(buttonId, selected ? "Selected" : "Details", selected ? 15 : 7, 122.0f, selected))
-                UmbraLibrarySelectedCard = cardIndex;
-        }
-        ImGui::EndChild();
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor(2);
-    }
 
-    void DrawUmbraLibraryEmptyState(const char* title, const char* message, int icon)
-    {
-        const UmbraTheme& theme = GetUmbraTheme();
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, theme.childBg);
-        ImGui::PushStyleColor(ImGuiCol_Border, theme.border);
-        if (ImGui::BeginChild("##UmbraLibraryEmpty", ImVec2(0.0f, 250.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding))
-        {
-            float center = ImGui::GetWindowWidth() * 0.5f;
-            ImGui::SetCursorPosX(center - 30.0f);
-            DrawUmbraLibraryArtwork(icon, theme.accent, 60.0f);
-            ImGui::PushFont(nullptr, 21.0f);
-            ImVec2 titleSize = ImGui::CalcTextSize(title);
-            ImGui::SetCursorPosX(center - titleSize.x * 0.5f);
-            ImGui::TextUnformatted(title);
-            ImGui::PopFont();
-            ImVec2 messageSize = ImGui::CalcTextSize(message);
-            ImGui::SetCursorPosX(center - messageSize.x * 0.5f);
-            ImGui::TextColored(theme.mutedText, "%s", message);
-            ImGui::SetCursorPosX(center - 64.0f);
-            DrawUmbraLibraryButton("##UmbraEmptyRefresh", "Refresh", 18, 128.0f, true, false);
-        }
-        ImGui::EndChild();
-        ImGui::PopStyleColor(2);
-    }
 
-    void DrawUmbraLibraryDetailsPanel(float width, float height)
-    {
-        const UmbraTheme& theme = GetUmbraTheme();
-        const bool sdk = UmbraLibrarySelectedCard == 0;
-        const bool manager = UmbraLibrarySelectedCard == 1;
-        const char* title = sdk ? "Umbra Plugin SDK" : manager ? "Plugin Manager" : "Sample Plugin Template";
-        const char* description = sdk
-            ? "API 2.0 contracts, lifecycle services and graphical UI components for Umbra plugins."
-            : manager
-                ? "The native library shell remains available while the managed runtime initializes."
-                : "A starter plugin demonstrating manifests, lifecycle callbacks and styled components.";
-        int icon = sdk ? 12 : manager ? 2 : 3;
-        ImVec4 art = sdk ? theme.accent : manager ? ImVec4(0.18f, 0.68f, 0.82f, 1.0f) : ImVec4(0.78f, 0.52f, 0.16f, 1.0f);
 
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, theme.childBg);
-        ImGui::PushStyleColor(ImGuiCol_Border, theme.border);
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 10.0f);
-        if (ImGui::BeginChild("##UmbraLibraryDetails", ImVec2(width, height), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding))
-        {
-            DrawUmbraLibraryArtwork(icon, art, 76.0f);
-            ImGui::SameLine(0.0f, 14.0f);
-            ImGui::BeginGroup();
-            ImGui::PushFont(nullptr, 22.0f);
-            ImGui::TextWrapped("%s", title);
-            ImGui::PopFont();
-            ImGui::TextColored(theme.mutedText, "by AetherXIV");
-            DrawUmbraLibraryBadge("Verified", ImVec4(0.42f, 0.92f, 0.28f, 1.0f), 9);
-            ImGui::EndGroup();
-            ImGui::Spacing();
-            DrawUmbraLibraryBadge("API 2.0", theme.accent, 15);
-            ImGui::SameLine();
-            DrawUmbraLibraryBadge("No IPC", theme.mutedText);
-            ImGui::Separator();
-            ImGui::TextWrapped("%s", description);
-            ImGui::Spacing();
-
-            ImGui::TextColored(theme.mutedText, "Version");
-            ImGui::SameLine(ImGui::GetWindowWidth() - 74.0f);
-            ImGui::TextUnformatted(sdk ? "2.0" : "Built-in");
-            ImGui::TextColored(theme.mutedText, "Updated");
-            ImGui::SameLine(ImGui::GetWindowWidth() - 92.0f);
-            ImGui::TextUnformatted("Bundled");
-            ImGui::TextColored(theme.mutedText, "Category");
-            ImGui::SameLine(ImGui::GetWindowWidth() - 132.0f);
-            ImGui::TextUnformatted(sdk ? "Developer Tools" : "Framework");
-            ImGui::TextColored(theme.mutedText, "Author");
-            ImGui::SameLine(ImGui::GetWindowWidth() - 92.0f);
-            ImGui::TextUnformatted("AetherXIV");
-            ImGui::Separator();
-            ImGui::PushFont(nullptr, 18.0f);
-            ImGui::TextUnformatted("Foundation status");
-            ImGui::PopFont();
-            ImGui::BulletText("Graphical component library available");
-            ImGui::BulletText("DX9 render backend active");
-            ImGui::BulletText("Plugin API version 2.0");
-            ImGui::BulletText("Managed Wine host isolation pending");
-
-            ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 60.0f);
-            DrawUmbraLibraryButton("##UmbraIncludedButton", sdk ? "Included with Umbra" : "Framework component", 9, ImGui::GetContentRegionAvail().x, true, false);
-        }
-        ImGui::EndChild();
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor(2);
-    }
-
-    void DrawUmbraLibrarySettingsContent()
-    {
-        DrawUmbraEmbeddedSettingsContent();
-    }
-
-    void DrawUmbraLibraryRepositoriesContent()
-    {
-        const UmbraTheme& theme = GetUmbraTheme();
-        ImGui::PushFont(nullptr, 24.0f);
-        ImGui::TextUnformatted("Repositories");
-        ImGui::PopFont();
-        ImGui::TextColored(theme.mutedText, "Manage supported and custom plugin catalog sources.");
-        ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, theme.childBg);
-        if (ImGui::BeginChild("##UmbraRepositoryCard", ImVec2(0.0f, 176.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding))
-        {
-            DrawUmbraLibraryArtwork(5, theme.accent, 72.0f);
-            ImGui::SameLine(0.0f, 16.0f);
-            ImGui::BeginGroup();
-            ImGui::PushFont(nullptr, 19.0f);
-            ImGui::TextUnformatted("AetherXIV Supported Repository");
-            ImGui::PopFont();
-            ImGui::TextColored(theme.mutedText, "http://127.0.0.1:8080/launcher/umbra/plugin-catalog");
-            DrawUmbraLibraryBadge("Configured", ImVec4(0.42f, 0.92f, 0.28f, 1.0f), 15);
-            ImGui::SameLine();
-            DrawUmbraLibraryBadge("Awaiting managed catalog service", theme.warning, 16);
-            ImGui::EndGroup();
-            ImGui::SetCursorPos(ImVec2(ImGui::GetWindowWidth() - 154.0f, ImGui::GetWindowHeight() - 54.0f));
-            DrawUmbraLibraryButton("##RepositoryRefresh", "Refresh", 18, 134.0f, true, false);
-        }
-        ImGui::EndChild();
-        ImGui::PopStyleColor();
-    }
-
-    void DrawUmbraImGuiPluginInstallerWindow()
+    void DrawUmbraManagedFrameworkUnavailableWindow(int managedResult)
     {
         ImGuiIO& io = ImGui::GetIO();
-        const UmbraThemeTuning& tuning = GetUmbraThemeTuning();
-        float maximumWidth = io.DisplaySize.x - 36.0f;
-        float maximumHeight = io.DisplaySize.y - (UmbraDeveloperBarVisible ? 68.0f : 42.0f);
-        if (maximumWidth < 360.0f) maximumWidth = 360.0f;
-        if (maximumHeight < 300.0f) maximumHeight = 300.0f;
-        float minimumWidth = 900.0f * tuning.uiScale;
-        float minimumHeight = 590.0f * tuning.uiScale;
-        if (minimumWidth > maximumWidth) minimumWidth = maximumWidth;
-        if (minimumHeight > maximumHeight) minimumHeight = maximumHeight;
-        float width = 1460.0f * tuning.uiScale;
-        float height = 840.0f * tuning.uiScale;
-        if (width > maximumWidth) width = maximumWidth;
-        if (height > maximumHeight) height = maximumHeight;
-        if (width < minimumWidth) width = minimumWidth;
-        if (height < minimumHeight) height = minimumHeight;
-        ImGui::SetNextWindowPos(ImVec2((io.DisplaySize.x - width) * 0.5f, (io.DisplaySize.y - height) * 0.5f), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSizeConstraints(ImVec2(minimumWidth, minimumHeight), ImVec2(maximumWidth, maximumHeight));
-        ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
-        if (!ImGui::Begin("Umbra Plugin Library###UmbraNativePluginLibrary", &PluginInstallerOpen, flags))
+        const float width = 520.0f;
+        const float height = 210.0f;
+        ImGui::SetNextWindowPos(
+            ImVec2((io.DisplaySize.x - width) * 0.5f, (io.DisplaySize.y - height) * 0.5f),
+            ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_Appearing);
+        if (ImGui::Begin("Umbra recovery###UmbraManagedRecovery", &PluginInstallerOpen,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings))
         {
-            ImGui::End();
-            return;
-        }
-
-        const UmbraTheme& theme = GetUmbraTheme();
-        DrawUmbraWindowGradient();
-        DrawUmbraWindowAccent(theme);
-        if (InterlockedCompareExchange(&NativeLibraryRenderedLogged, 1, 0) == 0)
-            AppendDx9LogLiteral(L"umbra_native_plugin_library_concept_rendered=true");
-        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 9.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f, 14.0f));
-
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(theme.titleBg.x, theme.titleBg.y, theme.titleBg.z, 0.94f));
-        if (ImGui::BeginChild("##UmbraLibrarySidebar", ImVec2(220.0f, 0.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding))
-        {
-            ImGui::Dummy(ImVec2(46.0f, 54.0f));
-            ImVec2 logoMin = ImGui::GetItemRectMin();
-            DrawUmbraSigilGlyph(ImGui::GetWindowDrawList(), ImVec2(logoMin.x + 23.0f, logoMin.y + 25.0f), 22.0f, theme, true);
-            ImGui::SameLine(0.0f, 12.0f);
-            ImGui::BeginGroup();
-            ImGui::PushFont(nullptr, 25.0f);
-            ImGui::TextUnformatted("Umbra");
+            const UmbraTheme& theme = GetUmbraTheme();
+            ImGui::PushFont(nullptr, 20.0f);
+            ImGui::TextUnformatted("Umbra Plugin Manager could not start");
             ImGui::PopFont();
-            ImGui::TextColored(theme.mutedText, "Plugin Library");
-            ImGui::EndGroup();
             ImGui::Spacing();
-            if (DrawUmbraLibraryNav("##SideBrowse", "Browse", 2, UmbraLibrarySection == 0)) UmbraLibrarySection = 0;
-            if (DrawUmbraLibraryNav("##SideCategories", "Categories", 11, false)) UmbraLibrarySection = 0;
-            if (DrawUmbraLibraryNav("##SideCollections", "Collections", 9, false)) UmbraLibrarySection = 0;
+            ImGui::TextWrapped(
+                "The managed .NET 10 Umbra framework is unavailable. Third-party plugins are not being loaded. "
+                "Close the game and use the launcher's Umbra framework check before trying again.");
             ImGui::Spacing();
-            ImGui::Separator();
+            ImGui::TextColored(theme.warning, "Managed bridge status: 0x%08X", static_cast<unsigned int>(managedResult));
             ImGui::Spacing();
-            if (DrawUmbraLibraryNav("##SideSettings", "Settings", 6, UmbraLibrarySection == 4)) UmbraLibrarySection = 4;
-            if (DrawUmbraLibraryNav("##SideAbout", "About", 7, UmbraLibrarySection == 5)) UmbraLibrarySection = 5;
-
-            ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 154.0f);
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(theme.frameBg.x, theme.frameBg.y, theme.frameBg.z, 0.58f));
-            if (ImGui::BeginChild("##UmbraVerifiedCard", ImVec2(0.0f, 132.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding))
-            {
-                DrawUmbraLibraryBadge("Verified", ImVec4(0.42f, 0.92f, 0.28f, 1.0f), 9);
-                ImGui::TextUnformatted("Umbra Framework");
-                ImGui::TextColored(theme.mutedText, "API 2.0");
-                ImGui::TextColored(theme.accent, "Graphical SDK active");
-            }
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
-        }
-        ImGui::EndChild();
-        ImGui::PopStyleColor();
-
-        ImGui::SameLine(0.0f, 12.0f);
-        if (ImGui::BeginChild("##UmbraLibraryMain", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None))
-        {
-            if (DrawUmbraLibraryTopTab("##TopDiscover", "Discover", 2, UmbraLibrarySection == 0, 130.0f)) UmbraLibrarySection = 0;
-            ImGui::SameLine(0.0f, 4.0f);
-            if (DrawUmbraLibraryTopTab("##TopInstalled", "Installed", 3, UmbraLibrarySection == 1, 130.0f)) UmbraLibrarySection = 1;
-            ImGui::SameLine(0.0f, 4.0f);
-            if (DrawUmbraLibraryTopTab("##TopUpdates", "Updates", 4, UmbraLibrarySection == 2, 124.0f)) UmbraLibrarySection = 2;
-            ImGui::SameLine(0.0f, 4.0f);
-            if (DrawUmbraLibraryTopTab("##TopRepos", "Repositories", 5, UmbraLibrarySection == 3, 160.0f)) UmbraLibrarySection = 3;
-            ImGui::SameLine();
-            ImGui::SetCursorPosX(ImGui::GetWindowWidth() - 48.0f);
-            if (DrawUmbraLibraryButton("##UmbraLibraryClose", "", 17, 38.0f, false))
+            if (ImGui::Button("Close", ImVec2(96.0f, 30.0f)))
                 PluginInstallerOpen = false;
-            ImGui::Separator();
-
-            if (UmbraLibrarySection <= 2)
-            {
-                static char search[192]{};
-                static int category = 0;
-                static int author = 0;
-                static int sort = 0;
-                const char* categories[] = { "All Categories", "Developer Tools", "User Interface" };
-                const char* authors[] = { "All Authors", "AetherXIV" };
-                const char* sorts[] = { "Featured", "Name", "Recently Updated" };
-                float toolbarWidth = ImGui::GetContentRegionAvail().x;
-                bool compactToolbar = toolbarWidth < 940.0f;
-                ImGui::SetNextItemWidth(compactToolbar ? toolbarWidth : 280.0f);
-                ImGui::InputTextWithHint("##UmbraLibrarySearch", "Search plugins", search, sizeof(search));
-                if (compactToolbar)
-                    ImGui::Spacing();
-                else
-                    ImGui::SameLine();
-                ImGui::SetNextItemWidth(compactToolbar ? 154.0f : 166.0f);
-                ImGui::Combo("##UmbraCategory", &category, categories, 3);
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(150.0f);
-                ImGui::Combo("##UmbraAuthor", &author, authors, 2);
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(150.0f);
-                ImGui::Combo("##UmbraSort", &sort, sorts, 3);
-                ImGui::SameLine();
-                if (DrawUmbraLibraryButton("##UmbraGrid", "", 13, 38.0f, UmbraLibraryGridView)) UmbraLibraryGridView = true;
-                ImGui::SameLine(0.0f, 4.0f);
-                if (DrawUmbraLibraryButton("##UmbraList", "", 14, 38.0f, !UmbraLibraryGridView)) UmbraLibraryGridView = false;
-                ImGui::Spacing();
-
-                ImVec2 availableContent = ImGui::GetContentRegionAvail();
-                const float paneGap = 12.0f;
-                float usableWidth = availableContent.x - paneGap;
-                if (usableWidth < 2.0f)
-                    usableWidth = 2.0f;
-                float detailWidth = availableContent.x * 0.36f;
-                if (detailWidth < 280.0f)
-                    detailWidth = 280.0f;
-                else if (detailWidth > 360.0f)
-                    detailWidth = 360.0f;
-                if (detailWidth >= usableWidth)
-                {
-                    detailWidth = usableWidth * 0.42f;
-                    if (detailWidth < 1.0f)
-                        detailWidth = 1.0f;
-                }
-                float listWidth = usableWidth - detailWidth;
-                if (listWidth < 1.0f)
-                    listWidth = 1.0f;
-                float listHeight = 0.0f;
-                if (ImGui::BeginChild("##UmbraLibraryList", ImVec2(listWidth, listHeight), ImGuiChildFlags_None))
-                {
-                    ImGui::PushFont(nullptr, 24.0f);
-                    ImGui::TextUnformatted(UmbraLibrarySection == 0 ? "Framework Components" : UmbraLibrarySection == 1 ? "Installed Plugins" : "Plugin Updates");
-                    ImGui::PopFont();
-                    ImGui::TextColored(theme.mutedText, "%s", UmbraLibrarySection == 0
-                        ? "The graphical foundation available before repository metadata loads."
-                        : UmbraLibrarySection == 1
-                            ? "Manage built-in and third-party Umbra components."
-                            : "Installed versions are compared against configured repositories.");
-                    ImGui::Spacing();
-                    if (UmbraLibrarySection == 2)
-                    {
-                        DrawUmbraLibraryEmptyState("No updates available", "Repository comparison will resume with the managed catalog service.", 4);
-                    }
-                    else
-                    {
-                        DrawUmbraLibraryCard(0, "Umbra Plugin SDK", "AetherXIV", "API 2.0 contracts and a reusable graphical component toolkit.", "2.0", 12, theme.accent, true);
-                        ImGui::Spacing();
-                        DrawUmbraLibraryCard(1, "Plugin Manager", "AetherXIV", "Native plugin library shell, repository browser and lifecycle controls.", "Built-in", 2, ImVec4(0.18f, 0.68f, 0.82f, 1.0f), true);
-                        ImGui::Spacing();
-                        if (UmbraLibrarySection == 0)
-                            DrawUmbraLibraryCard(2, "Sample Plugin Template", "AetherXIV", "Starter manifest, lifecycle hooks and styled SDK component examples.", "SDK Sample", 3, ImVec4(0.78f, 0.52f, 0.16f, 1.0f), false);
-                    }
-                }
-                ImGui::EndChild();
-                ImGui::SameLine(0.0f, paneGap);
-                DrawUmbraLibraryDetailsPanel(detailWidth, listHeight);
-            }
-            else if (UmbraLibrarySection == 3)
-            {
-                DrawUmbraLibraryRepositoriesContent();
-            }
-            else if (UmbraLibrarySection == 4)
-            {
-                DrawUmbraLibrarySettingsContent();
-            }
-            else
-            {
-                ImGui::PushFont(nullptr, 24.0f);
-                ImGui::TextUnformatted("About Umbra");
-                ImGui::PopFont();
-                ImGui::TextColored(theme.mutedText, "A plugin framework and SDK for the FINAL FANTASY XIV 1.23b client.");
-                ImGui::Spacing();
-                DrawUmbraLibraryBadge("Umbra API 2.0", theme.accent, 1);
-                ImGui::SameLine();
-                DrawUmbraLibraryBadge("DX9 Ready", ImVec4(0.42f, 0.92f, 0.28f, 1.0f), 15);
-                ImGui::Separator();
-                ImGui::TextWrapped("This native graphical shell stays responsive independently of plugin runtime startup. Third-party plugin execution and repository installation will connect when the managed Wine host is isolated from the game render process.");
-            }
         }
-        ImGui::EndChild();
-
-        ImGui::PopStyleVar(2);
         ImGui::End();
     }
 
@@ -3267,7 +2816,6 @@ namespace
                 PluginInstallerOpen = true;
                 PluginManagerUpdatesRequestPending = true;
                 PluginManagerSettingsRequestPending = false;
-                UmbraLibrarySection = 2;
                 InterlockedExchange(&PluginUpdateToastStartTicks, 0);
             }
             y -= 50.0f;
@@ -3405,7 +2953,7 @@ namespace
         if (diagnoseFirstFrame)
             AppendDx9LogLiteral(L"umbra_imgui_first_frame_stage=managed_callback_complete");
         if (PluginInstallerOpen && managedResult != 0)
-            DrawUmbraImGuiPluginInstallerWindow();
+            DrawUmbraManagedFrameworkUnavailableWindow(managedResult);
 
         ImGui::Render();
         if (diagnoseFirstFrame)
@@ -4053,6 +3601,51 @@ namespace
         return true;
     }
 
+    bool ParseJsonString(
+        const char* json,
+        DWORD jsonLength,
+        const char* key,
+        char* output,
+        DWORD outputBytes)
+    {
+        if (json == nullptr || key == nullptr || output == nullptr || outputBytes < 2)
+            return false;
+
+        output[0] = '\0';
+        const char* found = FindAscii(json, jsonLength, key);
+        if (found == nullptr)
+            return false;
+
+        const char* end = json + jsonLength;
+        const char* cursor = found + AnsiLength(key);
+        while (cursor < end && *cursor != ':')
+            cursor++;
+        if (cursor >= end)
+            return false;
+        cursor++;
+        while (cursor < end && (*cursor == ' ' || *cursor == '\t'))
+            cursor++;
+        if (cursor >= end || *cursor != '"')
+            return false;
+        cursor++;
+
+        DWORD count = 0;
+        while (cursor < end && *cursor != '"' && count + 1 < outputBytes)
+        {
+            if (*cursor == '\\')
+                return false;
+            output[count++] = *cursor++;
+        }
+        if (cursor >= end || *cursor != '"')
+        {
+            output[0] = '\0';
+            return false;
+        }
+
+        output[count] = '\0';
+        return count > 0;
+    }
+
     bool ParseJsonPattern(
         const char* json,
         DWORD jsonLength,
@@ -4130,6 +3723,71 @@ namespace
         return true;
     }
 
+    bool IsValidDevBridgeToken(const char* token)
+    {
+        if (token == nullptr || AnsiLength(token) != 64)
+            return false;
+
+        for (DWORD index = 0; index < 64; index++)
+        {
+            char value = token[index];
+            if (!((value >= '0' && value <= '9')
+                || (value >= 'a' && value <= 'f')
+                || (value >= 'A' && value <= 'F')))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool GenerateDevBridgeToken(char* token, DWORD tokenBytes)
+    {
+        if (token == nullptr || tokenBytes < 65)
+            return false;
+
+        BYTE randomBytes[32]{};
+        bool generated = false;
+
+        HMODULE bcrypt = LoadLibraryW(L"bcrypt.dll");
+        if (bcrypt != nullptr)
+        {
+            using bcrypt_gen_random_fn = LONG (WINAPI*)(void*, BYTE*, ULONG, ULONG);
+            auto generate = reinterpret_cast<bcrypt_gen_random_fn>(
+                GetProcAddress(bcrypt, "BCryptGenRandom"));
+            if (generate != nullptr)
+                generated = generate(nullptr, randomBytes, sizeof(randomBytes), 0x00000002) >= 0;
+            FreeLibrary(bcrypt);
+        }
+
+        if (!generated)
+        {
+            HMODULE advapi = LoadLibraryW(L"advapi32.dll");
+            if (advapi != nullptr)
+            {
+                using rtl_gen_random_fn = BYTE (WINAPI*)(void*, ULONG);
+                auto generate = reinterpret_cast<rtl_gen_random_fn>(
+                    GetProcAddress(advapi, "SystemFunction036"));
+                if (generate != nullptr)
+                    generated = generate(randomBytes, sizeof(randomBytes)) != 0;
+                FreeLibrary(advapi);
+            }
+        }
+
+        if (!generated)
+            return false;
+
+        static const char Digits[] = "0123456789abcdef";
+        for (DWORD index = 0; index < sizeof(randomBytes); index++)
+        {
+            token[index * 2] = Digits[(randomBytes[index] >> 4) & 0x0f];
+            token[(index * 2) + 1] = Digits[randomBytes[index] & 0x0f];
+        }
+        token[64] = '\0';
+        return true;
+    }
+
     void EnsureDirectoryTree(const wchar_t* directory)
     {
         if (directory == nullptr || directory[0] == L'\0')
@@ -4180,7 +3838,7 @@ namespace
         return false;
     }
 
-    bool ReadDevBridgeControlState(bool* enabled, int* port)
+    bool ReadDevBridgeControlState(bool* enabled, int* port, char* token, DWORD tokenBytes)
     {
         if (enabled == nullptr)
             return false;
@@ -4222,6 +3880,11 @@ namespace
                 *port = DevBridgeDefaultPort;
             }
         }
+        if (token != nullptr && tokenBytes > 0)
+        {
+            if (!ParseJsonString(buffer, read, "\"token\"", token, tokenBytes))
+                token[0] = '\0';
+        }
         return true;
     }
 
@@ -4240,10 +3903,10 @@ namespace
         }
     }
 
-    void WriteDevBridgeControlState(bool enabled)
+    bool WriteDevBridgeControlDocument(bool enabled, int port, const char* token)
     {
         if (DevBridgeControlPath[0] == L'\0' && !ResolveDevBridgeControlPath(DevBridgeControlPath, BufferChars))
-            return;
+            return false;
 
         wchar_t parent[BufferChars]{};
         ParentDirectory(DevBridgeControlPath, parent, BufferChars);
@@ -4271,17 +3934,65 @@ namespace
             FILE_ATTRIBUTE_NORMAL,
             nullptr);
         if (file == INVALID_HANDLE_VALUE)
-            return;
+            return false;
+
+        wchar_t portText[16]{};
+        wsprintfW(portText, L"%d", port);
+        wchar_t tokenText[65]{};
+        if (token != nullptr)
+        {
+            for (DWORD index = 0; index < 64 && token[index] != '\0'; index++)
+                tokenText[index] = static_cast<wchar_t>(token[index]);
+        }
 
         WriteWide(file, L"{\n  \"enabled\": ");
         WriteWide(file, enabled ? L"true" : L"false");
-        WriteWide(file, L",\n  \"port\": 8797,\n  \"updated_at\": \"");
+        WriteWide(file, L",\n  \"port\": ");
+        WriteWide(file, portText);
+        WriteWide(file, L",\n  \"updated_at\": \"");
         WriteWide(file, timeText);
+        WriteWide(file, L"\",\n  \"token\": \"");
+        WriteWide(file, tokenText);
         WriteWide(file, L"\"\n}\n");
         CloseHandle(file);
 
         DevBridgeEnabled = enabled;
         DevBridgeControlKnown = true;
+        return true;
+    }
+
+    bool EnsureNativeDevBridgeControlState()
+    {
+        bool enabled = false;
+        int port = DevBridgeDefaultPort;
+        char token[65]{};
+        if (!ReadDevBridgeControlState(&enabled, &port, token, sizeof(token)))
+            return false;
+
+        if (!IsValidDevBridgeToken(token))
+        {
+            if (!GenerateDevBridgeToken(token, sizeof(token))
+                || !WriteDevBridgeControlDocument(enabled, port, token))
+            {
+                return false;
+            }
+        }
+
+        CopyMemory(NativeDevBridgeToken, token, sizeof(NativeDevBridgeToken));
+        return true;
+    }
+
+    void WriteDevBridgeControlState(bool enabled)
+    {
+        int port = DevBridgeDefaultPort;
+        char token[65]{};
+        bool existingEnabled = false;
+        ReadDevBridgeControlState(&existingEnabled, &port, token, sizeof(token));
+        if (!IsValidDevBridgeToken(token) && !GenerateDevBridgeToken(token, sizeof(token)))
+            return;
+
+        if (WriteDevBridgeControlDocument(enabled, port, token))
+            CopyMemory(NativeDevBridgeToken, token, sizeof(NativeDevBridgeToken));
     }
 
     void SendNativeDevBridgeJson(SOCKET client, int statusCode, const char* body)
@@ -4521,6 +4232,25 @@ namespace
         SendNativeDevBridgeJson(client, 200, body);
     }
 
+    bool IsNativeDevBridgeAuthorized(const char* request, DWORD requestLength)
+    {
+        if (request == nullptr || !IsValidDevBridgeToken(NativeDevBridgeToken))
+            return false;
+
+        char bearer[128]{};
+        AppendAnsi(bearer, sizeof(bearer), "Authorization: Bearer ");
+        AppendAnsi(bearer, sizeof(bearer), NativeDevBridgeToken);
+        AppendAnsi(bearer, sizeof(bearer), "\r\n");
+        if (FindAscii(request, requestLength, bearer) != nullptr)
+            return true;
+
+        char tokenHeader[128]{};
+        AppendAnsi(tokenHeader, sizeof(tokenHeader), "X-Aether-Umbra-Token: ");
+        AppendAnsi(tokenHeader, sizeof(tokenHeader), NativeDevBridgeToken);
+        AppendAnsi(tokenHeader, sizeof(tokenHeader), "\r\n");
+        return FindAscii(request, requestLength, tokenHeader) != nullptr;
+    }
+
     void HandleNativeDevBridgeClient(SOCKET client)
     {
         sockaddr_in peer{};
@@ -4542,6 +4272,8 @@ namespace
 
         if (StartsWithAscii(request, "GET /status "))
             HandleNativeDevBridgeStatus(client);
+        else if (!IsNativeDevBridgeAuthorized(request, static_cast<DWORD>(requestLength)))
+            SendNativeDevBridgeError(client, 401, "valid bridge token required");
         else if (StartsWithAscii(request, "GET /events"))
             SendNativeDevBridgeJson(client, 200, "{\"events\":[]}");
         else if (StartsWithAscii(request, "POST /memory/peek "))
@@ -4588,7 +4320,11 @@ namespace
         {
             bool enabled = false;
             int requestedPort = DevBridgeDefaultPort;
-            bool controlRead = ReadDevBridgeControlState(&enabled, &requestedPort);
+            bool controlRead = ReadDevBridgeControlState(
+                &enabled,
+                &requestedPort,
+                NativeDevBridgeToken,
+                sizeof(NativeDevBridgeToken));
             if (!controlRead || !enabled)
             {
                 if (NativeDevBridgeListenSocket != INVALID_SOCKET)
@@ -4654,6 +4390,11 @@ namespace
             return false;
         if (NativeDevBridgeThreadHandle != nullptr)
             return true;
+        if (!EnsureNativeDevBridgeControlState())
+        {
+            AppendLogLiteral(log, L"umbra_native_dev_bridge_control_invalid=true");
+            return false;
+        }
 
         InterlockedExchange(&NativeDevBridgeStopRequested, 0);
         NativeDevBridgeThreadHandle = CreateThread(nullptr, 0, NativeDevBridgeThread, nullptr, 0, nullptr);
@@ -4674,6 +4415,7 @@ namespace
         InterlockedExchange(&NativeDevBridgeRunning, 0);
         if (NativeDevBridgeThreadHandle != nullptr)
         {
+            WaitForSingleObject(NativeDevBridgeThreadHandle, 1000);
             CloseHandle(NativeDevBridgeThreadHandle);
             NativeDevBridgeThreadHandle = nullptr;
         }
@@ -4745,8 +4487,35 @@ namespace
         }
     }
 
-    HMODULE LoadHostFxr(HANDLE log, const wchar_t* assemblyPath)
+    bool ResolvePrivateRuntimeRoot(
+        const wchar_t* assemblyPath,
+        wchar_t* runtimeRoot,
+        DWORD runtimeRootChars)
     {
+        wchar_t assemblyDirectory[BufferChars]{};
+        wchar_t frameworkRoot[BufferChars]{};
+        ParentDirectory(assemblyPath, assemblyDirectory, BufferChars);
+        ParentDirectory(assemblyDirectory, frameworkRoot, BufferChars);
+        if (frameworkRoot[0] == L'\0')
+            return false;
+
+        CombinePath(frameworkRoot, L"Runtime", runtimeRoot, runtimeRootChars);
+        return runtimeRoot[0] != L'\0';
+    }
+
+    HMODULE LoadHostFxr(
+        HANDLE log,
+        const wchar_t* assemblyPath,
+        wchar_t* runtimeRoot,
+        DWORD runtimeRootChars)
+    {
+        if (!ResolvePrivateRuntimeRoot(assemblyPath, runtimeRoot, runtimeRootChars))
+        {
+            AppendLogLiteral(log, L"umbra_dotnet_root_resolve_failed=true");
+            return nullptr;
+        }
+        AppendLogValue(log, L"umbra_dotnet_root", runtimeRoot);
+
         wchar_t explicitPath[BufferChars]{};
         if (GetUmbraEnvironmentValue(L"HOSTFXR", explicitPath, BufferChars))
         {
@@ -4758,203 +4527,18 @@ namespace
             }
         }
 
-        wchar_t assemblyDirectory[BufferChars]{};
         wchar_t candidate[BufferChars]{};
-        ParentDirectory(assemblyPath, assemblyDirectory, BufferChars);
-        if (assemblyDirectory[0] != L'\0')
+        CombinePath(runtimeRoot, L"hostfxr.dll", candidate, BufferChars);
+        HMODULE privateModule = LoadLibraryW(candidate);
+        if (privateModule != nullptr)
         {
-            CombinePath(assemblyDirectory, L"hostfxr.dll", candidate, BufferChars);
-            HMODULE module = LoadLibraryW(candidate);
-            if (module != nullptr)
-            {
-                AppendLogValue(log, L"umbra_hostfxr", candidate);
-                return module;
-            }
+            AppendLogValue(log, L"umbra_hostfxr", candidate);
+            return privateModule;
         }
-
-        HMODULE module = LoadLibraryW(L"hostfxr.dll");
-        if (module != nullptr)
-        {
-            AppendLogLiteral(log, L"umbra_hostfxr=hostfxr.dll");
-            return module;
-        }
-
         AppendLogUInt(log, L"umbra_hostfxr_load_failed", GetLastError());
         return nullptr;
     }
 
-    bool StartManagedFrameworkWithCoreClr(HANDLE log, const wchar_t* assemblyPath)
-    {
-        AppendLogLiteral(log, L"umbra_coreclr_fallback=true");
-
-        wchar_t assemblyDirectory[BufferChars]{};
-        wchar_t coreClrPath[BufferChars]{};
-        ParentDirectory(assemblyPath, assemblyDirectory, BufferChars);
-        if (assemblyDirectory[0] == L'\0')
-        {
-            AppendLogLiteral(log, L"umbra_coreclr_failed=missing_assembly_directory");
-            return false;
-        }
-
-        CombinePath(assemblyDirectory, L"coreclr.dll", coreClrPath, BufferChars);
-        if (!FileExists(coreClrPath))
-        {
-            AppendLogLiteral(log, L"umbra_coreclr_failed=missing_coreclr");
-            return false;
-        }
-
-        HMODULE coreClr = LoadLibraryW(coreClrPath);
-        if (coreClr == nullptr)
-        {
-            AppendLogUInt(log, L"umbra_coreclr_load_failed", GetLastError());
-            return false;
-        }
-
-        AppendLogValue(log, L"umbra_coreclr", coreClrPath);
-        auto initialize = reinterpret_cast<coreclr_initialize_fn>(
-            GetProcAddress(coreClr, "coreclr_initialize"));
-        auto createDelegate = reinterpret_cast<coreclr_create_delegate_fn>(
-            GetProcAddress(coreClr, "coreclr_create_delegate"));
-        if (initialize == nullptr || createDelegate == nullptr)
-        {
-            AppendLogLiteral(log, L"umbra_coreclr_export_failed=true");
-            return false;
-        }
-
-        HANDLE heap = GetProcessHeap();
-        char* trustedPlatformAssemblies = static_cast<char*>(HeapAlloc(heap, 0, CoreClrPropertyBytes));
-        char* appPaths = static_cast<char*>(HeapAlloc(heap, 0, CoreClrPropertyBytes));
-        char* exePath = static_cast<char*>(HeapAlloc(heap, 0, CoreClrPropertyBytes));
-        if (trustedPlatformAssemblies == nullptr || appPaths == nullptr || exePath == nullptr)
-        {
-            AppendLogLiteral(log, L"umbra_coreclr_failed=allocation");
-            if (trustedPlatformAssemblies != nullptr)
-                HeapFree(heap, 0, trustedPlatformAssemblies);
-            if (appPaths != nullptr)
-                HeapFree(heap, 0, appPaths);
-            if (exePath != nullptr)
-                HeapFree(heap, 0, exePath);
-            return false;
-        }
-
-        appPaths[0] = '\0';
-        exePath[0] = '\0';
-        if (!BuildTrustedPlatformAssemblies(assemblyDirectory, trustedPlatformAssemblies, CoreClrPropertyBytes))
-        {
-            AppendLogLiteral(log, L"umbra_coreclr_failed=empty_tpa");
-            HeapFree(heap, 0, trustedPlatformAssemblies);
-            HeapFree(heap, 0, appPaths);
-            HeapFree(heap, 0, exePath);
-            return false;
-        }
-
-        AppendUtf8Wide(appPaths, CoreClrPropertyBytes, assemblyDirectory);
-        AppendUtf8Wide(exePath, CoreClrPropertyBytes, assemblyPath);
-        AppendLogUInt(log, L"umbra_coreclr_tpa_length", AnsiLength(trustedPlatformAssemblies));
-
-        const char* propertyKeys[] =
-        {
-            "TRUSTED_PLATFORM_ASSEMBLIES",
-            "APP_PATHS",
-            "APP_NI_PATHS",
-            "NATIVE_DLL_SEARCH_DIRECTORIES",
-            "APP_CONTEXT_BASE_DIRECTORY"
-        };
-        const char* propertyValues[] =
-        {
-            trustedPlatformAssemblies,
-            appPaths,
-            appPaths,
-            appPaths,
-            appPaths
-        };
-
-        void* hostHandle = nullptr;
-        unsigned int domainId = 0;
-        int rc = initialize(
-            exePath,
-            "Aether.Umbra",
-            static_cast<int>(sizeof(propertyKeys) / sizeof(propertyKeys[0])),
-            propertyKeys,
-            propertyValues,
-            &hostHandle,
-            &domainId);
-        AppendLogHex(log, L"umbra_coreclr_initialize", rc);
-        if (rc != 0 || hostHandle == nullptr)
-        {
-            HeapFree(heap, 0, trustedPlatformAssemblies);
-            HeapFree(heap, 0, appPaths);
-            HeapFree(heap, 0, exePath);
-            return false;
-        }
-
-        void* entryPoint = nullptr;
-        rc = createDelegate(
-            hostHandle,
-            domainId,
-            "Aether.Umbra.Framework",
-            "Aether.Umbra.Framework.UmbraInProcessEntryPoint",
-            "UmbraBootstrapCoreClr",
-            &entryPoint);
-        AppendLogHex(log, L"umbra_coreclr_create_delegate", rc);
-        if (rc != 0 || entryPoint == nullptr)
-        {
-            HeapFree(heap, 0, trustedPlatformAssemblies);
-            HeapFree(heap, 0, appPaths);
-            HeapFree(heap, 0, exePath);
-            return false;
-        }
-
-        void* renderBridge = nullptr;
-        rc = createDelegate(
-            hostHandle,
-            domainId,
-            "Aether.Umbra.Framework",
-            "Aether.Umbra.Framework.UmbraManagedRenderEntryPoint",
-            "UmbraRenderBridgeCoreClr",
-            &renderBridge);
-        AppendLogHex(log, L"umbra_coreclr_render_bridge_delegate", rc);
-        if (rc == 0 && renderBridge != nullptr)
-        {
-            AppendLogLiteral(log, L"umbra_managed_render_bridge_resolved=true");
-            AppendLogLiteral(log, L"umbra_managed_render_bridge_state=waiting_for_bootstrap");
-        }
-        else
-        {
-            AppendLogLiteral(log, L"umbra_managed_render_bridge_resolved=false");
-        }
-
-        wchar_t managedLogPath[BufferChars]{};
-        GetUmbraEnvironmentValue(L"LOG", managedLogPath, BufferChars);
-        AppendLogValue(log, L"umbra_coreclr_managed_log_arg", managedLogPath);
-        AppendLogLiteral(log, L"umbra_coreclr_in_process_start=true");
-        int managedResult = reinterpret_cast<coreclr_bootstrap_fn>(entryPoint)(
-            managedLogPath,
-            static_cast<int>((StringLength(managedLogPath) + 1) * sizeof(wchar_t)));
-        AppendLogUInt(log, L"umbra_coreclr_in_process_result", static_cast<unsigned long>(managedResult));
-
-        // Resolving a CoreCLR delegate does not mean the runtime is ready to
-        // accept calls from the DX9 render thread. In particular, Wine can
-        // block indefinitely while entering the first managed bootstrap
-        // method. Publishing the delegate before that call completed caused
-        // Present() to enter CoreCLR concurrently and freeze the game on a
-        // black frame. Keep native rendering independent until managed
-        // bootstrap has returned successfully.
-        if (managedResult == 0 && renderBridge != nullptr)
-        {
-            ManagedRenderBridge = reinterpret_cast<umbra_render_bridge_fn>(renderBridge);
-            AppendLogLiteral(log, L"umbra_managed_render_bridge_published=true");
-        }
-        else if (renderBridge != nullptr)
-        {
-            AppendLogLiteral(log, L"umbra_managed_render_bridge_published=false");
-        }
-
-        HeapFree(heap, 0, trustedPlatformAssemblies);
-        HeapFree(heap, 0, appPaths);
-        HeapFree(heap, 0, exePath);
-        return managedResult == 0;
-    }
 
     bool StartManagedFrameworkInProcess(HANDLE log, const wchar_t* frameworkPath)
     {
@@ -4993,7 +4577,8 @@ namespace
             return false;
         }
 
-        HMODULE hostfxr = LoadHostFxr(log, assemblyPath);
+        wchar_t runtimeRoot[BufferChars]{};
+        HMODULE hostfxr = LoadHostFxr(log, assemblyPath, runtimeRoot, BufferChars);
         if (hostfxr == nullptr)
             return false;
 
@@ -5011,10 +4596,22 @@ namespace
         }
 
         hostfxr_handle context = nullptr;
-        int rc = initialize(runtimeConfigPath, nullptr, &context);
+        wchar_t hostPath[BufferChars]{};
+        GetModuleFileNameW(nullptr, hostPath, BufferChars);
+        AppendLogValue(log, L"umbra_host_path", hostPath);
+        hostfxr_initialize_parameters parameters
+        {
+            sizeof(hostfxr_initialize_parameters),
+            hostPath[0] == L'\0' ? nullptr : hostPath,
+            runtimeRoot
+        };
+        int rc = initialize(runtimeConfigPath, &parameters, &context);
         AppendLogHex(log, L"umbra_hostfxr_initialize", rc);
         if (rc != 0 || context == nullptr)
-            return StartManagedFrameworkWithCoreClr(log, assemblyPath);
+        {
+            AppendLogLiteral(log, L"umbra_framework_host_failed=hostfxr_initialize");
+            return false;
+        }
 
         void* loadAssembly = nullptr;
         rc = getDelegate(context, HostFxrDelegateLoadAssemblyAndGetFunctionPointer, &loadAssembly);
@@ -5086,21 +4683,15 @@ namespace
         wchar_t frameworkPath[BufferChars]{};
         wchar_t pluginDirectory[BufferChars]{};
         wchar_t safeMode[32]{};
-        wchar_t repositoryUrls[BufferChars]{};
-        wchar_t repositoriesJson[BufferChars]{};
         GetUmbraEnvironmentValue(L"FRAMEWORK", frameworkPath, BufferChars);
         GetUmbraEnvironmentValue(L"PLUGIN_DIR", pluginDirectory, BufferChars);
         GetUmbraEnvironmentValue(L"SAFE_MODE", safeMode, 32);
-        GetUmbraEnvironmentValue(L"REPOSITORY_URLS", repositoryUrls, BufferChars);
-        GetUmbraEnvironmentValue(L"REPOSITORIES_JSON", repositoriesJson, BufferChars);
 
         AppendLogLiteral(log, L"umbra_bootstrap_loaded=true");
         AppendLogLiteral(log, L"umbra_dllmain_process_attach=true");
         AppendLogValue(log, L"umbra_framework", frameworkPath);
         AppendLogValue(log, L"umbra_plugin_dir", pluginDirectory);
         AppendLogValue(log, L"umbra_safe_mode", safeMode);
-        AppendLogValue(log, L"umbra_repository_urls", repositoryUrls);
-        AppendLogValue(log, L"umbra_repositories_json", repositoriesJson);
         AppendLogLiteral(log, L"umbra_host_mode=in_process");
         AppendLogLiteral(log, L"umbra_dx9_hook_layer=pending");
         AppendLogLiteral(log, L"umbra_imgui_backend=pending");
@@ -5109,6 +4700,10 @@ namespace
             IsTruthy(safeMode)
                 ? L"umbra_plugin_execution_enabled=false_safe_mode"
                 : L"umbra_plugin_execution_enabled=true");
+        // Start the native listener before attempting CoreCLR. Wine can stall
+        // indefinitely while entering the first managed method even after all
+        // delegates resolve. The managed bridge explicitly takes ownership of
+        // the port immediately before it binds, so this fallback cannot race it.
         StartNativeDevBridgeMonitor(log);
         StartLegacyMainMenuHook(log);
         StartDx9HookLayer(log);
@@ -5132,6 +4727,26 @@ bool IsManagedUiCallAvailable()
     return InterlockedCompareExchange(&ManagedUiCallbackActive, 0, 0) != 0
         && ManagedRenderThreadId == GetCurrentThreadId()
         && ImGui::GetCurrentContext() != nullptr;
+}
+
+extern "C" __declspec(dllexport) void __stdcall UmbraDevBridgeSetManagedOwnership(int managedOwnsBridge)
+{
+    if (managedOwnsBridge != 0)
+    {
+        StopNativeDevBridgeMonitor();
+        AppendDx9LogLiteral(L"umbra_dev_bridge_owner=managed");
+        return;
+    }
+
+    HANDLE log = OpenBootstrapLog();
+    if (log == INVALID_HANDLE_VALUE)
+        return;
+
+    bool started = StartNativeDevBridgeMonitor(log);
+    AppendLogLiteral(log, started
+        ? L"umbra_dev_bridge_owner=native_fallback"
+        : L"umbra_dev_bridge_owner=native_fallback_failed");
+    CloseHandle(log);
 }
 
 ImVec4 UmbraUiToneColor(int tone)
@@ -5603,6 +5218,70 @@ extern "C" __declspec(dllexport) int __stdcall UmbraUiToggle(const char* label, 
     return pressed ? 1 : 0;
 }
 
+extern "C" __declspec(dllexport) int __stdcall UmbraUiInputInt(const char* label, int* value, int step)
+{
+    if (!IsManagedUiCallAvailable() || ManagedUiWindowDepth <= 0 || label == nullptr || value == nullptr)
+        return 0;
+    ImGui::SetNextItemWidth(-1.0f);
+    return ImGui::InputInt(label, value, step > 0 ? step : 1) ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) int __stdcall UmbraUiSliderInt(
+    const char* label,
+    int* value,
+    int minimum,
+    int maximum)
+{
+    if (!IsManagedUiCallAvailable() || ManagedUiWindowDepth <= 0 || label == nullptr || value == nullptr)
+        return 0;
+    ImGui::SetNextItemWidth(-1.0f);
+    return ImGui::SliderInt(label, value, minimum, maximum) ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) int __stdcall UmbraUiSliderFloat(
+    const char* label,
+    float* value,
+    float minimum,
+    float maximum)
+{
+    if (!IsManagedUiCallAvailable() || ManagedUiWindowDepth <= 0 || label == nullptr || value == nullptr)
+        return 0;
+    ImGui::SetNextItemWidth(-1.0f);
+    return ImGui::SliderFloat(label, value, minimum, maximum) ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) int __stdcall UmbraUiCombo(
+    const char* label,
+    int* selectedIndex,
+    const char* items)
+{
+    if (!IsManagedUiCallAvailable()
+        || ManagedUiWindowDepth <= 0
+        || label == nullptr
+        || selectedIndex == nullptr
+        || items == nullptr)
+    {
+        return 0;
+    }
+    ImGui::SetNextItemWidth(-1.0f);
+    return ImGui::Combo(label, selectedIndex, items) ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) int __stdcall UmbraUiCollapsingHeader(const char* label, int defaultOpen)
+{
+    if (!IsManagedUiCallAvailable() || ManagedUiWindowDepth <= 0 || label == nullptr)
+        return 0;
+    ImGuiTreeNodeFlags flags = defaultOpen != 0 ? ImGuiTreeNodeFlags_DefaultOpen : ImGuiTreeNodeFlags_None;
+    return ImGui::CollapsingHeader(label, flags) ? 1 : 0;
+}
+
+extern "C" __declspec(dllexport) void __stdcall UmbraUiProgressBar(float fraction, const char* overlay)
+{
+    if (!IsManagedUiCallAvailable() || ManagedUiWindowDepth <= 0)
+        return;
+    ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f), overlay == nullptr ? "" : overlay);
+}
+
 extern "C" __declspec(dllexport) void __stdcall UmbraUiSameLine()
 {
     if (IsManagedUiCallAvailable() && ManagedUiWindowDepth > 0)
@@ -5658,6 +5337,296 @@ extern "C" __declspec(dllexport) void __stdcall UmbraUiBadge(const char* text, i
     }
     drawList->AddText(ImVec2(x, min.y + (height - textSize.y) * 0.5f), ColorU32(color), text);
 }
+
+    // ---------------------------------------------------------------------------
+    // Native crash recorder (observation-only).
+    //
+    // When the client faults (the tutorial Confirm click is the current case),
+    // wine raises its crash dialog and the details are easy to lose. This
+    // recorder captures the exception code, faulting address, module/offset,
+    // and a guarded frame-walk backtrace into the bootstrap log
+    // (AETHER_UMBRA_LOG / helper log) BEFORE wine's dialog, so the crash is
+    // never lost again.
+    //
+    // It never claims the exception: both hooks return EXCEPTION_CONTINUE_SEARCH
+    // so normal handling (wine's dialog) still runs. A reentrancy guard bounds
+    // the recorder itself in case the faulting stack is corrupt.
+    //
+    // * First-chance vectored handler: logs only hard fault codes
+    //   (access violation, illegal instruction, integer faults, stack
+    //   overflow, in-page error) so handled C++/SEH exceptions do not spam.
+    // * Unhandled filter backstop: fires only for exceptions the client left
+    //   unhandled (including MSVC C++ exceptions 0xE06D7363).
+    // ---------------------------------------------------------------------------
+
+    constexpr DWORD CrashMaxFrames = 12;
+    constexpr DWORD CrashLogLimit = 32;
+
+    volatile LONG CrashRecorderActive = 0;
+    volatile LONG CrashLogCount = 0;
+    volatile LONG CrashLastCode = 0;
+    volatile LONG CrashLastAddress = 0;
+    volatile LONG CrashLastTicks = 0;
+    PVOID CrashPreviousUnhandledFilter = nullptr;
+    PVOID CrashVectoredHandlerHandle = nullptr;
+
+    bool IsCrashWorthyCode(DWORD code)
+    {
+        switch (code)
+        {
+            case 0xC0000005u: // EXCEPTION_ACCESS_VIOLATION
+            case 0xC0000006u: // EXCEPTION_IN_PAGE_ERROR
+            case 0xC000001Du: // EXCEPTION_ILLEGAL_INSTRUCTION
+            case 0xC0000094u: // EXCEPTION_INT_DIVIDE_BY_ZERO
+            case 0xC0000095u: // EXCEPTION_INT_OVERFLOW
+            case 0xC0000096u: // EXCEPTION_PRIV_INSTRUCTION
+            case 0xC00000FDu: // EXCEPTION_STACK_OVERFLOW
+            case 0xC0000409u: // EXCEPTION_STACK_BUFFER_OVERRUN
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool ShouldLogCrash(DWORD code, DWORD address)
+    {
+        if (CrashLogCount >= CrashLogLimit)
+            return false;
+
+        LONG now = static_cast<LONG>(GetTickCount());
+        if (CrashLastCode == static_cast<LONG>(code)
+            && CrashLastAddress == static_cast<LONG>(address)
+            && (now - CrashLastTicks) < 2000)
+        {
+            return false;
+        }
+
+        CrashLastCode = static_cast<LONG>(code);
+        CrashLastAddress = static_cast<LONG>(address);
+        CrashLastTicks = now;
+        InterlockedIncrement(&CrashLogCount);
+        return true;
+    }
+
+    void FormatCrashHex(DWORD value, wchar_t* buffer, DWORD bufferChars)
+    {
+        static const wchar_t CrashDigits[] = L"0123456789ABCDEF";
+        if (bufferChars < 3)
+            return;
+
+        buffer[0] = L'0';
+        buffer[1] = L'x';
+
+        bool started = false;
+        DWORD out = 2;
+        for (int shift = 28; shift >= 0 && out + 1 < bufferChars; shift -= 4)
+        {
+            unsigned int nibble = (value >> shift) & 0xF;
+            if (nibble != 0 || started || shift == 0)
+            {
+                started = true;
+                buffer[out++] = static_cast<wchar_t>(CrashDigits[nibble]);
+            }
+        }
+        buffer[out] = L'\0';
+    }
+
+    void FormatCrashModuleName(HMODULE module, wchar_t* buffer, DWORD bufferChars)
+    {
+        wchar_t path[1024]{};
+        if (module != nullptr && GetModuleFileNameW(module, path, 1024) > 0)
+        {
+            const wchar_t* base = path;
+            for (const wchar_t* cursor = path; *cursor != L'\0'; cursor++)
+            {
+                if (*cursor == L'\\' || *cursor == L'/')
+                    base = cursor + 1;
+            }
+            CopyString(buffer, bufferChars, base);
+            return;
+        }
+
+        CopyString(buffer, bufferChars, L"unknown");
+    }
+
+    DWORD WalkCrashFrames(const CONTEXT* context, DWORD* frames, DWORD maxFrames)
+    {
+        if (context == nullptr || frames == nullptr || maxFrames == 0)
+            return 0;
+
+        DWORD count = 0;
+        frames[count++] = context->Eip;
+        if (count >= maxFrames)
+            return count;
+
+        DWORD frame = context->Ebp;
+        while (frame >= 0x10000 && count < maxFrames)
+        {
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (VirtualQuery(reinterpret_cast<LPCVOID>(frame), &mbi, sizeof(mbi)) != sizeof(mbi))
+                break;
+
+            if (mbi.State != MEM_COMMIT
+                || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0
+                || (mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY
+                                   | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) == 0)
+            {
+                break;
+            }
+
+            DWORD regionStart = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(mbi.BaseAddress));
+            DWORD regionEnd = regionStart + static_cast<DWORD>(mbi.RegionSize);
+            if (frame < regionStart || frame + 8 > regionEnd)
+                break;
+
+            DWORD nextFrame = *reinterpret_cast<DWORD*>(frame);
+            DWORD returnAddress = *reinterpret_cast<DWORD*>(frame + 4);
+            if (nextFrame <= frame)
+                break;
+
+            frames[count++] = returnAddress;
+            frame = nextFrame;
+        }
+
+        return count;
+    }
+
+    void AppendCrashModuleOffset(HANDLE log, const wchar_t* key, DWORD address)
+    {
+        HMODULE module = nullptr;
+        if (GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCWSTR>(static_cast<ULONG_PTR>(address)),
+                &module) != 0 && module != nullptr)
+        {
+            wchar_t buffer[1024]{};
+            FormatCrashModuleName(module, buffer, 1024);
+            AppendLogValue(log, key, buffer);
+
+            wchar_t offsetKey[64]{};
+            CopyString(offsetKey, 64, key);
+            AppendString(offsetKey, 64, L"_offset");
+
+            wchar_t offset[64]{};
+            FormatCrashHex(address - static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(module)), offset, 64);
+            AppendLogValue(log, offsetKey, offset);
+        }
+        else
+        {
+            AppendLogValue(log, key, L"unknown");
+        }
+    }
+
+    void WriteCrashRecord(const EXCEPTION_RECORD* record, const CONTEXT* context, const wchar_t* source)
+    {
+        if (record == nullptr || context == nullptr)
+            return;
+        if (InterlockedCompareExchange(&CrashRecorderActive, 1, 0) != 0)
+            return;
+
+        HANDLE log = OpenBootstrapLog();
+        if (log != INVALID_HANDLE_VALUE)
+        {
+            wchar_t buffer[1024]{};
+            DWORD code = record->ExceptionCode;
+            DWORD address = static_cast<DWORD>(reinterpret_cast<ULONG_PTR>(record->ExceptionAddress));
+
+            AppendLogValue(log, L"umbra_crash_source", source);
+            AppendLogLiteral(log, L"umbra_crash=begin");
+
+            FormatCrashHex(code, buffer, 1024);
+            AppendLogValue(log, L"umbra_crash_code", buffer);
+
+            FormatCrashHex(address, buffer, 1024);
+            AppendLogValue(log, L"umbra_crash_address", buffer);
+
+            if (code == 0xC0000005u && record->NumberParameters >= 2)
+            {
+                DWORD accessType = static_cast<DWORD>(record->ExceptionInformation[0]);
+                DWORD accessAddress = static_cast<DWORD>(record->ExceptionInformation[1]);
+                AppendLogValue(log, L"umbra_crash_access",
+                               accessType == 1 ? L"write" : (accessType == 8 ? L"execute" : L"read"));
+                FormatCrashHex(accessAddress, buffer, 1024);
+                AppendLogValue(log, L"umbra_crash_access_address", buffer);
+            }
+
+            AppendCrashModuleOffset(log, L"umbra_crash_module", address);
+
+            FormatCrashHex(static_cast<DWORD>(GetCurrentThreadId()), buffer, 1024);
+            AppendLogValue(log, L"umbra_crash_thread", buffer);
+
+            DWORD frames[CrashMaxFrames]{};
+            DWORD frameCount = WalkCrashFrames(context, frames, CrashMaxFrames);
+            for (DWORD index = 0; index < frameCount; index++)
+            {
+                wchar_t key[64]{};
+                CopyString(key, 64, L"umbra_crash_stack");
+                wchar_t indexBuffer[8]{};
+                UIntToWide(index, indexBuffer, 8);
+                AppendString(key, 64, indexBuffer);
+                AppendCrashModuleOffset(log, key, frames[index]);
+            }
+
+            AppendLogLiteral(log, L"umbra_crash=end");
+            CloseHandle(log);
+        }
+
+        InterlockedExchange(&CrashRecorderActive, 0);
+    }
+
+    LONG WINAPI UmbraVectoredExceptionHandler(EXCEPTION_POINTERS* pointers)
+    {
+        if (pointers == nullptr || pointers->ExceptionRecord == nullptr)
+            return EXCEPTION_CONTINUE_SEARCH;
+
+        DWORD code = pointers->ExceptionRecord->ExceptionCode;
+        if (!IsCrashWorthyCode(code))
+            return EXCEPTION_CONTINUE_SEARCH;
+
+        DWORD address = static_cast<DWORD>(
+            reinterpret_cast<ULONG_PTR>(pointers->ExceptionRecord->ExceptionAddress));
+        if (ShouldLogCrash(code, address))
+            WriteCrashRecord(pointers->ExceptionRecord, pointers->ContextRecord, L"vectored");
+
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    LONG WINAPI UmbraUnhandledExceptionFilter(EXCEPTION_POINTERS* pointers)
+    {
+        if (pointers != nullptr && pointers->ExceptionRecord != nullptr)
+        {
+            DWORD code = pointers->ExceptionRecord->ExceptionCode;
+            if (code != 0x80000003u && code != 0x80000004u)
+            {
+                DWORD address = static_cast<DWORD>(
+                    reinterpret_cast<ULONG_PTR>(pointers->ExceptionRecord->ExceptionAddress));
+                if (ShouldLogCrash(code, address))
+                    WriteCrashRecord(pointers->ExceptionRecord, pointers->ContextRecord, L"unhandled");
+            }
+        }
+
+        if (CrashPreviousUnhandledFilter != nullptr)
+        {
+            return reinterpret_cast<LPTOP_LEVEL_EXCEPTION_FILTER>(CrashPreviousUnhandledFilter)(pointers);
+        }
+
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    void InstallCrashRecorder()
+    {
+        CrashPreviousUnhandledFilter = reinterpret_cast<PVOID>(
+            SetUnhandledExceptionFilter(UmbraUnhandledExceptionFilter));
+        CrashVectoredHandlerHandle = AddVectoredExceptionHandler(1, UmbraVectoredExceptionHandler);
+    }
+
+    void UninstallCrashRecorder()
+    {
+        if (CrashVectoredHandlerHandle != nullptr)
+            RemoveVectoredExceptionHandler(CrashVectoredHandlerHandle);
+        SetUnhandledExceptionFilter(
+            reinterpret_cast<LPTOP_LEVEL_EXCEPTION_FILTER>(CrashPreviousUnhandledFilter));
+    }
 
 extern "C" __declspec(dllexport) void __stdcall UmbraUiArtwork(const char* seed, int icon, float size)
 {
@@ -5726,6 +5695,11 @@ extern "C" BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID)
         UmbraModule = module;
         DisableThreadLibraryCalls(module);
 
+        // Install the crash recorder FIRST so any fault during our own
+        // initialization (or later, e.g. the tutorial Confirm click) is
+        // captured to the bootstrap log before wine's dialog.
+        InstallCrashRecorder();
+
         // The launcher injects this DLL while the client primary thread is
         // suspended. Install the narrowly scoped legacy menu patch before
         // returning from LoadLibrary so MainMenuWidget cannot build its
@@ -5740,6 +5714,7 @@ extern "C" BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID)
     {
         StopLegacyMainMenuHook();
         StopNativeDevBridgeMonitor();
+        UninstallCrashRecorder();
     }
 
     return TRUE;

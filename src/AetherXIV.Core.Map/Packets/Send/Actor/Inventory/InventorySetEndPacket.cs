@@ -9,7 +9,10 @@ namespace AetherXIV.Core.Map.packets.send.actor.inventory
 
         public static SubPacket BuildPacket(uint playerActorId)
         {
-            return new SubPacket(OPCODE, playerActorId, new byte[8]);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.InventorySetEndPacketCodec(),
+                playerActorId,
+                new AetherXIV.Protocol.InventorySetEndPacket());
         }
         
     }

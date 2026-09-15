@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS `aether_database_compatibility` (
 INSERT INTO `aether_database_compatibility`
   (`compatibility_key`, `schema_generation`, `schema_version`, `compatibility_id`, `baseline_id`, `minimum_core_version`)
 VALUES
-  ('direct-core', 2, 1, 'aetherxiv-direct-core-v2', '20260716_000001_ffxiv_server_v2_baseline', '2.0')
+  ('direct-core', 2, 2, 'aetherxiv-direct-core-v2', '20260716_000001_ffxiv_server_v2_baseline', '2.1')
 ON DUPLICATE KEY UPDATE
   `schema_generation` = VALUES(`schema_generation`),
   `schema_version` = VALUES(`schema_version`),

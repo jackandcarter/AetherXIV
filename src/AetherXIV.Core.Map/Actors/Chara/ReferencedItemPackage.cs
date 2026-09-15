@@ -43,6 +43,19 @@ namespace AetherXIV.Core.Map.actors.chara
             toSet.CopyTo(referenceList, 0);
         }
 
+        //Legacy script surface (battlenpc.lua: SetEquipment({positions},{slots})).
+        //The implementation remains centralized in Set; this is only the
+        //legacy method-name adapter used by the Lua binding.
+        public void SetEquipment(ushort[] positions, ushort[] itemSlots)
+        {
+            Set(positions, itemSlots, ItemPackage.NORMAL);
+        }
+
+        public void Set(ushort[] positions, ushort[] itemSlots)
+        {
+            SetEquipment(positions, itemSlots);
+        }
+
         public void Set(ushort[] positions, ushort[] itemSlots, ushort itemPackage)
         {
             Debug.Assert(positions.Length == itemSlots.Length);
@@ -55,7 +68,13 @@ namespace AetherXIV.Core.Map.actors.chara
                     continue;
 
                 uint oldItemId = referenceList[positions[i]] != null ? referenceList[positions[i]].itemId : 0;
-                Database.EquipItem(owner, positions[i], item.uniqueId);
+                if (writeToDB && !Database.EquipItem(
+                    owner,
+                    positions[i],
+                    item.uniqueId,
+                    item.itemPackage,
+                    item.slot))
+                    continue;
                 referenceList[positions[i]] = item;
                 TraceEquipmentChange("set-list", positions[i], oldItemId, item.itemId);
             }
@@ -75,15 +94,20 @@ namespace AetherXIV.Core.Map.actors.chara
             Set(position, item);
         }
 
-        public void Set(ushort position, InventoryItem item)
+        public bool Set(ushort position, InventoryItem item)
         {
-            if (position >= referenceList.Length)
-                return;
+            if (position >= referenceList.Length || item == null)
+                return false;
 
             uint oldItemId = referenceList[position] != null ? referenceList[position].itemId : 0;
 
-            if (writeToDB)
-                Database.EquipItem(owner, position, item.uniqueId);
+            if (writeToDB && !Database.EquipItem(
+                owner,
+                position,
+                item.uniqueId,
+                item.itemPackage,
+                item.slot))
+                return false;
 
             ItemPackage newPackage = owner.GetItemPackage(item.itemPackage);
             ItemPackage oldPackage = null;
@@ -105,18 +129,19 @@ namespace AetherXIV.Core.Map.actors.chara
                 oldPackage.SendUpdate();
             newPackage.SendUpdate();
             SendSingleUpdate(position);
-            owner.QueuePacket(InventoryEndChangePacket.BuildPacket(owner.actorId));            
+            owner.QueuePacket(InventoryEndChangePacket.BuildPacket(owner.actorId));
+            return true;
         }
 
-        public void Clear(ushort position)
+        public bool Clear(ushort position)
         {
-            if (position >= referenceList.Length)
-                return;
+            if (position >= referenceList.Length || referenceList[position] == null)
+                return false;
 
             uint oldItemId = referenceList[position] != null ? referenceList[position].itemId : 0;
 
-            if (writeToDB)
-                Database.UnequipItem(owner, position);
+            if (writeToDB && !Database.UnequipItem(owner, position))
+                return false;
 
             ItemPackage oldItemPackage = owner.GetItemPackage(referenceList[position].itemPackage);
 
@@ -128,6 +153,7 @@ namespace AetherXIV.Core.Map.actors.chara
             oldItemPackage.SendUpdate();
             SendSingleUpdate(position);
             owner.QueuePacket(InventoryEndChangePacket.BuildPacket(owner.actorId));
+            return true;
         }
 
         public void ClearAll()
@@ -139,8 +165,8 @@ namespace AetherXIV.Core.Map.actors.chara
                 if (referenceList[i] == null)
                     continue;
 
-                if (writeToDB)
-                    Database.UnequipItem(owner, (ushort)i);
+                if (writeToDB && !Database.UnequipItem(owner, (ushort)i))
+                    continue;
 
                 ItemPackage package = owner.GetItemPackage(referenceList[i].itemPackage);               
                 package.MarkDirty(referenceList[i]);            

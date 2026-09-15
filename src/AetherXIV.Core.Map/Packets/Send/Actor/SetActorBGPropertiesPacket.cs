@@ -12,18 +12,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
 
         public static SubPacket BuildPacket(uint sourceActorId, uint val1, uint val2)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    binWriter.Write((UInt32)val1);
-                    binWriter.Write((UInt32)val2);
-                }
-            }
-
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetActorBGPropertiesPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetActorBGPropertiesPacket(val1, val2));
         }
     }
 }

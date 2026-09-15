@@ -18,6 +18,28 @@ using System.Text;
 
 namespace Aether.Umbra.Framework;
 
+public enum UmbraRepositoryFetchState
+{
+    Healthy,
+    Cached,
+    Failed
+}
+
+public sealed record UmbraRepositoryFetchResult(
+    UmbraRepositorySource Source,
+    string? RepositoryName,
+    IReadOnlyList<UmbraStoreEntry> Entries,
+    UmbraRepositoryFetchState State,
+    DateTimeOffset CheckedAt,
+    string? Error)
+{
+    public bool Succeeded => State != UmbraRepositoryFetchState.Failed;
+}
+
+public sealed record UmbraRepositoryRefreshResult(
+    IReadOnlyList<UmbraStoreEntry> Entries,
+    IReadOnlyList<UmbraRepositoryFetchResult> Repositories);
+
 public static class UmbraRepositoryFetcher
 {
     private const int MaximumRepositoryBytes = 2 * 1024 * 1024;
@@ -27,25 +49,57 @@ public static class UmbraRepositoryFetcher
         string cacheDirectory,
         UmbraRuntimeLog log)
     {
-        List<UmbraStoreEntry> entries = new();
+        return NormalizeEntries(LoadCachedResults(repositories, cacheDirectory, log)
+            .SelectMany(result => result.Entries));
+    }
+
+    internal static IReadOnlyList<UmbraRepositoryFetchResult> LoadCachedResults(
+        IEnumerable<UmbraRepositorySource> repositories,
+        string cacheDirectory,
+        UmbraRuntimeLog log)
+    {
+        List<UmbraRepositoryFetchResult> results = new();
         foreach (UmbraRepositorySource repository in repositories)
         {
             string? cached = ReadCache(cacheDirectory, repository.Url);
             if (cached is null)
+            {
+                results.Add(new UmbraRepositoryFetchResult(
+                    repository,
+                    repository.Name,
+                    Array.Empty<UmbraStoreEntry>(),
+                    UmbraRepositoryFetchState.Failed,
+                    DateTimeOffset.UtcNow,
+                    "Repository has not been checked yet."));
                 continue;
+            }
 
             try
             {
-                entries.AddRange(UmbraStoreEntry.ParseRepository(cached, repository));
+                UmbraRepositoryDocument document = UmbraStoreEntry.ParseRepositoryDocument(cached, repository);
+                results.Add(new UmbraRepositoryFetchResult(
+                    repository,
+                    document.Name ?? repository.Name,
+                    document.Entries,
+                    UmbraRepositoryFetchState.Cached,
+                    GetCacheTimestamp(cacheDirectory, repository.Url),
+                    null));
                 log.Info($"umbra_repository_cache_loaded url={repository.Url}");
             }
             catch (Exception ex)
             {
+                results.Add(new UmbraRepositoryFetchResult(
+                    repository,
+                    repository.Name,
+                    Array.Empty<UmbraStoreEntry>(),
+                    UmbraRepositoryFetchState.Failed,
+                    DateTimeOffset.UtcNow,
+                    ex.Message));
                 log.Warning($"umbra_repository_cache_invalid url={repository.Url} error={ex.Message}");
             }
         }
 
-        return NormalizeEntries(entries);
+        return results;
     }
 
     public static async Task<IReadOnlyList<UmbraStoreEntry>> FetchAsync(
@@ -54,21 +108,40 @@ public static class UmbraRepositoryFetcher
         UmbraRuntimeLog log,
         CancellationToken cancellationToken = default)
     {
+        UmbraRepositoryRefreshResult result = await FetchAllAsync(
+            repositories,
+            cacheDirectory,
+            log,
+            cancellationToken).ConfigureAwait(false);
+        return result.Entries;
+    }
+
+    public static async Task<UmbraRepositoryRefreshResult> FetchAllAsync(
+        IEnumerable<UmbraRepositorySource> repositories,
+        string cacheDirectory,
+        UmbraRuntimeLog log,
+        CancellationToken cancellationToken = default)
+    {
         Directory.CreateDirectory(cacheDirectory);
         using HttpClient client = CreateClient();
 
-        List<UmbraStoreEntry> entries = new();
+        List<UmbraRepositoryFetchResult> results = new();
         foreach (UmbraRepositorySource repository in repositories)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                IReadOnlyList<UmbraStoreEntry> fetched = await FetchRepositoryAsync(
+                UmbraRepositoryFetchResult fetched = await FetchRepositoryResultAsync(
                     client,
                     repository,
                     cacheDirectory,
                     cancellationToken);
-                entries.AddRange(fetched);
+                results.Add(fetched);
                 log.Info($"umbra_repository_fetch_success url={repository.Url}");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -77,7 +150,14 @@ public static class UmbraRepositoryFetcher
                 {
                     try
                     {
-                        entries.AddRange(UmbraStoreEntry.ParseRepository(cached, repository));
+                        UmbraRepositoryDocument document = UmbraStoreEntry.ParseRepositoryDocument(cached, repository);
+                        results.Add(new UmbraRepositoryFetchResult(
+                            repository,
+                            document.Name ?? repository.Name,
+                            document.Entries,
+                            UmbraRepositoryFetchState.Cached,
+                            DateTimeOffset.UtcNow,
+                            ex.Message));
                         log.Warning($"umbra_repository_fetch_failed_cached url={repository.Url} error={ex.Message}");
                         continue;
                     }
@@ -88,11 +168,20 @@ public static class UmbraRepositoryFetcher
                     }
                 }
 
+                results.Add(new UmbraRepositoryFetchResult(
+                    repository,
+                    repository.Name,
+                    Array.Empty<UmbraStoreEntry>(),
+                    UmbraRepositoryFetchState.Failed,
+                    DateTimeOffset.UtcNow,
+                    ex.Message));
                 log.Warning($"umbra_repository_fetch_failed url={repository.Url} error={ex.Message}");
             }
         }
 
-        return NormalizeEntries(entries);
+        return new UmbraRepositoryRefreshResult(
+            NormalizeEntries(results.SelectMany(result => result.Entries)),
+            results);
     }
 
     private static IReadOnlyList<UmbraStoreEntry> NormalizeEntries(
@@ -111,24 +200,79 @@ public static class UmbraRepositoryFetcher
         string cacheDirectory,
         CancellationToken cancellationToken = default)
     {
+        UmbraRepositoryFetchResult result = await FetchRepositoryResultAsync(
+            repository,
+            cacheDirectory,
+            cancellationToken).ConfigureAwait(false);
+        return result.Entries;
+    }
+
+    public static async Task<UmbraRepositoryFetchResult> FetchRepositoryResultAsync(
+        UmbraRepositorySource repository,
+        string cacheDirectory,
+        CancellationToken cancellationToken = default)
+    {
         Directory.CreateDirectory(cacheDirectory);
         using HttpClient client = CreateClient();
-        IReadOnlyList<UmbraStoreEntry> entries = await FetchRepositoryAsync(
+        return await FetchRepositoryResultAsync(
             client,
             repository,
             cacheDirectory,
-            cancellationToken);
-        return entries;
+            cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task<IReadOnlyList<UmbraStoreEntry>> FetchRepositoryAsync(
+    private static async Task<UmbraRepositoryFetchResult> FetchRepositoryResultAsync(
         HttpClient client,
         UmbraRepositorySource repository,
         string cacheDirectory,
         CancellationToken cancellationToken)
     {
+        string json = repository.IsLocalFileSource
+            ? ReadLocalRepository(repository, cancellationToken)
+            : await FetchRemoteRepositoryAsync(client, repository, cancellationToken).ConfigureAwait(false);
+
+        // Parse before caching so a malformed document can never replace a known-good index.
+        UmbraRepositoryDocument document = UmbraStoreEntry.ParseRepositoryDocument(json, repository);
+        WriteCache(cacheDirectory, repository.Url, json);
+        return new UmbraRepositoryFetchResult(
+            repository,
+            document.Name ?? repository.Name,
+            document.Entries,
+            UmbraRepositoryFetchState.Healthy,
+            DateTimeOffset.UtcNow,
+            null);
+    }
+
+    private static string ReadLocalRepository(
+        UmbraRepositorySource repository,
+        CancellationToken cancellationToken)
+    {
+        Uri manifestUri = repository.ResolveManifestUri();
+        if (!manifestUri.IsFile)
+            throw new InvalidDataException($"Umbra repository is not a local file: {repository.Url}");
+
+        string path = manifestUri.LocalPath;
+        FileInfo info = new(path);
+        if (!info.Exists)
+            throw new FileNotFoundException("Umbra repository manifest was not found.", path);
+        if (info.Length > MaximumRepositoryBytes)
+            throw new InvalidDataException(
+                $"Umbra repository exceeds the {MaximumRepositoryBytes} byte limit.");
+
+        using FileStream stream = File.OpenRead(path);
+        using MemoryStream buffer = new();
+        CopyBounded(stream, buffer, MaximumRepositoryBytes);
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    private static async Task<string> FetchRemoteRepositoryAsync(
+        HttpClient client,
+        UmbraRepositorySource repository,
+        CancellationToken cancellationToken)
+    {
+        Uri manifestUri = repository.ResolveManifestUri();
         using HttpResponseMessage response = await client.GetAsync(
-            repository.Url,
+            manifestUri,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -143,12 +287,27 @@ public static class UmbraRepositoryFetcher
         await using Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using MemoryStream buffer = new();
         await CopyBoundedAsync(stream, buffer, MaximumRepositoryBytes, cancellationToken);
-        string json = Encoding.UTF8.GetString(buffer.ToArray());
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
 
-        // Parse before caching so a malformed response can never replace a known-good index.
-        IReadOnlyList<UmbraStoreEntry> entries = UmbraStoreEntry.ParseRepository(json, repository);
-        WriteCache(cacheDirectory, repository.Url, json);
-        return entries;
+    private static void CopyBounded(
+        Stream source,
+        Stream destination,
+        int maximumBytes)
+    {
+        byte[] buffer = new byte[16 * 1024];
+        int total = 0;
+        while (true)
+        {
+            int read = source.Read(buffer, 0, buffer.Length);
+            if (read == 0)
+                return;
+
+            total += read;
+            if (total > maximumBytes)
+                throw new InvalidDataException($"Umbra repository exceeds the {maximumBytes} byte limit.");
+            destination.Write(buffer, 0, read);
+        }
     }
 
     private static HttpClient CreateClient() => new()
@@ -179,7 +338,18 @@ public static class UmbraRepositoryFetcher
 
     private static void WriteCache(string cacheDirectory, string repositoryUrl, string json)
     {
-        File.WriteAllText(CachePath(cacheDirectory, repositoryUrl), json);
+        string path = CachePath(cacheDirectory, repositoryUrl);
+        string temporaryPath = path + ".tmp";
+        try
+        {
+            File.WriteAllText(temporaryPath, json);
+            File.Move(temporaryPath, path, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
     }
 
     private static string? ReadCache(string cacheDirectory, string repositoryUrl)
@@ -192,6 +362,12 @@ public static class UmbraRepositoryFetcher
     {
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(repositoryUrl));
         return Path.Combine(cacheDirectory, $"{Convert.ToHexString(hash).ToLowerInvariant()}.json");
+    }
+
+    private static DateTimeOffset GetCacheTimestamp(string cacheDirectory, string repositoryUrl)
+    {
+        string path = CachePath(cacheDirectory, repositoryUrl);
+        return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTimeOffset.UtcNow;
     }
 
     private sealed class StoreEntryKeyComparer : IEqualityComparer<(string RepositoryUrl, string Id, string Version)>

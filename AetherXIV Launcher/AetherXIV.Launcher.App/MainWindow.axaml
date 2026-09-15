@@ -145,7 +145,7 @@
                Height="42"
                Stretch="Uniform" />
         <TextBlock Grid.Column="1" Text="AetherXIV Launcher" FontSize="23" FontWeight="SemiBold" />
-        <TextBlock Grid.Row="1" Grid.Column="1" Text="AetherXIV Core 2.0" Foreground="{StaticResource MutedTextBrush}" FontSize="13" />
+        <TextBlock Grid.Row="1" Grid.Column="1" Text="AetherXIV Core 2.1" Foreground="{StaticResource MutedTextBrush}" FontSize="13" />
         <TextBlock x:Name="HeaderServiceStatus"
                    Grid.Column="2"
                    Grid.RowSpan="2"
@@ -299,7 +299,7 @@
           <Border Grid.Row="2" Background="#05060B" BorderBrush="#26365D" BorderThickness="0,1,0,0" Padding="40,0">
             <Grid ColumnDefinitions="Auto,*,Auto" VerticalAlignment="Center">
               <TextBlock x:Name="ProductVersionText"
-                         Text="v2.0"
+                         Text="v2.1"
                          Cursor="Hand"
                          PointerPressed="ProductVersionText_PointerPressed"
                          ToolTip.Tip="Click to show the build number"
@@ -365,15 +365,22 @@
           <Grid Margin="4,18,4,4" ColumnDefinitions="180,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="12">
             <TextBlock Text="Client root" VerticalAlignment="Center" />
             <TextBox x:Name="ClientPathBox" Grid.Column="1" PlaceholderText="/path/to/FINAL FANTASY XIV 1.x" />
-            <Button Grid.Column="2" Content="Browse" Click="BrowseClient_Click" MinWidth="86" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+              <Button x:Name="UseExistingClientButton" Content="Use Existing Client..." Click="BrowseClient_Click" />
+              <Button x:Name="InstallGameClientButton" Content="Install Game Client..." Click="InstallGameClient_Click" />
+            </StackPanel>
 
-            <TextBlock Grid.Row="1"
-                       Grid.Column="1"
-                       Grid.ColumnSpan="2"
-                       Text="Select ffxivboot.exe for an unpatched install, or ffxivgame.exe after patching. AetherXIV Launcher stores the containing client folder."
-                       Foreground="{StaticResource MutedTextBrush}"
-                       FontSize="12"
-                       TextWrapping="Wrap" />
+            <StackPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Spacing="4">
+              <TextBlock Text="Use an existing client by selecting ffxivboot.exe or ffxivgame.exe. Install Game Client opens official FFXIV 1.x media through AetherXIV's bundled runtime; the installer does not replace this client path automatically."
+                         Foreground="{StaticResource MutedTextBrush}"
+                         FontSize="12"
+                         TextWrapping="Wrap" />
+              <TextBlock x:Name="ClientInstallerStatus"
+                         Text="Installer: ready to select official FFXIV 1.x media."
+                         Foreground="{StaticResource MutedTextBrush}"
+                         FontSize="12"
+                         TextWrapping="Wrap" />
+            </StackPanel>
 
             <TextBlock Grid.Row="2" Text="Launch helper" VerticalAlignment="Center" />
             <ComboBox x:Name="LaunchHelperModeBox" Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" SelectedIndex="0" SelectionChanged="ClientLaunchSettings_SelectionChanged">
@@ -384,10 +391,8 @@
 
             <TextBlock Grid.Row="3" Text="Graphics target" VerticalAlignment="Center" />
             <ComboBox x:Name="GraphicsTargetBox" Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" SelectedIndex="0" SelectionChanged="ClientLaunchSettings_SelectionChanged">
-              <ComboBoxItem>OpenGL compatibility (recommended)</ComboBoxItem>
-              <ComboBoxItem>Wine default</ComboBoxItem>
+              <ComboBoxItem>Wine default (recommended)</ComboBoxItem>
               <ComboBoxItem>OpenGL threaded (experimental)</ComboBoxItem>
-              <ComboBoxItem>WineD3D Vulkan (experimental)</ComboBoxItem>
             </ComboBox>
 
             <TextBlock Grid.Row="4" Text="Version" VerticalAlignment="Center" />
@@ -437,7 +442,7 @@
 
       <TabItem Header="Umbra">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <Grid Margin="4,18,4,4" ColumnDefinitions="180,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="12">
+          <Grid Margin="4,18,4,4" ColumnDefinitions="180,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="12">
             <TextBlock Text="Umbra" VerticalAlignment="Center" />
             <CheckBox x:Name="UmbraEnabledBox"
                       Grid.Column="1"
@@ -458,102 +463,50 @@
                     Content="Check for Umbra Updates"
                     HorizontalAlignment="Left"
                     Click="InstallUmbra_Click" />
+
+            <TextBlock Grid.Row="3" Text="Discord Rich Presence" VerticalAlignment="Center" />
+            <CheckBox x:Name="UmbraDiscordRichPresenceBox"
+                      Grid.Row="3"
+                      Grid.Column="1"
+                      Content="Show the client in the Discord profile while playing"
+                      IsCheckedChanged="UmbraDiscordRichPresence_Toggled" />
+            <TextBlock Grid.Row="4"
+                       Grid.Column="1"
+                       Text="Shows &quot;Playing Final Fantasy XIV 1.X&quot; through the supported Discord Rich Presence plugin. The same switch appears in the in-game Umbra Plugin Library; changing it there updates this setting too."
+                       Foreground="{StaticResource MutedTextBrush}"
+                       FontSize="12"
+                       TextWrapping="Wrap" />
           </Grid>
         </ScrollViewer>
       </TabItem>
 
       <TabItem x:Name="RuntimeTab" Header="Runtime">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
-          <Grid Margin="4,18,4,4" ColumnDefinitions="180,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="12">
+          <Grid Margin="4,18,4,4" ColumnDefinitions="180,*,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="10" ColumnSpacing="12">
             <TextBlock Text="Platform" VerticalAlignment="Center" />
             <TextBlock x:Name="RuntimePlatformStatus" Grid.Column="1" Grid.ColumnSpan="2" Text="Detecting platform" VerticalAlignment="Center" />
 
-            <TextBlock Grid.Row="1" Text="Runtime mode" VerticalAlignment="Center" />
-            <ComboBox x:Name="RuntimeModeBox"
-                      Grid.Row="1"
-                      Grid.Column="1"
-                      Grid.ColumnSpan="2"
-                      SelectedIndex="0"
-                      SelectionChanged="RuntimeMode_SelectionChanged"
-                      ToolTip.Tip="Automatic Wine prefers the verified Launcher-managed runtime, then a recognized local Wine runtime, with an isolated FFXIV prefix.">
-              <ComboBoxItem>Automatic Wine</ComboBoxItem>
-              <ComboBoxItem>Custom Runtime</ComboBoxItem>
-            </ComboBox>
+            <TextBlock Grid.Row="1" Text="Runtime source" VerticalAlignment="Center" />
+            <TextBlock x:Name="RuntimeCatalogStatus" Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Text="Checking bundled AetherXIV runtime" TextWrapping="Wrap" VerticalAlignment="Center" />
 
-            <TextBlock Grid.Row="2" Text="Wine setup" VerticalAlignment="Center" />
-            <TextBlock x:Name="RuntimeCatalogStatus" Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Text="Not checked" TextWrapping="Wrap" VerticalAlignment="Center" />
+            <TextBlock Grid.Row="2" Text="Runtime status" VerticalAlignment="Center" />
+            <TextBlock x:Name="ManagedRuntimeStatus" Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2" Text="Not checked" TextWrapping="Wrap" VerticalAlignment="Center" />
 
-            <TextBlock Grid.Row="3" Text="Runtime status" VerticalAlignment="Center" />
-            <TextBlock x:Name="ManagedRuntimeStatus" Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" Text="Not installed" TextWrapping="Wrap" VerticalAlignment="Center" />
+            <TextBlock Grid.Row="3" Text="Validation progress" VerticalAlignment="Center" />
+            <ProgressBar x:Name="RuntimeProgressBar" Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" Minimum="0" Maximum="100" Value="0" />
 
-            <TextBlock Grid.Row="4" Text="Validation progress" VerticalAlignment="Center" />
-            <ProgressBar x:Name="RuntimeProgressBar" Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2" Minimum="0" Maximum="100" Value="0" />
-
-            <StackPanel Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8">
-              <Button x:Name="InstallRuntimeButton"
-                      Content="Install Runtime"
-                      Click="InstallRuntime_Click"
-                      ToolTip.Tip="Downloads the pinned AetherXIV Wine package for this platform, verifies its checksum, installs it into Launcher storage, and validates it." />
+            <StackPanel Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8">
               <Button x:Name="ValidateRuntimeButton" Content="Validate Runtime" Click="ValidateRuntime_Click" />
               <Button x:Name="VerifyDependenciesButton" Content="Verify Dependencies" Click="VerifyDependencies_Click" />
               <Button x:Name="ResetPrefixButton" Content="Reset Prefix" Click="ResetPrefix_Click" />
-              <Button x:Name="SaveRuntimeButton" Content="Save Runtime Settings" Click="SaveRuntimeSettings_Click" />
             </StackPanel>
 
-            <TextBlock Grid.Row="6" Text="Detected runtime" VerticalAlignment="Center" />
-            <ComboBox x:Name="DetectedRuntimeBox"
-                      Grid.Row="6"
-                      Grid.Column="1"
-                      Grid.ColumnSpan="2"
-                      ToolTip.Tip="Only approved detected runtimes are listed here. GPTK, Whisky, CrossOver, and random prefixes are not auto-selected." />
-
-            <TextBlock Grid.Row="7" Text="Detected runtimes" VerticalAlignment="Top" />
-            <TextBox x:Name="RuntimeCandidatesBox"
-                     Grid.Row="7"
-                     Grid.Column="1"
-                     Grid.ColumnSpan="2"
-                     Height="130"
-                     IsReadOnly="True"
-                     AcceptsReturn="True"
-                     TextWrapping="Wrap"
-                     FontFamily="Menlo,Consolas,monospace" />
-
-            <Button Grid.Row="8" Grid.Column="1" Content="Scan Runtimes" HorizontalAlignment="Left" Click="ScanRuntime_Click" />
-
-            <TextBlock Grid.Row="9" Text="Custom runtime type" VerticalAlignment="Center" />
-            <ComboBox x:Name="CustomRuntimeKindBox"
-                      Grid.Row="9"
-                      Grid.Column="1"
-                      Grid.ColumnSpan="2"
-                      SelectedIndex="0"
-                      SelectionChanged="RuntimeMode_SelectionChanged"
-                      ToolTip.Tip="Use this only when you want to point AetherXIV Launcher at a runtime manually.">
-              <ComboBoxItem>Wine prefix</ComboBoxItem>
-              <ComboBoxItem>Custom command</ComboBoxItem>
-            </ComboBox>
-
-            <TextBlock Grid.Row="10" Text="Custom name" VerticalAlignment="Center" />
-            <TextBox x:Name="RuntimeNameBox" Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2" Text="Local Wine Runtime" />
-
-            <TextBlock Grid.Row="11" Text="Runtime and prefix paths" VerticalAlignment="Center" />
-            <Grid Grid.Row="11" Grid.Column="1" Grid.ColumnSpan="2" ColumnDefinitions="*,Auto,*,Auto" ColumnSpacing="8">
-              <TextBox x:Name="RuntimeCommandBox"
-                       Text="wine"
-                       PlaceholderText="Wine executable or command"
-                       ToolTip.Tip="The command or executable path used to start Wine." />
-              <Button x:Name="BrowseRuntimeButton"
-                      Grid.Column="1"
-                      Content="Browse Runtime"
-                      Click="BrowseRuntime_Click" />
-              <TextBox x:Name="RuntimeValueBox"
-                       Grid.Column="2"
-                       PlaceholderText="WINEPREFIX path"
-                       ToolTip.Tip="Optional Wine prefix path. Leave blank to use AetherXIV Launcher's managed prefix." />
-              <Button x:Name="BrowseRuntimePrefixButton"
-                      Grid.Column="3"
-                      Content="Browse Prefix"
-                      Click="BrowseRuntimePrefix_Click" />
-            </Grid>
+            <TextBlock Grid.Row="5" Text="Runtime policy" VerticalAlignment="Top" />
+            <TextBlock Grid.Row="5"
+                       Grid.Column="1"
+                       Grid.ColumnSpan="2"
+                       Text="AetherXIV uses only the compatibility runtime shipped with this Launcher build. It does not detect or switch to Wine, CrossOver, Whisky, or custom commands installed elsewhere. The FFXIV 1.x prefix remains isolated in Launcher data."
+                       TextWrapping="Wrap" />
           </Grid>
         </ScrollViewer>
       </TabItem>
@@ -575,7 +528,7 @@
             <StackPanel Spacing="5">
               <TextBlock Text="AetherXIV Launcher" FontSize="30" FontWeight="SemiBold" />
               <TextBlock x:Name="AboutVersionText"
-                         Text="Version 2.0"
+                         Text="Version 2.1"
                          FontSize="16"
                          Foreground="{StaticResource MutedTextBrush}" />
             </StackPanel>

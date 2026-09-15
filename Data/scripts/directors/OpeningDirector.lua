@@ -63,7 +63,7 @@ function onTalkEvent(player, npc)
 		if (man0u0Quest:GetQuestFlag(MAN0U0_FLAG_MINITUT_DONE1) == true and man0u0Quest:GetQuestFlag(MAN0U0_FLAG_MINITUT_DONE2) == true and man0u0Quest:GetQuestFlag(MAN0U0_FLAG_MINITUT_DONE3) == true) then			
 			exitTriggerNpc = GetWorldManager():GetActorInWorldByUniqueId("exit_trigger");		
 			player:SetEventStatus(exitTriggerNpc, "pushDefault", true, 0x2);
-			exitTriggerNpc:SetQuestGraphic(player, 0x2);					
+			exitTriggerNpc:SetQuestGraphic(player, 0x2);			
 		end
 	end
 

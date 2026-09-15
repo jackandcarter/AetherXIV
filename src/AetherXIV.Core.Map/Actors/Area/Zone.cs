@@ -12,7 +12,12 @@ namespace AetherXIV.Core.Map.actors.area
     {        
         Dictionary<string, Dictionary<uint, PrivateArea>> privateAreas = new Dictionary<string, Dictionary<uint, PrivateArea>>();
         Dictionary<string, List<PrivateAreaContent>> contentAreas = new Dictionary<string, List<PrivateAreaContent>>();
-        Object contentAreasLock = new Object();
+        private readonly Object contentAreasLock = new Object();
+        private readonly Object privateActorIdentityLock = new Object();
+        private readonly Dictionary<uint, string> privateActorIdentities =
+            new Dictionary<uint, string>();
+        private uint nextPrivateTransientActorNumber =
+            PrivateAreaActorIdentityPolicy.TransientActorNumberStart;
 
         public SharpNav.TiledNavMesh tiledNavMesh;
         public SharpNav.NavMeshQuery navMeshQuery;
@@ -22,8 +27,16 @@ namespace AetherXIV.Core.Map.actors.area
         public Int64 pathCallTime;
 
         public Zone(uint id, string zoneName, ushort regionId, string classPath, ushort bgmDay, ushort bgmNight, ushort bgmBattle, bool isIsolated, bool isInn, bool canRideChocobo, bool canStealth, bool isInstanceRaid, bool loadNavMesh = false)
-            : base(id, zoneName, regionId, classPath, bgmDay, bgmNight, bgmBattle, isIsolated, isInn, canRideChocobo, canStealth, isInstanceRaid)
+            : base(id, NativeActorIdentityPolicy.GetAreaMasterActorId(id), id, NativeActorIdentityPolicy.IsAuthoritativePublicTerritory(id), zoneName, regionId, classPath, bgmDay, bgmNight, bgmBattle, isIsolated, isInn, canRideChocobo, canStealth, isInstanceRaid)
         {
+            if (NativeActorIdentityPolicy.TryGetResidentDirector(
+                id,
+                "WeatherDirector",
+                out _,
+                out _,
+                out _))
+                mWeatherDirector = CreateDirector("WeatherDirector", false);
+
             if (loadNavMesh)
             {
                 try
@@ -49,6 +62,92 @@ namespace AetherXIV.Core.Map.actors.area
             {
                 privateAreas[pa.GetPrivateAreaName()] = new Dictionary<uint, PrivateArea>();
                 privateAreas[pa.GetPrivateAreaName()][pa.GetPrivateAreaType()] = pa;
+            }
+        }
+
+        internal uint ReservePrivateStaticActorNumber(
+            uint spawnId,
+            string privateAreaName,
+            uint privateAreaType,
+            string uniqueId)
+        {
+            uint actorNumber =
+                PrivateAreaActorIdentityPolicy.GetStaticActorNumber(spawnId);
+            ClaimPrivateActorNumber(
+                actorNumber,
+                String.Format(
+                    "static:{0}:{1}:{2}:{3}",
+                    privateAreaName,
+                    privateAreaType,
+                    spawnId,
+                    uniqueId));
+            return actorNumber;
+        }
+
+        internal uint AllocatePrivateTransientActorNumber(
+            string privateAreaName,
+            uint privateAreaType,
+            string uniqueId)
+        {
+            lock (privateActorIdentityLock)
+            {
+                while (privateActorIdentities.ContainsKey(
+                    nextPrivateTransientActorNumber))
+                {
+                    nextPrivateTransientActorNumber++;
+                }
+
+                if (nextPrivateTransientActorNumber >
+                    PrivateAreaActorIdentityPolicy.MaximumActorNumber)
+                {
+                    throw new InvalidOperationException(String.Format(
+                        "Territory {0} exhausted its shared private-area transient actor namespace.",
+                        GetTerritoryId()));
+                }
+
+                uint actorNumber = nextPrivateTransientActorNumber++;
+                privateActorIdentities.Add(
+                    actorNumber,
+                    String.Format(
+                        "transient:{0}:{1}:{2}",
+                        privateAreaName,
+                        privateAreaType,
+                        uniqueId));
+                return actorNumber;
+            }
+        }
+
+        internal void ReleasePrivateTransientActorNumber(uint actorNumber)
+        {
+            lock (privateActorIdentityLock)
+            {
+                if (privateActorIdentities.TryGetValue(
+                        actorNumber,
+                        out string owner)
+                    && owner.StartsWith("transient:", StringComparison.Ordinal))
+                {
+                    privateActorIdentities.Remove(actorNumber);
+                }
+            }
+        }
+
+        private void ClaimPrivateActorNumber(uint actorNumber, string owner)
+        {
+            lock (privateActorIdentityLock)
+            {
+                if (privateActorIdentities.TryGetValue(
+                    actorNumber,
+                    out string existingOwner))
+                {
+                    throw new InvalidOperationException(String.Format(
+                        "Private actor slot 0x{0:X} in territory {1} is claimed by {2} and {3}.",
+                        actorNumber,
+                        GetTerritoryId(),
+                        existingOwner,
+                        owner));
+                }
+
+                privateActorIdentities.Add(actorNumber, owner);
             }
         }
 
@@ -82,7 +181,12 @@ namespace AetherXIV.Core.Map.actors.area
 
             List<LuaParam> lParams;
             lParams = LuaUtils.CreateLuaParamList(classPath, false, true, zoneName, "", -1, canRideChocobo ? (byte)1 : (byte)0, canStealth, isInn, false, false, false, true, isInstanceRaid, isEntranceDesion);
-            return ActorInstantiatePacket.BuildPacket(actorId, actorName, className, lParams);        
+            return ActorInstantiatePacket.BuildPacket(
+                actorId,
+                actorName,
+                className,
+                lParams,
+                GetActorInstantiationAreaKey());
         }
 
         public void AddSpawnLocation(SpawnLocation spawn)
@@ -96,7 +200,11 @@ namespace AetherXIV.Core.Map.actors.area
                     if (levels.ContainsKey(spawn.privAreaLevel))
                         levels[spawn.privAreaLevel].AddSpawnLocation(spawn);
                     else
-                        Program.Log.Error("Tried to add a spawn location to non-existing private area level \"{0}\" in area {1} in zone {2}", spawn.privAreaName, spawn.privAreaLevel, zoneName);
+                        Program.Log.Error(
+                            "Tried to add a spawn location to non-existing private area level {0} in area \"{1}\" in zone {2}",
+                            spawn.privAreaLevel,
+                            spawn.privAreaName,
+                            zoneName);
                 }
                 else
                     Program.Log.Error("Tried to add a spawn location to non-existing private area \"{0}\" in zone {1}", spawn.privAreaName, zoneName);
@@ -124,59 +232,168 @@ namespace AetherXIV.Core.Map.actors.area
         {
             lock (mActorList)
             {
-                if (!mActorList.ContainsKey(id))
-                {
-                    foreach (Dictionary<uint, PrivateArea> paList in privateAreas.Values)
-                    {
-                        foreach (PrivateArea pa in paList.Values)
-                        {
-                            Actor actor = pa.FindActorInArea(id);
-                            if (actor != null)
-                                return actor;
-                        }
-                    }
-
-                    foreach (List<PrivateAreaContent> paList in contentAreas.Values)
-                    {
-                        foreach (PrivateArea pa in paList)
-                        {
-                            Actor actor = pa.FindActorInArea(id);
-                            if (actor != null)
-                                return actor;
-                        }
-                    }
-
-
-                    return null;
-                }
-                else
-                    return mActorList[id];
+                if (mActorList.TryGetValue(id, out Actor publicActor))
+                    return publicActor;
             }
+
+            foreach (Dictionary<uint, PrivateArea> paList in privateAreas.Values)
+            {
+                foreach (PrivateArea pa in paList.Values)
+                {
+                    Actor actor = pa.FindActorInArea(id);
+                    if (actor != null)
+                        return actor;
+                }
+            }
+
+            foreach (PrivateAreaContent contentArea in GetContentAreaSnapshot())
+            {
+                Actor actor = contentArea.FindActorInArea(id);
+                if (actor != null)
+                    return actor;
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Resolves a quest ENPC by actor class id across this zone's public
+        /// list, its private areas, and its content areas, preferring the
+        /// copy whose private-area routing matches the requesting player.
+        /// Several city NPCs (Baderon, Momodi, Miounne, ...) are seeded both
+        /// at the zone root and inside a PrivateAreaMasterPast phase under the
+        /// same class id, so a marker/status broadcast must bind the copy the
+        /// client actually spawned, with a root-copy fallback for a
+        /// private-area player whose quest NPC only exists at the root.
+        /// (Garlemald find_npc_by_class_id, #28.)
+        /// </summary>
+        public Npc FindNpcByClassId(
+            uint classId,
+            string requesterArea,
+            uint requesterAreaType)
+        {
+            // A root requester never resolves a private-area copy.
+            if (String.IsNullOrEmpty(requesterArea))
+                return FindNpcByClassId(classId);
+
+            Npc rootMatch = null;
+            foreach (Actor actor in GetAllActors())
+            {
+                if (actor is Npc npc && npc.GetActorClassId() == classId
+                    && rootMatch == null)
+                {
+                    rootMatch = npc;
+                }
+            }
+
+            foreach (Dictionary<uint, PrivateArea> paList in privateAreas.Values)
+            {
+                foreach (PrivateArea pa in paList.Values)
+                {
+                    if (pa.GetPrivateAreaName() != requesterArea
+                        || pa.GetPrivateAreaType() != requesterAreaType)
+                    {
+                        continue;
+                    }
+
+                    Npc exact = pa.FindNpcByClassId(classId);
+                    if (exact != null)
+                        return exact;
+                }
+            }
+
+            foreach (PrivateAreaContent contentArea in GetContentAreaSnapshot())
+            {
+                if (contentArea.GetPrivateAreaName() != requesterArea
+                    || contentArea.GetPrivateAreaType() != requesterAreaType)
+                {
+                    continue;
+                }
+
+                Npc exact = contentArea.FindNpcByClassId(classId);
+                if (exact != null)
+                    return exact;
+            }
+
+            return rootMatch;
         }
 
         public PrivateAreaContent CreateContentArea(Player starterPlayer, string areaClassPath, string contentScript, string areaName, string directorName, params object[] args)
         {
+            Director director = CreateDirector(directorName, true, args);
+            if (director == null)
+                return null;
+
+            director.StartDirector(false);
+
+            PrivateAreaContent contentArea = new PrivateAreaContent(
+                this,
+                areaClassPath,
+                areaName,
+                1,
+                director,
+                starterPlayer);
+
+            RegisterContentArea(contentArea);
+
+            return contentArea;
+        }
+
+        internal void RegisterContentArea(PrivateAreaContent area)
+        {
+            if (area == null)
+                return;
+
             lock (contentAreasLock)
             {
-                Director director = CreateDirector(directorName, true, args);
+                string areaName = area.GetPrivateAreaName();
+                if (!contentAreas.TryGetValue(
+                        areaName,
+                        out List<PrivateAreaContent> instances))
+                {
+                    instances = new List<PrivateAreaContent>();
+                    contentAreas.Add(areaName, instances);
+                }
 
-                if (director == null)
-                    return null;
-
-                if (!contentAreas.ContainsKey(areaName))
-                    contentAreas.Add(areaName, new List<PrivateAreaContent>());
-                PrivateAreaContent contentArea = new PrivateAreaContent(this, areaClassPath, areaName, 1, director, starterPlayer);
-                contentAreas[areaName].Add(contentArea);
-                
-                return contentArea;
+                if (!instances.Contains(area))
+                    instances.Add(area);
             }
         }
 
         public void DeleteContentArea(PrivateAreaContent area)
         {
-            if (contentAreas.ContainsKey(area.GetPrivateAreaName()))
+            if (area == null)
+                return;
+
+            lock (contentAreasLock)
             {
-                contentAreas[area.GetPrivateAreaName()].Remove(area);
+                string areaName = area.GetPrivateAreaName();
+                if (!contentAreas.TryGetValue(
+                        areaName,
+                        out List<PrivateAreaContent> instances))
+                {
+                    return;
+                }
+
+                instances.Remove(area);
+                if (instances.Count == 0)
+                    contentAreas.Remove(areaName);
+            }
+        }
+
+        internal PrivateAreaContent[] GetContentAreaSnapshot()
+        {
+            lock (contentAreasLock)
+            {
+                List<PrivateAreaContent> snapshot =
+                    new List<PrivateAreaContent>();
+                foreach (List<PrivateAreaContent> instances in
+                    contentAreas.Values)
+                {
+                    snapshot.AddRange(instances);
+                }
+
+                return snapshot.ToArray();
             }
         }
 
@@ -188,9 +405,11 @@ namespace AetherXIV.Core.Map.actors.area
                 foreach(var b in a.Values)
                     b.Update(tick);
 
-            foreach (var a in contentAreas.Values)
-                foreach (var b in a)
-                    b.Update(tick);
+            foreach (PrivateAreaContent contentArea in
+                GetContentAreaSnapshot())
+            {
+                contentArea.Update(tick);
+            }
 
             // todo: again, this is retarded but debug stuff
             var diffTime = tick - lastUpdate;

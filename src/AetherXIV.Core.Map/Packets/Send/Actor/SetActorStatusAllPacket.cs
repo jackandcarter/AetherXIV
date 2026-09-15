@@ -11,23 +11,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
 
         public static SubPacket BuildPacket(uint sourceActorId, ushort[] statusIds)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-          
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    for (int i = 0; i < statusIds.Length; i++)
-                    {
-                        if (i >= 20)
-                            break;
-                        binWriter.Write((UInt16)statusIds[i]);
-                    }
-                }
-            }
-
-            SubPacket packet = new SubPacket(OPCODE, sourceActorId, data);
-            return packet;
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetActorStatusAllPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetActorStatusAllPacket(statusIds));
         }
     }
 }

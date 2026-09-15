@@ -29,17 +29,13 @@ namespace AetherXIV.Core.Map.packets.send.player
 
         public static SubPacket BuildPacket(uint sourceActorId, byte chocoboAppearance, uint rentalExpireTime, byte rentalMinLeft)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    binWriter.Write((UInt32)rentalExpireTime);
-                    binWriter.Write((Byte)rentalMinLeft);
-                    binWriter.Write((Byte)chocoboAppearance);
-                }
-            }
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetCurrentMountChocoboPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetCurrentMountChocoboPacket(
+                    rentalExpireTime,
+                    rentalMinLeft,
+                    chocoboAppearance));
         }
     }
 }

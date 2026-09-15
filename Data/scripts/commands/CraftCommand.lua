@@ -451,4 +451,3 @@ function startCrafting(player, hand, quest, startDur, startQly, startHQ)
     return -1; 
 end
 
-

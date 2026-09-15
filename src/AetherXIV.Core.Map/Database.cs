@@ -22,6 +22,48 @@ namespace AetherXIV.Core.Map
         private static bool playerBaseStatsTableAvailable = true;
         private static bool playerClassAttributesTableAvailable = true;
 
+        public static Dictionary<uint, QuestGameData> GetQuestGamedata()
+        {
+            Dictionary<uint, QuestGameData> quests = new Dictionary<uint, QuestGameData>();
+            using (MySqlConnection conn = new MySqlConnection(String.Format(
+                "Server={0}; Port={1}; Database={2}; UID={3}; Password={4}",
+                ConfigConstants.DATABASE_HOST,
+                ConfigConstants.DATABASE_PORT,
+                ConfigConstants.DATABASE_NAME,
+                ConfigConstants.DATABASE_USERNAME,
+                ConfigConstants.DATABASE_PASSWORD)))
+            {
+                try
+                {
+                    conn.Open();
+                    using (MySqlCommand cmd = new MySqlCommand(@"
+SELECT id, className, questName, prerequisite, minLevel
+FROM gamedata_quests", conn))
+                    using (MySqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            uint questId = reader.GetUInt32("id");
+                            quests[questId] = new QuestGameData(
+                                questId,
+                                reader.GetString("className"),
+                                reader.GetString("questName"),
+                                reader.GetUInt32("prerequisite"),
+                                reader.GetUInt16("minLevel"),
+                                0);
+                        }
+                    }
+                }
+                catch (MySqlException e)
+                {
+                    Program.Log.Error(e.ToString());
+                    throw;
+                }
+            }
+
+            return quests;
+        }
+
         public static RepairResult TryRepairItemTransaction(
             uint characterId,
             ulong serverItemId,
@@ -2005,8 +2047,49 @@ WHERE id = @characterId", conn))
                             if (!reader.IsDBNull(4))
                                 currentPhase = reader.GetUInt32(4);
 
-                            string questName = Server.GetStaticActors(player.playerWork.questScenario[index]).actorName;
-                            player.questScenario[index] = new Quest(player, player.playerWork.questScenario[index], questName, questData, questFlags, currentPhase);
+                            Quest staticQuest = Server.GetStaticActors(
+                                player.playerWork.questScenario[index]) as Quest;
+                            if (staticQuest == null)
+                            {
+                                Program.Log.Error(
+                                    "Could not load scenario quest actor 0x{0:X} for character {1}.",
+                                    player.playerWork.questScenario[index],
+                                    player.actorId);
+                                player.playerWork.questScenario[index] = 0;
+                                continue;
+                            }
+
+                            player.questScenario[index] = new Quest(
+                                player,
+                                staticQuest,
+                                questData,
+                                questFlags,
+                                currentPhase);
+                        }
+                    }
+
+                    // Load the row-per-quest completion ledger into the
+                    // client/quest-manager bit field. This preserves the 2.0
+                    // database contract while restoring the legacy runtime
+                    // availability model.
+                    query = @"
+                        SELECT questId
+                        FROM characters_quest_completed
+                        WHERE characterId = @charId";
+
+                    cmd = new MySqlCommand(query, conn);
+                    cmd.Parameters.AddWithValue("@charId", player.actorId);
+                    using (MySqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            uint questId = reader.GetUInt32(0);
+                            if (questId >= QuestStateManager.ScenarioStart
+                                && questId < QuestStateManager.ScenarioStart + QuestStateManager.ScenarioCount)
+                            {
+                                player.playerWork.questScenarioComplete[
+                                    questId - QuestStateManager.ScenarioStart] = true;
+                            }
                         }
                     }
 
@@ -2099,6 +2182,48 @@ WHERE id = @characterId", conn))
                         }
                     }
 
+                    //Load Attuned Aetherytes
+                    query = @"
+                        SELECT 
+                        aetheryteId
+                        FROM characters_aetherytes WHERE characterId = @charId";
+
+                    cmd = new MySqlCommand(query, conn);
+                    cmd.Parameters.AddWithValue("@charId", player.actorId);
+                    using (MySqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            uint aetheryteId = reader.GetUInt32(0);
+                            if (aetheryteId == 0)
+                                continue;
+
+                            player.unlockedAetherytes.Add(aetheryteId);
+                        }
+                    }
+
+                    //Load Path Companion
+                    query = @"
+                        SELECT
+                        nickname,
+                        skin,
+                        personality,
+                        coordinate
+                        FROM characters_snpc WHERE characterId = @charId";
+
+                    cmd = new MySqlCommand(query, conn);
+                    cmd.Parameters.AddWithValue("@charId", player.actorId);
+                    using (MySqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        if (reader.Read())
+                        {
+                            player.SNpcNickname = reader.GetString("nickname");
+                            player.SNpcSkin = reader.GetByte("skin");
+                            player.SNpcPersonality = reader.GetByte("personality");
+                            player.SNpcCoordinate = reader.GetInt16("coordinate");
+                        }
+                    }
+
                     player.GetItemPackage(ItemPackage.NORMAL).InitList(GetItemPackage(player, 0, ItemPackage.NORMAL));
                     player.GetItemPackage(ItemPackage.KEYITEMS).InitList(GetItemPackage(player, 0, ItemPackage.KEYITEMS));
                     player.GetItemPackage(ItemPackage.CURRENCY_CRYSTALS).InitList(GetItemPackage(player, 0, ItemPackage.CURRENCY_CRYSTALS));
@@ -2118,6 +2243,35 @@ WHERE id = @characterId", conn))
                 }
             }
 
+        }
+
+        public static void CreateOrUpdateSNpc(Player player, string nickname, uint skin, byte personality)
+        {
+            using (MySqlConnection conn = new MySqlConnection(String.Format("Server={0}; Port={1}; Database={2}; UID={3}; Password={4}", ConfigConstants.DATABASE_HOST, ConfigConstants.DATABASE_PORT, ConfigConstants.DATABASE_NAME, ConfigConstants.DATABASE_USERNAME, ConfigConstants.DATABASE_PASSWORD)))
+            {
+                try
+                {
+                    conn.Open();
+                    string query = @"
+                        INSERT INTO characters_snpc
+                        (characterId, nickname, skin, personality)
+                        VALUES
+                        (@charId, @nickname, @skin, @personality)
+                        ON DUPLICATE KEY UPDATE
+                        nickname = @nickname, skin = @skin, personality = @personality";
+
+                    MySqlCommand cmd = new MySqlCommand(query, conn);
+                    cmd.Parameters.AddWithValue("@charId", player.actorId);
+                    cmd.Parameters.AddWithValue("@nickname", nickname);
+                    cmd.Parameters.AddWithValue("@skin", skin);
+                    cmd.Parameters.AddWithValue("@personality", personality);
+                    cmd.ExecuteNonQuery();
+                }
+                catch (MySqlException e)
+                {
+                    Program.Log.Error(e.ToString());
+                }
+            }
         }
 
         public static InventoryItem[] GetEquipment(Player player, ushort classId)
@@ -2146,9 +2300,10 @@ WHERE id = @characterId", conn))
                         while (reader.Read())
                         {
                             ushort equipSlot = reader.GetUInt16(0);
-                            ulong uniqueItemId = reader.GetUInt16(1);
+                            ulong uniqueItemId = reader.GetUInt64(1);
                             InventoryItem item = player.GetItemPackage(ItemPackage.NORMAL).GetItemByUniqueId(uniqueItemId);
-                            equipment[equipSlot] = item;
+                            if (equipSlot < equipment.Length)
+                                equipment[equipSlot] = item;
                         }
                     }
                 }
@@ -2165,7 +2320,12 @@ WHERE id = @characterId", conn))
             return equipment;
         }
 
-        public static void EquipItem(Player player, ushort equipSlot, ulong uniqueItemId)
+        public static bool EquipItem(
+            Player player,
+            ushort equipSlot,
+            ulong uniqueItemId,
+            ushort itemPackage,
+            ushort itemSlot)
         {
 
             using (MySqlConnection conn = new MySqlConnection(String.Format("Server={0}; Port={1}; Database={2}; UID={3}; Password={4}", ConfigConstants.DATABASE_HOST, ConfigConstants.DATABASE_PORT, ConfigConstants.DATABASE_NAME, ConfigConstants.DATABASE_USERNAME, ConfigConstants.DATABASE_PASSWORD)))
@@ -2174,25 +2334,55 @@ WHERE id = @characterId", conn))
                 {
                     conn.Open();
 
-                    string query = @"
-                                    INSERT INTO characters_inventory_equipment                                    
-                                    (characterId, classId, equipSlot, itemId)
-                                    VALUES
-                                    (@characterId, @classId, @equipSlot, @uniqueItemId)
-                                    ON DUPLICATE KEY UPDATE itemId=@uniqueItemId;
-                                    ";
+                    using (MySqlTransaction transaction = conn.BeginTransaction())
+                    {
+                        string ownershipQuery = @"
+                            SELECT 1
+                            FROM characters_inventory
+                            WHERE characterId = @characterId
+                              AND serverItemId = @uniqueItemId
+                              AND itemPackage = @itemPackage
+                              AND slot = @itemSlot
+                            FOR UPDATE";
 
-                    MySqlCommand cmd = new MySqlCommand(query, conn);
-                    cmd.Parameters.AddWithValue("@characterId", player.actorId);
-                    cmd.Parameters.AddWithValue("@classId", (equipSlot == Player.SLOT_UNDERSHIRT || equipSlot == Player.SLOT_UNDERGARMENT) ? 0 : player.charaWork.parameterSave.state_mainSkill[0]);
-                    cmd.Parameters.AddWithValue("@equipSlot", equipSlot);
-                    cmd.Parameters.AddWithValue("@uniqueItemId", uniqueItemId);
+                        using (MySqlCommand ownership = new MySqlCommand(
+                            ownershipQuery,
+                            conn,
+                            transaction))
+                        {
+                            ownership.Parameters.AddWithValue("@characterId", player.actorId);
+                            ownership.Parameters.AddWithValue("@uniqueItemId", uniqueItemId);
+                            ownership.Parameters.AddWithValue("@itemPackage", itemPackage);
+                            ownership.Parameters.AddWithValue("@itemSlot", itemSlot);
+                            if (ownership.ExecuteScalar() == null)
+                            {
+                                transaction.Rollback();
+                                return false;
+                            }
+                        }
 
-                    cmd.ExecuteNonQuery();
+                        string query = @"
+                                        INSERT INTO characters_inventory_equipment
+                                        (characterId, classId, equipSlot, itemId)
+                                        VALUES
+                                        (@characterId, @classId, @equipSlot, @uniqueItemId)
+                                        ON DUPLICATE KEY UPDATE itemId=@uniqueItemId;
+                                        ";
+
+                        MySqlCommand cmd = new MySqlCommand(query, conn, transaction);
+                        cmd.Parameters.AddWithValue("@characterId", player.actorId);
+                        cmd.Parameters.AddWithValue("@classId", (equipSlot == Player.SLOT_UNDERSHIRT || equipSlot == Player.SLOT_UNDERGARMENT) ? 0 : player.charaWork.parameterSave.state_mainSkill[0]);
+                        cmd.Parameters.AddWithValue("@equipSlot", equipSlot);
+                        cmd.Parameters.AddWithValue("@uniqueItemId", uniqueItemId);
+                        cmd.ExecuteNonQuery();
+                        transaction.Commit();
+                        return true;
+                    }
                 }
                 catch (MySqlException e)
                 {
                     Program.Log.Error(e.ToString());
+                    return false;
                 }
                 finally
                 {
@@ -2202,7 +2392,7 @@ WHERE id = @characterId", conn))
 
         }
 
-        public static void UnequipItem(Player player, ushort equipSlot)
+        public static bool UnequipItem(Player player, ushort equipSlot)
         {
 
             using (MySqlConnection conn = new MySqlConnection(String.Format("Server={0}; Port={1}; Database={2}; UID={3}; Password={4}", ConfigConstants.DATABASE_HOST, ConfigConstants.DATABASE_PORT, ConfigConstants.DATABASE_NAME, ConfigConstants.DATABASE_USERNAME, ConfigConstants.DATABASE_PASSWORD)))
@@ -2222,10 +2412,12 @@ WHERE id = @characterId", conn))
                     cmd.Parameters.AddWithValue("@equipSlot", equipSlot);
 
                     cmd.ExecuteNonQuery();
+                    return true;
                 }
                 catch (MySqlException e)
                 {
                     Program.Log.Error(e.ToString());
+                    return false;
                 }
                 finally
                 {
@@ -2535,7 +2727,7 @@ WHERE id = @characterId", conn))
                     cmd.Parameters.AddWithValue("@quality", quality);
                     cmd.ExecuteNonQuery();
 
-                    insertedItem = new InventoryItem((uint)cmd.LastInsertedId, itemId, quantity, quality, modifiers);
+                    insertedItem = new InventoryItem((ulong)cmd.LastInsertedId, itemId, quantity, quality, modifiers);
 
                     if (modifiers != null)
                     {
@@ -3178,6 +3370,43 @@ ORDER BY f.slot", conn))
                     cmd.Parameters.AddWithValue("@lsId", npcLSId);
                     cmd.Parameters.AddWithValue("@calling", isCalling ? 1 : 0);
                     cmd.Parameters.AddWithValue("@extra", isExtra ? 1 : 0);
+
+                    cmd.ExecuteNonQuery();
+                }
+                catch (MySqlException e)
+                {
+                    Program.Log.Error(e.ToString());
+                }
+                finally
+                {
+                    conn.Dispose();
+                }
+            }
+        }
+
+        public static void SavePlayerAetheryte(Player player, uint aetheryteId)
+        {
+            string query;
+            MySqlCommand cmd;
+
+            using (MySqlConnection conn = new MySqlConnection(String.Format("Server={0}; Port={1}; Database={2}; UID={3}; Password={4}", ConfigConstants.DATABASE_HOST, ConfigConstants.DATABASE_PORT, ConfigConstants.DATABASE_NAME, ConfigConstants.DATABASE_USERNAME, ConfigConstants.DATABASE_PASSWORD)))
+            {
+                try
+                {
+                    conn.Open();
+
+                    // INSERT IGNORE keeps re-touching an already-attuned
+                    // aetheryte idempotent against the (characterId,
+                    // aetheryteId) primary key.
+                    query = @"
+                    INSERT IGNORE INTO characters_aetherytes 
+                    (characterId, aetheryteId)
+                    VALUES
+                    (@charaId, @aetheryteId)";
+
+                    cmd = new MySqlCommand(query, conn);
+                    cmd.Parameters.AddWithValue("@charaId", player.actorId);
+                    cmd.Parameters.AddWithValue("@aetheryteId", aetheryteId);
 
                     cmd.ExecuteNonQuery();
                 }

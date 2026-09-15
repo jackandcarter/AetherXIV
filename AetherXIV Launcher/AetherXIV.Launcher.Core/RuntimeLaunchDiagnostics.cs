@@ -135,7 +135,9 @@ public static class RuntimeLaunchDiagnostics
             "AETHER_UMBRA_LOG",
             "AETHER_UMBRA_SAFE_MODE",
             "AETHER_UMBRA_LOAD_DELAY_MS",
-            "AETHER_UMBRA_ENABLE_MANAGED_ON_WINE"
+            "AETHER_UMBRA_ENABLE_MANAGED_ON_WINE",
+            "AETHER_UMBRA_SUPPORTED_REPOSITORY",
+            "AETHER_UMBRA_BUNDLED_REPOSITORY"
         };
 
         foreach (string key in keys)

@@ -27,6 +27,5 @@ public enum ClientGraphicsTarget
 {
     OpenGLCompatibility,
     WineDefault,
-    OpenGLThreaded,
-    WineD3DVulkan
+    OpenGLThreaded
 }

@@ -22,6 +22,26 @@ def main() -> int:
 
     root = args.repo_root.resolve()
     output = args.output_dir.resolve()
+    identity_catalog = root / "Data/seeds/actor-catalog/native-actor-slot-overrides.json"
+    migration_generator = root / "tools/Universal/generate-native-actor-migration.py"
+    for target, migration in (
+        ("direct-core", root / "db/direct-core/migrations/20260727_000030_native_actor_slots.sql"),
+        ("normalized", root / "Data/sql/migrations/20260727_native_actor_slots.sql"),
+    ):
+        subprocess.run(
+            [
+                "python3",
+                str(migration_generator),
+                "--catalog",
+                str(identity_catalog),
+                "--output",
+                str(migration),
+                "--target",
+                target,
+                "--verify",
+            ],
+            check=True,
+        )
     if output.exists():
         shutil.rmtree(output)
     output.mkdir(parents=True, exist_ok=True)
@@ -80,6 +100,18 @@ def main() -> int:
         destination = output / name
         shutil.copy2(source, destination)
         if name.endswith(".sh"):
+            destination.chmod(0o755)
+
+    support_tools = (
+        (root / "tools/Universal/reset-account-characters.sh", "reset-account-characters.sh"),
+        (root / "tools/Windows/reset-account-characters.ps1", "reset-account-characters.ps1"),
+    )
+    for source, destination_name in support_tools:
+        if not source.is_file():
+            raise SystemExit(f"Missing packaged support tool: {source}")
+        destination = output / destination_name
+        shutil.copy2(source, destination)
+        if destination.suffix == ".sh":
             destination.chmod(0o755)
 
     print(f"Packaged direct-core database installer at {output}")

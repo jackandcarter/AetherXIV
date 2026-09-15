@@ -23,23 +23,16 @@ namespace AetherXIV.Core.Map.packets.send.actor
         }
         public static SubPacket BuildPacket(uint sourceActorId, SubState substate)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                   binWriter.Write((byte)substate.breakage);
-                   binWriter.Write((byte)substate.chantId);
-                   binWriter.Write((byte)(substate.guard & 0xF));
-                   binWriter.Write((byte)(substate.waste));
-                   binWriter.Write((byte)(substate.mode));
-                   binWriter.Write((byte)0);
-                   binWriter.Write((ushort)substate.motionPack);
-                }
-            }
-
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetActorSubStatePacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetActorSubStatePacket(
+                    substate.breakage,
+                    substate.chantId,
+                    (byte)(substate.guard & 0xF),
+                    substate.waste,
+                    substate.mode,
+                    substate.motionPack));
         }
     }
 }

@@ -7,6 +7,13 @@ namespace AetherXIV.Core.Map.actors.area
     /// process. Character persistence must never retain a dynamic area name or
     /// instance number. Content with a confirmed retry entrance also returns to
     /// that entrance so its quest can reconstruct the duty from the beginning.
+    ///
+    /// The three opening battles (SimpleContent30002/30010/30079) are treated
+    /// exactly like every other SimpleContent area: their private area is
+    /// erased on login so a mid-battle relog lands in the base battle zone,
+    /// where Meteor's onBeginLogin replays the opening intro and the quest's
+    /// onTalk SEQ_005 re-entry ("talk to Yda to restart the battle") drives
+    /// the player back into the duty. (Meteor has no arena reconstruction.)
     /// </summary>
     static class TransientContentRecoveryPolicy
     {
@@ -29,20 +36,6 @@ namespace AetherXIV.Core.Map.actors.area
             y = 0;
             z = 0;
             rotation = 0;
-
-            if (String.Equals(privateAreaName, "SimpleContent30010", StringComparison.OrdinalIgnoreCase))
-            {
-                // Gridania opening-battle retry point beside Yda. The public
-                // and duty copies share fst0Battle03, so retaining the last
-                // private-copy position can otherwise strand an interrupted
-                // character beyond the quest's entry actor.
-                zoneId = 166;
-                x = 354.84f;
-                y = 3.77f;
-                z = -699.71f;
-                rotation = -0.791f;
-                return true;
-            }
 
             if (String.Equals(privateAreaName, "SimpleContentMan0g101", StringComparison.OrdinalIgnoreCase))
             {

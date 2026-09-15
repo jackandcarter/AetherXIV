@@ -4,7 +4,6 @@ using AetherXIV.Core.Map.actors.group;
 using AetherXIV.Core.Map.Actors;
 using AetherXIV.Core.Map.lua;
 using AetherXIV.Core.Map.packets.send.actor;
-using MoonSharp.Interpreter;
 using System;
 using System.Collections.Generic;
 
@@ -19,19 +18,31 @@ namespace AetherXIV.Core.Map.actors.director
         private bool isCreated = false;
         private bool isDeleted = false;
         private bool isDeleting = false;
-
-        private Script directorScript;
-        private Coroutine currentCoroutine;
+        private readonly uint nativeClassId;
+        private readonly bool hasNativeSlot;
 
         public Director(uint id, Area zone, string directorPath, bool hasContentGroup, params object[] args)
-            : base((4 << 28 | zone.actorId << 19 | (uint)id))
+            : this(id, zone, directorPath, hasContentGroup, 0, null, args)
+        {
+        }
+
+        public Director(uint id, Area zone, string directorPath, bool hasContentGroup, uint nativeClassId, string nativeClassPath, params object[] args)
+            : base(NativeActorId.ComposeNonPlayer(zone.GetActorNamespaceId(), id))
         {
             directorId = id;
             this.zone = zone;
-            this.zoneId = zone.actorId;
+            this.zoneId = zone.GetTerritoryId();
             directorScriptPath = directorPath;
+            this.nativeClassId = nativeClassId;
+            hasNativeSlot = nativeClassId != 0;
 
-            LoadLuaScript();
+            if (!String.IsNullOrWhiteSpace(nativeClassPath))
+            {
+                classPath = nativeClassPath;
+                className = nativeClassPath.Substring(nativeClassPath.LastIndexOf("/") + 1);
+                GenerateActorName(zone.ResolveObjectNameOrdinal(id, true));
+                isCreated = true;
+            }
 
             if (hasContentGroup)
             {
@@ -56,12 +67,28 @@ namespace AetherXIV.Core.Map.actors.director
             actualLParams.Insert(3, new LuaParam(4, 4));
             actualLParams.Insert(4, new LuaParam(4, 4));
             actualLParams.Insert(5, new LuaParam(4, 4));
+            if (nativeClassId != 0)
+                actualLParams.Insert(6, new LuaParam(0, (int)nativeClassId));
 
-            List<LuaParam> lparams = LuaEngine.GetInstance().CallLuaFunctionForReturn(null, this, "init", false);
-            for (int i = 1; i < lparams.Count; i++)
-                actualLParams.Add(lparams[i]);
+            // Catalog-backed resident directors already carry the trace-reviewed
+            // native class path and class id. Their retail instantiate vector
+            // ends at that id, so do not append script-derived compatibility
+            // parameters. Non-native directors still obtain their extra
+            // construction values from Lua.
+            if (!hasNativeSlot)
+            {
+                List<LuaParam> lparams = LuaEngine.GetInstance()
+                    .CallLuaFunctionForReturn(null, this, "init", false);
+                for (int i = 1; i < lparams.Count; i++)
+                    actualLParams.Add(lparams[i]);
+            }
 
-            return ActorInstantiatePacket.BuildPacket(actorId, actorName, className, actualLParams);
+            return ActorInstantiatePacket.BuildPacket(
+                actorId,
+                actorName,
+                className,
+                actualLParams,
+                GetActorInstantiationAreaKey());
         }
 
         public override List<SubPacket> GetSpawnPackets(ushort spawnType = 1)
@@ -71,8 +98,12 @@ namespace AetherXIV.Core.Map.actors.director
             subpackets.AddRange(GetEventConditionPackets());
             subpackets.Add(CreateSpeedPacket());
             subpackets.Add(CreateSpawnPositonPacket(0));
+            subpackets.Add(CreatePositionUpdatePacket());
             subpackets.Add(CreateNamePacket());
             subpackets.Add(CreateStatePacket());
+            subpackets.Add(SetActorSubStatePacket.BuildPacket(actorId, currentSubState));
+            subpackets.Add(SetActorStatusAllPacket.BuildPacket(actorId, new ushort[20]));
+            subpackets.Add(SetActorIconPacket.BuildPacket(actorId, 0));
             subpackets.Add(CreateIsZoneingPacket());
             subpackets.Add(CreateScriptBindPacket());
             return subpackets;
@@ -99,22 +130,40 @@ namespace AetherXIV.Core.Map.actors.director
 
         public void StartDirector(bool spawnImmediate, params object[] args)
         {
+            DevDiagnostics.Trace(
+                "director.start.begin",
+                "area", zone == null ? "" : zone.zoneName,
+                "territory", zoneId,
+                "path", directorScriptPath ?? "",
+                "actorId", String.Format("0x{0:X}", actorId),
+                "nativeSlot", NativeActorId.GetNativeSlot(actorId),
+                "spawnImmediate", spawnImmediate,
+                "argumentCount", args == null ? 0 : args.Length,
+                "memberCount", members.Count);
+
             if (this is GuildleveDirector guildleveDirector)
                 guildleveDirector.IncludeEligiblePartyMembers();
 
-            object[] args2 = new object[args.Length + 1];
-            args2[0] = this;
-            Array.Copy(args, 0, args2, 1, args.Length);
-
-            List<LuaParam> lparams = CallLuaScript("init", false, args2);
+            List<LuaParam> lparams = LuaEngine.GetInstance()
+                .CallLuaFunctionForReturn(null, this, "init", false, args);
             
             if (lparams != null && lparams.Count >= 1 && lparams[0].value is string)
             {
                 classPath = (string)lparams[0].value;
                 className = classPath.Substring(classPath.LastIndexOf("/") + 1);
-                GenerateActorName((int)directorId);
+                GenerateActorName(zone.ResolveObjectNameOrdinal(directorId, hasNativeSlot));
                 isCreated = true;
             }
+
+            DevDiagnostics.Trace(
+                "director.start.init",
+                "path", directorScriptPath ?? "",
+                "actorId", String.Format("0x{0:X}", actorId),
+                "returnCount", lparams == null ? 0 : lparams.Count,
+                "classPath", classPath ?? "",
+                "className", className ?? "",
+                "isCreated", isCreated,
+                "memberCount", members.Count);
 
             if (isCreated && spawnImmediate)
             {
@@ -133,7 +182,15 @@ namespace AetherXIV.Core.Map.actors.director
                 ((GuildleveDirector)this).LoadGuildleve();
 
             if (!(this is GuildleveDirector) || !((GuildleveDirector)this).UsesTraceRestoredContent)
-                CallLuaScript("main", true, this, contentGroup);
+                LuaEngine.GetInstance().CallLuaFunction(null, this, "main", true, contentGroup);
+
+            DevDiagnostics.Trace(
+                "director.start.complete",
+                "path", directorScriptPath ?? "",
+                "actorId", String.Format("0x{0:X}", actorId),
+                "isCreated", isCreated,
+                "spawnImmediate", spawnImmediate,
+                "memberCount", members.Count);
         }
 
         public void StartContentGroup()
@@ -144,6 +201,9 @@ namespace AetherXIV.Core.Map.actors.director
 
         public void EndDirector()
         {
+            if (isDeleting || isDeleted)
+                return;
+
             isDeleting = true;
 
             if (contentGroup != null)
@@ -157,7 +217,11 @@ namespace AetherXIV.Core.Map.actors.director
                 ((Player)player).RemoveDirector(this);
             members.Clear();
             isDeleted = true;
-            Server.GetWorldManager().GetZone(zoneId).DeleteDirector(actorId);
+            // Remove this exact logical director from its owning area. Looking
+            // the area up by territory can select the public Zone instead of
+            // the private/content area that created it, and actor ids are not
+            // unique across per-player native director instances.
+            zone?.DeleteDirector(this);
         }
         
         public void AddMember(Actor actor)
@@ -253,7 +317,7 @@ namespace AetherXIV.Core.Map.actors.director
             string classNumber = Utils.ToStringBase63(actorNumber);
 
             //Get stuff after @
-            uint zoneId = zone.actorId;
+            uint zoneId = zone.GetActorNameZoneId();
             uint privLevel = 0;
             if (zone is PrivateArea)
                 privLevel = ((PrivateArea)zone).GetPrivateAreaType();
@@ -266,134 +330,29 @@ namespace AetherXIV.Core.Map.actors.director
             return directorScriptPath;
         }
 
-        private void LoadLuaScript()
+        public uint GetDirectorClassId()
         {
-            string luaPath = String.Format(LuaEngine.FILEPATH_DIRECTORS, GetScriptPath());
-            directorScript = LuaEngine.LoadScript(luaPath);
-            if (directorScript == null)
-                Program.Log.Error("Could not load director script: director={0} script={1} path={2}.", GetName(), GetScriptPath(), luaPath);
+            return nativeClassId;
         }
 
-        private List<LuaParam> CallLuaScript(string funcName, bool optional, params object[] args)
+        public bool HasNativeSlot()
         {
-            string luaPath = String.Format(LuaEngine.FILEPATH_DIRECTORS, directorScriptPath);
-            directorScript = LuaEngine.LoadScript(luaPath);
-
-            if (directorScript == null)
-            {
-                if (!optional)
-                    Program.Log.Error("Could not load director script: director={0} script={1} path={2}.", GetName(), GetScriptPath(), luaPath);
-                return null;
-            }
-
-            DynValue function = directorScript.Globals.Get(funcName);
-            if (function.IsNil())
-            {
-                if (!optional)
-                    Program.Log.Error("Could not find Lua function '{0}' for director {1} script={2} path={3}.", funcName, GetName(), GetScriptPath(), luaPath);
-                return null;
-            }
-
-            try
-            {
-                DynValue result = directorScript.Call(function, args);
-                return LuaUtils.CreateLuaParamList(result);
-            }
-            catch (ScriptRuntimeException e)
-            {
-                Program.Log.Error("Lua director function failed: director={0} script={1} function={2}: {3}", GetName(), GetScriptPath(), funcName, e.DecoratedMessage);
-            }
-            catch (Exception e)
-            {
-                Program.Log.Error("Lua director function failed: director={0} script={1} function={2}: {3}", GetName(), GetScriptPath(), funcName, e.Message);
-            }
-
-            return null;
+            return hasNativeSlot;
         }
 
-        private List<LuaParam> StartCoroutine(string funcName, params object[] args)
+        public uint GetNativeSlot()
         {
-            if (directorScript != null)
-            {
-                if (!directorScript.Globals.Get(funcName).IsNil())
-                {
-                    currentCoroutine = directorScript.CreateCoroutine(directorScript.Globals[funcName]).Coroutine;
-                    DynValue value = currentCoroutine.Resume(args);
-                    LuaEngine.GetInstance().ResolveResume(null, currentCoroutine, value);
-                }
-                else
-                    Program.Log.Error("Could not find Lua function '{0}' for director {1} script={2}.", funcName, GetName(), GetScriptPath());
-            }
-            return null;
+            return directorId;
         }
 
         public void OnEventStart(Player player, object[] args)
         {
-            object[] args2 = new object[args.Length + (player == null ? 1 : 2)];
-            Array.Copy(args, 0, args2, (player == null ? 1 : 2), args.Length);
-            if (player != null)
-            {
-                args2[0] = player;
-                args2[1] = this;
-            }
-            else
-                args2[0] = this;
-
-            string luaPath = String.Format(LuaEngine.FILEPATH_DIRECTORS, directorScriptPath);
-            directorScript = LuaEngine.LoadScript(luaPath);
-            if (directorScript == null)
-            {
-                Program.Log.Error("Could not load director script for event: player={0} director={1} script={2} path={3}.",
-                    player != null ? player.customDisplayName : "(none)",
-                    GetName(),
-                    GetScriptPath(),
-                    luaPath);
-                if (player != null)
-                    player.EndEvent();
-                return;
-            }
-
-            DynValue function = directorScript.Globals.Get("onEventStarted");
-            if (function.IsNil())
-            {
-                Program.Log.Error("Could not find Lua function 'onEventStarted' for director {0} script={1} path={2}.", GetName(), GetScriptPath(), luaPath);
-                if (player != null)
-                    player.EndEvent();
-                return;
-            }
-
-            Program.Log.Info("Director event start: player={0} director={1} script={2} trigger={3}.",
-                player != null ? player.customDisplayName : "(none)",
-                GetName(),
-                GetScriptPath(),
-                args.Length > 0 ? args[0] : "(none)");
-
-            try
-            {
-                Coroutine coroutine = directorScript.CreateCoroutine(function).Coroutine;
-                DynValue value = coroutine.Resume(args2);
-                LuaEngine.GetInstance().ResolveResume(player, coroutine, value);
-            }
-            catch (ScriptRuntimeException e)
-            {
-                Program.Log.Error("Lua director event failed: player={0} director={1} script={2}: {3}",
-                    player != null ? player.customDisplayName : "(none)",
-                    GetName(),
-                    GetScriptPath(),
-                    e.DecoratedMessage);
-                if (player != null)
-                    player.EndEvent();
-            }
-            catch (Exception e)
-            {
-                Program.Log.Error("Lua director event failed: player={0} director={1} script={2}: {3}",
-                    player != null ? player.customDisplayName : "(none)",
-                    GetName(),
-                    GetScriptPath(),
-                    e.Message);
-                if (player != null)
-                    player.EndEvent();
-            }
+            LuaEngine.GetInstance().CallLuaFunction(
+                player,
+                this,
+                "onEventStarted",
+                false,
+                args);
         }
     }    
 }

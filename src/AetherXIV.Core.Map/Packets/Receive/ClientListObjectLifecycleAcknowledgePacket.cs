@@ -36,20 +36,18 @@ namespace AetherXIV.Core.Map.packets.receive
 
         public ClientListObjectLifecycleAcknowledgePacket(byte[] data)
         {
-            if (data == null || data.Length != PAYLOAD_SIZE)
-            {
-                invalidPacket = true;
-                return;
-            }
-
             try
             {
-                using MemoryStream stream = new MemoryStream(data, writable: false);
-                using BinaryReader reader = new BinaryReader(stream);
-                actorId = reader.ReadUInt32();
-                listType = reader.ReadUInt32();
-                reserved0 = reader.ReadUInt32();
-                reserved1 = reader.ReadUInt32();
+                AetherXIV.Protocol.ClientListObjectLifecycleAcknowledgePacket decoded =
+                    new AetherXIV.Protocol.ClientListObjectLifecycleAcknowledgePacketCodec().Decode(
+                        AetherXIV.Protocol.SubPacket.Create(
+                            AetherXIV.Protocol.PacketOpcode.ClientListObjectLifecycleAcknowledge,
+                            0,
+                            data));
+                actorId = decoded.ActorId;
+                listType = decoded.ListType;
+                reserved0 = decoded.Reserved0;
+                reserved1 = decoded.Reserved1;
             }
             catch (Exception)
             {

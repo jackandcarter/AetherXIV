@@ -1,5 +1,5 @@
-name: AetherXIV 2.0 Runtime Update
-run-name: ${{ inputs.build_name || 'AetherXIV 2.0 Runtime Update' }}
+name: AetherXIV v2.1 Release
+run-name: ${{ inputs.build_name || 'AetherXIV v2.1 Release' }}
 
 on:
   workflow_dispatch:
@@ -7,37 +7,37 @@ on:
       build_name:
         description: Name shown for this release build.
         required: true
-        default: Patch Helper + Tutorial Update
+        default: AetherXIV v2.1 Release
       release_tag:
         description: Release tag to create or update.
         required: true
-        default: release-v2.0
+        default: release-v2.1
       publish_release:
-        description: Publish the AetherXIV 2.0 GitHub Release after all builds pass.
+        description: Publish the AetherXIV 2.1 GitHub Release after all builds pass.
         type: boolean
         required: true
         default: true
   push:
     branches:
-      - "2.0"
+      - "2.1"
     tags:
-      - "release-v2.0"
+      - "release-v2.1"
 
 permissions:
   contents: write
 
 concurrency:
-  group: aetherxiv-2.0-${{ github.ref }}
+  group: aetherxiv-2.1-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   BUILD_CONFIGURATION: Release
-  BUILD_NUMBER: 21999
-  RELEASE_NAME: AetherXIV 2.0 Build 21999
+  BUILD_NUMBER: 22042
+  RELEASE_NAME: AetherXIV v2.1 Release (Build 22042)
 
 jobs:
   verify:
-    name: Verify source and tests
+    name: Verify release source
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -53,12 +53,12 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Run the complete verification suite
+      - name: Verify public release source
         run: ./tools/Development/verify-aetherxiv.sh
 
   build-linux:
     name: Build Linux x64
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' }}
     needs: verify
     runs-on: ubuntu-latest
     steps:
@@ -75,70 +75,120 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install the Windows x86 cross-compiler
+      - name: Install the Wine and Windows cross-build toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install --yes g++-mingw-w64-i686 xz-utils xvfb
+          sudo apt-get install --yes \
+            bison \
+            build-essential \
+            flex \
+            g++-mingw-w64-i686 \
+            gcc-mingw-w64-i686 \
+            gcc-mingw-w64-x86-64 \
+            libfreetype-dev \
+            libgl-dev \
+            libgnutls28-dev \
+            libx11-dev \
+            libxext-dev \
+            libxfixes-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libxrender-dev \
+            xz-utils \
+            xvfb
+
+      - name: Build the authoritative AetherXIV Linux runtime
+        run: |
+          runtime_root="${RUNNER_TEMP}/aetherxiv-linux-runtime"
+          ./tools/runtime/build-linux.sh "${runtime_root}"
+          echo "AETHERXIV_WINE_RUNTIME_ROOT=${runtime_root}" >> "${GITHUB_ENV}"
+
+      - name: Populate the Umbra local NuGet feed
+        run: python3 tools/Universal/package-umbra-pluginapi.py
 
       - name: Build the Linux release
         run: ./tools/Linux/build-aetherxiv.sh "${BUILD_CONFIGURATION}"
 
-      - name: Smoke-test the pinned Linux Wine runtime
+      - name: Build the Linux core package
+        run: ./tools/Linux/build-aetherxiv.sh "${BUILD_CONFIGURATION}" --scope core
+
+      - name: Smoke-test the bundled Linux runtime and Umbra x86 .NET host
         run: |
-          runtime_root="${RUNNER_TEMP}/aetherxiv-linux-wine"
-          archive="${runtime_root}/wine.tar.xz"
-          mkdir -p "${runtime_root}/extract"
-          curl --fail --location --retry 3 \
-            --output "${archive}" \
-            https://github.com/Kron4ek/Wine-Builds/releases/download/11.0/wine-11.0-amd64-wow64.tar.xz
-          echo "39574efa1132c3ca0d5c77dd2eddbe4a49cca0d6cc2c290ff4924493a1c40314  ${archive}" | sha256sum --check
-          tar -xJf "${archive}" -C "${runtime_root}/extract"
-          wine="${runtime_root}/extract/wine-11.0-amd64-wow64/bin/wine"
-          wineboot="${runtime_root}/extract/wine-11.0-amd64-wow64/bin/wineboot"
-          wineserver="${runtime_root}/extract/wine-11.0-amd64-wow64/bin/wineserver"
+          runtime_root="bin/build/Release/Linux/launcher/app/CompatibilityRuntime"
+          wine="${runtime_root}/bin/wine"
+          wineserver="${runtime_root}/bin/wineserver"
           helper="bin/build/Release/Linux/launcher/app/Helpers/win-x64/AetherXIV.Launcher.ClientLauncher.exe"
           injector="bin/build/Release/Linux/launcher/app/Helpers/win-x64/Umbra.NativeInjector.x86.exe"
+          bridge="bin/build/Release/Linux/launcher/app/Helpers/win-x64/AetherXIV.DiscordBridge.exe"
+          framework="$(pwd)/bin/build/Release/Linux/launcher/app/Umbra/Framework"
+          managed_probe="${framework}/Managed/Aether.Umbra.Framework.exe"
+          to_wine_path() { local path="$1"; printf 'Z:%s' "${path//\//\\}"; }
           "${wine}" --version
           timeout 120s xvfb-run -a env \
             WINEDEBUG=-all \
-            WINEDLLOVERRIDES=mscoree,mshtml= \
-            WINEPREFIX="${runtime_root}/prefix" \
-            "${wineboot}" -u
+            WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
+            WINEARCH=wow64 \
+            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
+            "${wine}" wineboot -u
           timeout 30s env \
             WINEDEBUG=-all \
-            WINEPREFIX="${runtime_root}/prefix" \
+            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
             "${wineserver}" -w
           timeout 60s xvfb-run -a env \
             WINEDEBUG=-all \
-            WINEDLLOVERRIDES=mscoree,mshtml= \
-            WINEPREFIX="${runtime_root}/prefix" \
-            "${wine}" "${helper}" --probe | tee "${runtime_root}/probe.log"
+            WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
+            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
+            "${wine}" "${helper}" --probe | tee "${RUNNER_TEMP}/helper-probe.log"
           timeout 60s xvfb-run -a env \
             WINEDEBUG=-all \
-            WINEPREFIX="${runtime_root}/prefix" \
-            "${wine}" "${injector}" --probe | tee "${runtime_root}/injector-probe.log"
+            WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
+            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
+            "${wine}" "${injector}" --probe | tee "${RUNNER_TEMP}/injector-probe.log"
+          timeout 60s xvfb-run -a env \
+            WINEDEBUG=-all \
+            WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
+            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
+            "${wine}" "${bridge}" --probe | tee "${RUNNER_TEMP}/bridge-probe.log"
+          timeout 60s xvfb-run -a env \
+            WINEDEBUG=-all \
+            WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' \
+            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
+            DOTNET_ROOT="$(to_wine_path "${framework}/Runtime")" \
+            DOTNET_ROOT_X86="$(to_wine_path "${framework}/Runtime")" \
+            "${wine}" "${managed_probe}" --runtime-probe | tee "${RUNNER_TEMP}/umbra-managed-probe.log"
           timeout 30s env \
             WINEDEBUG=-all \
-            WINEPREFIX="${runtime_root}/prefix" \
+            WINEPREFIX="${RUNNER_TEMP}/aetherxiv-linux-prefix" \
             "${wineserver}" -w
-          grep -Fq "AETHERXIV_CLIENT_HELPER_OK" "${runtime_root}/probe.log"
-          grep -Fq "AETHERXIV_NATIVE_INJECTOR_OK" "${runtime_root}/injector-probe.log"
+          grep -Fq "AETHERXIV_CLIENT_HELPER_OK" "${RUNNER_TEMP}/helper-probe.log"
+          grep -Fq "AETHERXIV_NATIVE_INJECTOR_OK" "${RUNNER_TEMP}/injector-probe.log"
+          grep -Fq "AETHERXIV_DISCORD_BRIDGE_OK" "${RUNNER_TEMP}/bridge-probe.log"
+          grep -Fq "AETHER_UMBRA_MANAGED_RUNTIME_OK" "${RUNNER_TEMP}/umbra-managed-probe.log"
 
-      - name: Package the Linux release
+      - name: Package Linux full, Core, and Launcher downloads
         run: |
           mkdir -p artifacts
-          tar -czf artifacts/AetherXIV-2.0.21999-Linux-x64.tar.gz -C bin/build/Release Linux
+          tar -czf artifacts/AetherXIV-2.1.22042-Linux-x64.tar.gz -C bin/build/Release Linux
+          tar -czf artifacts/AetherXIV-2.1.22042-Linux-x64-Core.tar.gz -C bin/build/Release Linux-Core
+          launcher_stage="${RUNNER_TEMP}/AetherXIV-2.1.22042-Linux-x64-Launcher"
+          mkdir -p "${launcher_stage}/desktop/icons"
+          cp -a bin/build/Release/Linux/launcher "${launcher_stage}/launcher"
+          cp bin/build/Release/Linux/desktop/AetherXIV\ Launcher.desktop "${launcher_stage}/desktop/"
+          cp bin/build/Release/Linux/desktop/icons/aetherxiv-launcher.png "${launcher_stage}/desktop/icons/"
+          cp LICENSE THIRD_PARTY_NOTICES.md MODIFICATIONS.md TRADEMARKS.md "${launcher_stage}/"
+          tar -czf artifacts/AetherXIV-2.1.22042-Linux-x64-Launcher.tar.gz \
+            -C "${RUNNER_TEMP}" AetherXIV-2.1.22042-Linux-x64-Launcher
 
       - name: Upload the Linux release
         uses: actions/upload-artifact@v7
         with:
-          name: release-AetherXIV-2.0.21999-Linux-x64
+          name: release-AetherXIV-2.1.22042-Linux-x64
           path: artifacts/*
           if-no-files-found: error
 
   build-steamos:
     name: Build SteamOS x64
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' }}
     needs: verify
     runs-on: ubuntu-latest
     steps:
@@ -155,31 +205,56 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install the Windows x86 cross-compiler
+      - name: Install the Wine and Windows cross-build toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install --yes g++-mingw-w64-i686
+          sudo apt-get install --yes \
+            bison build-essential flex \
+            g++-mingw-w64-i686 gcc-mingw-w64-i686 gcc-mingw-w64-x86-64 \
+            libfreetype-dev libgl-dev libgnutls28-dev \
+            libx11-dev libxext-dev libxfixes-dev libxi-dev libxrandr-dev libxrender-dev
+
+      - name: Build the authoritative AetherXIV SteamOS runtime
+        run: |
+          runtime_root="${RUNNER_TEMP}/aetherxiv-steamos-runtime"
+          ./tools/runtime/build-linux.sh "${runtime_root}"
+          echo "AETHERXIV_WINE_RUNTIME_ROOT=${runtime_root}" >> "${GITHUB_ENV}"
+
+      - name: Populate the Umbra local NuGet feed
+        run: python3 tools/Universal/package-umbra-pluginapi.py
 
       - name: Build the SteamOS release
         run: ./tools/SteamOS/build-aetherxiv.sh "${BUILD_CONFIGURATION}"
 
-      - name: Package the SteamOS release
+      - name: Build the SteamOS core package
+        run: ./tools/SteamOS/build-aetherxiv.sh "${BUILD_CONFIGURATION}" --scope core
+
+      - name: Package SteamOS full, Core, and Launcher downloads
         run: |
           mkdir -p artifacts
-          tar -czf artifacts/AetherXIV-2.0.21999-SteamOS-x64.tar.gz -C bin/build/Release SteamOS
+          tar -czf artifacts/AetherXIV-2.1.22042-SteamOS-x64.tar.gz -C bin/build/Release SteamOS
+          tar -czf artifacts/AetherXIV-2.1.22042-SteamOS-x64-Core.tar.gz -C bin/build/Release SteamOS-Core
+          launcher_stage="${RUNNER_TEMP}/AetherXIV-2.1.22042-SteamOS-x64-Launcher"
+          mkdir -p "${launcher_stage}/desktop/icons"
+          cp -a bin/build/Release/SteamOS/launcher "${launcher_stage}/launcher"
+          cp bin/build/Release/SteamOS/desktop/AetherXIV\ Launcher.desktop "${launcher_stage}/desktop/"
+          cp bin/build/Release/SteamOS/desktop/icons/aetherxiv-launcher.png "${launcher_stage}/desktop/icons/"
+          cp LICENSE THIRD_PARTY_NOTICES.md MODIFICATIONS.md TRADEMARKS.md "${launcher_stage}/"
+          tar -czf artifacts/AetherXIV-2.1.22042-SteamOS-x64-Launcher.tar.gz \
+            -C "${RUNNER_TEMP}" AetherXIV-2.1.22042-SteamOS-x64-Launcher
 
       - name: Upload the SteamOS release
         uses: actions/upload-artifact@v7
         with:
-          name: release-AetherXIV-2.0.21999-SteamOS-x64
+          name: release-AetherXIV-2.1.22042-SteamOS-x64
           path: artifacts/*
           if-no-files-found: error
 
   build-macos:
-    name: Build macOS arm64
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
+    name: Build macOS arm64 with x64 WoW64 runtime
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' }}
     needs: verify
-    runs-on: macos-15
+    runs-on: macos-15-intel
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -194,56 +269,96 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install the Windows x86 cross-compiler
+      - name: Install the Wine and Windows cross-build toolchains
         run: |
           # GitHub's macOS image may carry an untrusted, unrelated AWS tap.
           # Remove it quietly before invoking Homebrew so it cannot annotate this build.
           brew untap aws/tap >/dev/null 2>&1 || true
-          brew install mingw-w64
+          brew install bison freetype gnutls mingw-w64 molten-vk pkg-config
+
+      - name: Build the authoritative AetherXIV macOS runtime
+        run: |
+          runtime_root="${RUNNER_TEMP}/aetherxiv-macos-runtime"
+          ./tools/runtime/build-macos.sh "${runtime_root}"
+          echo "AETHERXIV_WINE_RUNTIME_ROOT=${runtime_root}" >> "${GITHUB_ENV}"
+
+      - name: Populate the Umbra local NuGet feed
+        run: python3 tools/Universal/package-umbra-pluginapi.py
 
       - name: Build the macOS release
         run: ./tools/MacOS/build-aetherxiv.sh "${BUILD_CONFIGURATION}"
 
-      - name: Smoke-test the pinned macOS Wine runtime
+      - name: Build the macOS core package
+        run: ./tools/MacOS/build-aetherxiv.sh "${BUILD_CONFIGURATION}" --scope core
+
+      - name: Smoke-test the bundled macOS runtime and Umbra x86 .NET host
         run: |
-          runtime_root="${RUNNER_TEMP}/aetherxiv-macos-wine"
-          archive="${runtime_root}/wine.tar.xz"
-          mkdir -p "${runtime_root}/extract"
-          curl --fail --location --retry 3 \
-            --output "${archive}" \
-            https://github.com/Gcenx/macOS_Wine_builds/releases/download/11.0_1/wine-stable-11.0_1-osx64.tar.xz
-          echo "b50dc50ec7f41d58b115a6b685d4d1315ba3c797bd3aa0f49213f2703cb82388  ${archive}" | shasum -a 256 --check
-          tar -xJf "${archive}" -C "${runtime_root}/extract"
-          wine="${runtime_root}/extract/Wine Stable.app/Contents/Resources/wine/bin/wine"
+          runtime_root="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/Resources/CompatibilityRuntime"
+          wine="${runtime_root}/bin/wine"
+          wineserver="${runtime_root}/bin/wineserver"
           helper="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Helpers/win-x64/AetherXIV.Launcher.ClientLauncher.exe"
           injector="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Helpers/win-x64/Umbra.NativeInjector.x86.exe"
+          bridge="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Helpers/win-x64/AetherXIV.DiscordBridge.exe"
+          framework="$(pwd)/bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Umbra/Framework"
+          managed_probe="${framework}/Managed/Aether.Umbra.Framework.exe"
+          prefix="${RUNNER_TEMP}/aetherxiv-macos-prefix"
+          to_wine_path() { local path="$1"; printf 'Z:%s' "${path//\//\\}"; }
+          test -f "${runtime_root}/lib/wine/x86_64-unix/libMoltenVK.dylib"
+          export DYLD_FALLBACK_LIBRARY_PATH="$(pwd)/${runtime_root}/lib/wine/x86_64-unix"
           "${wine}" --version
-          WINEDEBUG=-all \
-            WINEPREFIX="${runtime_root}/prefix" \
-            "${wine}" "${helper}" --probe | tee "${runtime_root}/probe.log"
-          WINEDEBUG=-all \
-            WINEPREFIX="${runtime_root}/prefix" \
-            "${wine}" "${injector}" --probe | tee "${runtime_root}/injector-probe.log"
-          grep -Fq "AETHERXIV_CLIENT_HELPER_OK" "${runtime_root}/probe.log"
-          grep -Fq "AETHERXIV_NATIVE_INJECTOR_OK" "${runtime_root}/injector-probe.log"
+          WINEDEBUG=-all WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' WINEARCH=wow64 WINEPREFIX="${prefix}" \
+            "${wine}" wineboot -u
+          WINEDEBUG=-all WINEPREFIX="${prefix}" "${wineserver}" -w
+          WINEDEBUG=-all WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' WINEPREFIX="${prefix}" \
+            "${wine}" "${helper}" --probe | tee "${RUNNER_TEMP}/helper-probe.log"
+          WINEDEBUG=-all WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' WINEPREFIX="${prefix}" \
+            "${wine}" "${injector}" --probe | tee "${RUNNER_TEMP}/injector-probe.log"
+          WINEDEBUG=-all WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' WINEPREFIX="${prefix}" \
+            "${wine}" "${bridge}" --probe | tee "${RUNNER_TEMP}/bridge-probe.log"
+          WINEDEBUG=-all WINEDLLOVERRIDES='winedbg.exe=d;mshtml=' WINEPREFIX="${prefix}" \
+            DOTNET_ROOT="$(to_wine_path "${framework}/Runtime")" \
+            DOTNET_ROOT_X86="$(to_wine_path "${framework}/Runtime")" \
+            "${wine}" "${managed_probe}" --runtime-probe | tee "${RUNNER_TEMP}/umbra-managed-probe.log"
+          WINEDEBUG=-all WINEPREFIX="${prefix}" "${wineserver}" -w
+          grep -Fq "AETHERXIV_CLIENT_HELPER_OK" "${RUNNER_TEMP}/helper-probe.log"
+          grep -Fq "AETHERXIV_NATIVE_INJECTOR_OK" "${RUNNER_TEMP}/injector-probe.log"
+          grep -Fq "AETHERXIV_DISCORD_BRIDGE_OK" "${RUNNER_TEMP}/bridge-probe.log"
+          grep -Fq "AETHER_UMBRA_MANAGED_RUNTIME_OK" "${RUNNER_TEMP}/umbra-managed-probe.log"
 
-      - name: Package the macOS release
+      - name: Package macOS full, Core, and Launcher downloads
         run: |
           mkdir -p artifacts
           ditto -c -k --sequesterRsrc --keepParent \
             bin/build/Release/MacOS \
-            artifacts/AetherXIV-2.0.21999-MacOS-arm64.zip
+            artifacts/AetherXIV-2.1.22042-MacOS-arm64.zip
+          core_stage="${RUNNER_TEMP}/AetherXIV-2.1.22042-MacOS-arm64-Core"
+          mkdir -p "${core_stage}"
+          ditto "bin/build/Release/MacOS-Core/AetherXIV Core.app" \
+            "${core_stage}/AetherXIV Core.app"
+          ditto bin/build/Release/MacOS-Core/Database "${core_stage}/Database"
+          cp LICENSE THIRD_PARTY_NOTICES.md MODIFICATIONS.md TRADEMARKS.md "${core_stage}/"
+          printf 'schema=aetherxiv.build.manifest.v1\nproduct_version=2.1\nbuild_number=%s\nscope=core\nplatform=MacOS\n' \
+            "${BUILD_NUMBER}" > "${core_stage}/build-manifest.txt"
+          ditto -c -k --sequesterRsrc --keepParent "${core_stage}" \
+            artifacts/AetherXIV-2.1.22042-MacOS-arm64-Core.zip
+          launcher_stage="${RUNNER_TEMP}/AetherXIV-2.1.22042-MacOS-arm64-Launcher"
+          mkdir -p "${launcher_stage}"
+          ditto "bin/build/Release/MacOS/AetherXIV Launcher.app" \
+            "${launcher_stage}/AetherXIV Launcher.app"
+          cp LICENSE THIRD_PARTY_NOTICES.md MODIFICATIONS.md TRADEMARKS.md "${launcher_stage}/"
+          ditto -c -k --sequesterRsrc --keepParent "${launcher_stage}" \
+            artifacts/AetherXIV-2.1.22042-MacOS-arm64-Launcher.zip
 
       - name: Upload the macOS release
         uses: actions/upload-artifact@v7
         with:
-          name: release-AetherXIV-2.0.21999-MacOS-arm64
+          name: release-AetherXIV-2.1.22042-MacOS-arm64
           path: artifacts/*
           if-no-files-found: error
 
   build-windows:
     name: Build Windows x64
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' }}
     needs: verify
     runs-on: windows-latest
     steps:
@@ -260,18 +375,33 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Run native Windows launcher regression tests
+      - name: Populate the Umbra local NuGet feed
         shell: pwsh
-        run: >-
-          dotnet test
-          "AetherXIV Launcher/AetherXIV.Launcher.Tests/AetherXIV.Launcher.Tests.csproj"
-          --configuration Release
-          --filter
-          "FullyQualifiedName=AetherXIV.Launcher.Tests.ClientProcessLauncherTests.ExplicitApplicationNamePreventsSpaceDelimitedExecutableSubstitutionOnWindows"
+        run: python tools/Universal/package-umbra-pluginapi.py
 
       - name: Build the Windows release
         shell: pwsh
         run: ./tools/Windows/build-aetherxiv.ps1 -Configuration $env:BUILD_CONFIGURATION
+
+      - name: Build the Windows core package
+        shell: pwsh
+        run: ./tools/Windows/build-aetherxiv.ps1 -Configuration $env:BUILD_CONFIGURATION -Scope core
+
+      - name: Smoke-test the bundled Umbra x86 managed runtime
+        shell: pwsh
+        run: |
+          $frameworkRoot = Resolve-Path "bin/build/Release/Windows/launcher/app/Umbra/Framework"
+          $probe = Join-Path $frameworkRoot "Managed/Aether.Umbra.Framework.exe"
+          $runtime = Join-Path $frameworkRoot "Runtime"
+          $env:DOTNET_ROOT = $runtime
+          $env:DOTNET_ROOT_X86 = $runtime
+          $output = & $probe --runtime-probe 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/umbra-managed-probe.log"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundled Umbra x86 managed runtime probe exited with $LASTEXITCODE."
+          }
+          if (($output -join "`n") -notmatch "AETHER_UMBRA_MANAGED_RUNTIME_OK") {
+            throw "Bundled Umbra x86 managed runtime did not complete its worker-thread checks."
+          }
 
       - name: Validate Windows client redirect repair
         shell: pwsh
@@ -324,22 +454,28 @@ jobs:
             }
           }
 
-      - name: Package the Windows release
+      - name: Package Windows full, Core, and Launcher downloads
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          Compress-Archive -Path "bin/build/Release/Windows" -DestinationPath "artifacts/AetherXIV-2.0.21999-Windows-x64.zip" -CompressionLevel Optimal -Force
+          Compress-Archive -Path "bin/build/Release/Windows" -DestinationPath "artifacts/AetherXIV-2.1.22042-Windows-x64.zip" -CompressionLevel Optimal -Force
+          Compress-Archive -Path "bin/build/Release/Windows-Core" -DestinationPath "artifacts/AetherXIV-2.1.22042-Windows-x64-Core.zip" -CompressionLevel Optimal -Force
+          $launcherStage = Join-Path $env:RUNNER_TEMP "AetherXIV-2.1.22042-Windows-x64-Launcher"
+          New-Item -ItemType Directory -Force -Path $launcherStage | Out-Null
+          Copy-Item -Recurse -Force "bin/build/Release/Windows/launcher" (Join-Path $launcherStage "launcher")
+          Copy-Item -Force LICENSE, THIRD_PARTY_NOTICES.md, MODIFICATIONS.md, TRADEMARKS.md -Destination $launcherStage
+          Compress-Archive -Path $launcherStage -DestinationPath "artifacts/AetherXIV-2.1.22042-Windows-x64-Launcher.zip" -CompressionLevel Optimal -Force
 
       - name: Upload the Windows release
         uses: actions/upload-artifact@v7
         with:
-          name: release-AetherXIV-2.0.21999-Windows-x64
+          name: release-AetherXIV-2.1.22042-Windows-x64
           path: artifacts/*
           if-no-files-found: error
 
   build-docker:
     name: Validate Docker server (amd64 + arm64)
-    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' }}
     needs: verify
     runs-on: ubuntu-latest
     env:
@@ -392,8 +528,8 @@ jobs:
         run: docker compose down --volumes --remove-orphans
 
   publish-release:
-    name: Publish AetherXIV 2.0
-    if: ${{ always() && !cancelled() && needs.verify.result == 'success' && needs.build-linux.result == 'success' && needs.build-steamos.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success' && needs.build-docker.result == 'success' && (startsWith(github.ref, 'refs/tags/') || inputs.publish_release) }}
+    name: Publish AetherXIV 2.1
+    if: ${{ always() && !cancelled() && needs.verify.result == 'success' && needs.build-linux.result == 'success' && needs.build-steamos.result == 'success' && needs.build-macos.result == 'success' && needs.build-windows.result == 'success' && needs.build-docker.result == 'success' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/2.1' || inputs.publish_release) }}
     needs:
       - verify
       - build-linux
@@ -409,7 +545,7 @@ jobs:
       - name: Download release artifacts
         uses: actions/download-artifact@v8
         with:
-          pattern: release-AetherXIV-2.0.21999-*
+          pattern: release-AetherXIV-2.1.22042-*
           path: release-assets
           merge-multiple: true
 
@@ -426,8 +562,8 @@ jobs:
           set -euo pipefail
 
           release_tag="${GITHUB_REF_NAME}"
-          if [[ "${GITHUB_EVENT_NAME}" != "push" ]]; then
-            release_tag="${INPUT_RELEASE_TAG:-release-v2.0}"
+          if [[ "${GITHUB_EVENT_NAME}" != "push" || "${GITHUB_REF}" != refs/tags/* ]]; then
+            release_tag="${INPUT_RELEASE_TAG:-release-v2.1}"
             git tag --force "${release_tag}" "${GITHUB_SHA}"
             git push origin "refs/tags/${release_tag}" --force
           fi
@@ -445,4 +581,4 @@ jobs:
           gh release create "${release_tag}" "${assets[@]}" \
             --target "${GITHUB_SHA}" \
             --title "${RELEASE_NAME}" \
-            --notes-file docs/AETHERXIV_2.0_RELEASE_NOTES.md
+            --notes-file docs/AETHERXIV_2.1_RELEASE_NOTES.md

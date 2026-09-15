@@ -16,6 +16,7 @@ namespace AetherXIV.Core.Map.actors.area
         private Director currentDirector;
         private bool isContentFinished = false;
         private bool battleCompletionSignaled = false;
+        private bool isDestroyRequested = false;
         private DateTime lastContentUpdate = DateTime.MinValue;
         private long contentUpdateTick = 0;
         private readonly Dictionary<string, long> scriptState = new Dictionary<string, long>();
@@ -26,7 +27,7 @@ namespace AetherXIV.Core.Map.actors.area
         }
 
         public PrivateAreaContent(Zone parent, string classPath, string privateAreaName, uint privateAreaType, Director director, Player contentStarter) //TODO: Make it a list
-            : base(parent, parent.actorId, classPath, privateAreaName, privateAreaType, 0, 0, 0)
+            : base(parent, parent.GetTerritoryId(), classPath, privateAreaName, privateAreaType, 0, 0, 0)
         {
             currentDirector = director;
             DevDiagnostics.Trace(
@@ -202,27 +203,34 @@ namespace AetherXIV.Core.Map.actors.area
 
         public void CheckDestroy()
         {
+            bool shouldDestroy = false;
             lock (mActorList)
             {
-                if (isContentFinished)
+                if (!isContentFinished || isDestroyRequested)
+                    return;
+
+                foreach (Actor actor in mActorList.Values)
                 {
-                    bool noPlayersLeft = true;
-                    foreach (Actor a in mActorList.Values)
-                    {
-                        if (a is Player)
-                            noPlayersLeft = false;
-                    }
-                    if (noPlayersLeft)
-                    {
-                        DevDiagnostics.Trace(
-                            "content.area.destroy",
-                            "zone", zoneName,
-                            "privateArea", GetPrivateAreaName(),
-                            "privateAreaType", GetPrivateAreaType());
-                        GetParentZone().DeleteContentArea(this);
-                    }
+                    if (actor is Player)
+                        return;
                 }
+
+                isDestroyRequested = true;
+                shouldDestroy = true;
             }
+
+            if (!shouldDestroy)
+                return;
+
+            // Never acquire the parent content registry while holding this
+            // area's actor lock. Zone updates snapshot the registry and then
+            // enter individual areas, so reversing that order can deadlock.
+            DevDiagnostics.Trace(
+                "content.area.destroy",
+                "zone", zoneName,
+                "privateArea", GetPrivateAreaName(),
+                "privateAreaType", GetPrivateAreaType());
+            GetParentZone().DeleteContentArea(this);
         }
 
     }

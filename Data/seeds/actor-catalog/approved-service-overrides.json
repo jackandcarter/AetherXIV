@@ -25,7 +25,7 @@
       "PropertyFlags": 1,
       "Provenance": {
         "Notes": "Ul'dah market/company-office entrance trigger metadata restored from the reviewed 1.x script notes; official Gridania frame 93 confirms the 0x0175 field layout.",
-        "SourceRef": "gamedata_actor_class:1090265; MarketEntrance.lua; ffxiv_traces/moving_around_gridania.pcapng:frame:93",
+        "SourceRef": "gamedata_actor_class:1090265; MarketEntrance.lua; reviewed-local-validation:frame:93",
         "SourceType": "client-reviewed-seed-and-official-trigger-packet",
         "Status": "RepoConfirmed"
       },

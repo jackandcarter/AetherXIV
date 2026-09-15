@@ -1,4 +1,11 @@
-# AetherXIV 2.0 Build and Runtime Dependencies
+# AetherXIV 2.1 Build and Runtime Dependencies
+
+> **2.1 build interface.** Every platform has a full build and a core-only
+> build. Use `build-aetherxiv` with `--scope full` (default) or `--scope core`;
+> macOS also retains `build-core-only.sh` as its direct core command. Add
+> `--install-dependencies` only when you explicitly want the platform
+> provisioning script to invoke its package manager. Builds otherwise perform
+> a read-only prerequisite check and fail with the missing tool names.
 
 This document separates what a release builder needs from what a player or
 server administrator needs. AetherXIV Core and AetherXIV Launcher are graphical,
@@ -14,7 +21,9 @@ does not require a terminal or a separate desktop .NET installation.
 | Linux | x64 desktop Linux | `tools/Linux/build-aetherxiv.sh` | Native Core and Launcher GUI apphosts |
 | SteamOS | Steam Deck Desktop Mode | `tools/SteamOS/build-aetherxiv.sh` | Linux Core and Launcher GUI apphosts |
 
-Linux and SteamOS releases omit path-dependent `.desktop` entries. Open the
+Linux and SteamOS releases include relocatable `.desktop` templates with
+`Terminal=false` and package-local icons. Copy them to the desktop environment
+only after editing `Exec` to the installed absolute package path. Open the
 native Core and Launcher executables directly from their packaged `app`
 folders so the release remains relocatable.
 
@@ -25,16 +34,27 @@ folders so the release remains relocatable.
 - Internet access for the initial NuGet restore, unless all packages are
   already available in a configured offline cache.
 - Enough disk space for the .NET publish output, two self-contained Windows
-  helper runtimes, and the native Umbra payload.
-- A compiler that provides the 32-bit Windows C++ Umbra toolchain described
-  below.
+  helper runtimes, and the bundled Umbra base framework.
+- A compiler that provides the 32-bit Windows C++ injector and bootstrap
+  toolchain described below.
 
 The build scripts publish the Core and Launcher GUIs self-contained. Server
 hosts are intentionally framework-dependent to keep the server package smaller.
+The Umbra base framework is built from this source tree and stamped with a
+per-file integrity receipt. Platform builds do not contact the planned Dev Unit
+update service; that service is optional runtime infrastructure.
 The four existing platform build commands perform an early prerequisite check
 and report every missing tool together. They do not install SDKs, compilers, or
 package managers. GitHub Actions provisions those tools before invoking the
 same build commands used by developers.
+
+The macOS, Linux, and SteamOS **source package builds** produce the pinned
+**Aether.3** AetherXIV Compatibility Runtime automatically when
+`AETHERXIV_WINE_RUNTIME_ROOT` is unset, using the recipes under
+`tools/runtime/`. That automatic build path needs internet access for the
+checksum-pinned upstream archives and the compatibility-runtime build toolchain
+below. `AETHERXIV_WINE_RUNTIME_ROOT` is a release-builder input only; it is not
+a Launcher setting and users cannot select an alternate runtime at launch.
 
 ## macOS build host
 
@@ -45,6 +65,8 @@ Required:
 - Python 3.
 - Bash and standard macOS command-line utilities.
 - MinGW-w64 with the exact command `i686-w64-mingw32-g++` available on `PATH`.
+- Bison 3 for rebuilding the Aether.3 patched Wine module (`wow64cpu.dll`) when
+  the package build produces the compatibility runtime automatically.
 
 The MinGW cross-compiler builds the Windows x86 native injector and Umbra
 bootstrap used inside the legacy game process. Xcode is not used by the current
@@ -76,6 +98,8 @@ Required:
 - Python 3.
 - Bash, GNU core utilities, `find`, and `sha256sum`-compatible tooling.
 - A MinGW-w64 installation that provides `i686-w64-mingw32-g++`.
+- Bison and Flex for the automatic compatibility-runtime build (the Wine recipe
+  under `tools/runtime/`).
 
 ## SteamOS build host
 
@@ -129,14 +153,17 @@ installation.
 
 ### macOS
 
-- The checksum-pinned managed Wine runtime installed by the Launcher, or a
-  compatible local macOS runtime detected and validated by the Launcher.
-- Rosetta 2 when the selected compatibility runtime contains Intel-only macOS
-  components. Runtime validation triggers Apple's normal prompt and waits for
-  completion when Rosetta is absent.
+- The checksum-pinned Aether.3 compatibility runtime included in the AetherXIV
+  Launcher package. The Launcher does not select a separately installed Wine
+  provider.
+- Rosetta 2 for the bundled Intel macOS runtime. Runtime validation triggers
+  Apple's normal prompt and waits for completion when Rosetta is absent.
 - GStreamer is optional for launching; without it some Wine-hosted movies or
   media may not play. The Launcher does not install its unsigned upstream
   package automatically.
+- MoltenVK is present in the pinned Aether.3 macOS runtime, but AetherXIV does
+  not expose or select a Vulkan graphics target. The legacy
+  DirectX 9 client renders through WineD3D/OpenGL.
 - Permission for the Launcher and compatibility runtime to access the client,
   prefix, plugin, cache, and log directories.
 
@@ -144,14 +171,16 @@ installation.
 
 - A graphical X11 session or XWayland compatibility layer.
 - Avalonia's native desktop libraries: X11, ICE, SM, and Fontconfig.
-- The checksum-pinned portable Wine runtime installed by the Launcher, or a
-  compatible local runtime detected and validated by the Launcher.
+- The checksum-pinned AetherXIV Compatibility Runtime included in the Launcher
+  package. The Launcher does not download, detect, or select an alternate local
+  Wine provider.
 - Working host graphics drivers for the legacy x86 game client. The selected
   amd64-wow64 Wine build does not require 32-bit Linux libraries.
 
-Before prefix creation, the Launcher checks the selected Linux Wine executable
-and its principal X11, audio, GStreamer, and Vulkan drivers with `ldd`. A missing
-library blocks validation with its exact soname and platform-family guidance.
+Before prefix creation, the Launcher checks the bundled Linux compatibility
+runtime loader and its principal X11, audio, GStreamer, and Vulkan drivers with
+`ldd`. A missing library blocks validation with its exact soname and
+platform-family guidance.
 
 Distribution package names vary. On Debian/Ubuntu, the Avalonia libraries are
 commonly provided by `libx11-6`, `libice6`, `libsm6`, and `libfontconfig1`.
@@ -160,8 +189,10 @@ commonly provided by `libx11-6`, `libice6`, `libsm6`, and `libfontconfig1`.
 
 - Self-contained AetherXIV Core and Launcher GUIs.
 - Self-contained Windows x64 and x86 client-launch helpers.
-- Umbra's Windows x86 native bootstrap, injector, managed framework, assets,
-  and plugin API payload.
+- Umbra's locally built Windows x86 bootstrap, managed base framework, assets,
+  per-file integrity receipt, x86 injector, and public plugin API payload.
+- The signed Umbra update client is present for later Dev Unit service
+  deployment, but the service is not required to build or use the bundled base.
 - Framework-dependent Map, World, Lobby, and Launcher Services hosts.
 - Canonical database baseline, migrations, setup scripts, hashes, and manifest.
 - Map scripts, static actor data, and navigation mesh assets.
@@ -185,16 +216,16 @@ Platform-specific build sources:
 - [Visual Studio and Build Tools downloads](https://visualstudio.microsoft.com/downloads/)
 - [MSYS2](https://www.msys2.org/) as an alternative Windows MinGW-w64 environment
 - [Ubuntu package search](https://packages.ubuntu.com/) for distribution-provided build and desktop libraries
-- [WineHQ downloads](https://www.winehq.org/download) for advanced custom-runtime users
+- [WineHQ Wine 11.0 source](https://dl.winehq.org/wine/source/11.0/)
 - [Gcenx macOS Wine builds](https://github.com/Gcenx/macOS_Wine_builds), the
-  source of the pinned macOS Wine 11.0_1 archive
-- [Kron4ek Wine builds](https://github.com/Kron4ek/Wine-Builds), the source of
-  the pinned Linux Wine 11.0 amd64-wow64 archive
+  pinned upstream macOS binary input used by the Aether.3 recipe
+- [CodeWeavers CrossOver source](https://media.codeweavers.com/pub/crossover/source/),
+  the open-source input for the Aether.3 Linux/SteamOS recipe
 
-The Launcher ships the pinned package definitions and checksums, not copies of
-the upstream Wine archives. **Install Runtime** downloads the selected archive
-directly from its upstream release and refuses a byte-length or SHA-256
-mismatch.
+The macOS recipe verifies both pinned archives, rebuilds the Aether.3 patched
+Wine module, and includes the resulting runtime and complete checksum inventory
+in the Launcher package. The installed Launcher does not download or select a
+separate Wine provider.
 
 Do not substitute a newer major .NET SDK without also updating `global.json` and
 validating the complete build. AetherXIV currently pins SDK `10.0.203`.

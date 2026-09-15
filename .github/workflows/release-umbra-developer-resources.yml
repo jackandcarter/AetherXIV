@@ -1,0 +1,78 @@
+name: Release Umbra developer resources
+
+on:
+  workflow_dispatch:
+    inputs:
+      sdk_version:
+        description: Umbra SDK version
+        required: true
+        default: 2.0.0
+      sample_version:
+        description: Sample plugin version
+        required: true
+        default: 2.0.0
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.203
+
+      - name: Refuse mutable release tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_TAG: umbra-sdk-v${{ inputs.sdk_version }}
+          SAMPLE_TAG: umbra-plugin-sample-v${{ inputs.sample_version }}
+        run: |
+          if gh release view "${SDK_TAG}" >/dev/null 2>&1; then
+            echo "Release ${SDK_TAG} already exists and will not be replaced." >&2
+            exit 1
+          fi
+          if gh release view "${SAMPLE_TAG}" >/dev/null 2>&1; then
+            echo "Release ${SAMPLE_TAG} already exists and will not be replaced." >&2
+            exit 1
+          fi
+
+      - name: Populate the Umbra local NuGet feed
+        run: python3 tools/Universal/package-umbra-pluginapi.py
+
+      - name: Package SDK and sample
+        env:
+          DOTNET_BIN: dotnet
+        run: |
+          chmod +x tools/Universal/package-umbra-developer-resources.sh
+          tools/Universal/package-umbra-developer-resources.sh \
+            "${{ inputs.sdk_version }}" \
+            "${{ inputs.sample_version }}" \
+            artifacts/umbra
+
+      - name: Create immutable SDK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_TAG: umbra-sdk-v${{ inputs.sdk_version }}
+        run: |
+          gh release create "${SDK_TAG}" \
+            "artifacts/umbra/Umbra-SDK-${{ inputs.sdk_version }}.zip" \
+            "artifacts/umbra/SHA256SUMS" \
+            --target "${GITHUB_SHA}" \
+            --title "Umbra SDK ${{ inputs.sdk_version }}" \
+            --notes "Public Umbra API contracts, documentation, and a buildable plugin template."
+
+      - name: Create immutable sample plugin release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SAMPLE_TAG: umbra-plugin-sample-v${{ inputs.sample_version }}
+        run: |
+          gh release create "${SAMPLE_TAG}" \
+            "artifacts/umbra/Umbra-SamplePlugin-${{ inputs.sample_version }}.zip" \
+            "artifacts/umbra/SHA256SUMS" \
+            --target "${GITHUB_SHA}" \
+            --title "Umbra Sample Plugin ${{ inputs.sample_version }}" \
+            --notes "Installable Umbra API 2.0 sample plugin package."

@@ -54,9 +54,10 @@ namespace AetherXIV.Core.Map.Actors
         protected uint bnpcId;
         public Character lastAttacker;
 
-        public uint spellListId, skillListId, dropListId;
+        public uint spellListId, skillListId, mobSkillListId, dropListId;
         public Dictionary<uint, BattleCommand> skillList = new Dictionary<uint, BattleCommand>();
         public Dictionary<uint, BattleCommand> spellList = new Dictionary<uint, BattleCommand>();
+        public Dictionary<uint, BattleCommand> mobSkillList = new Dictionary<uint, BattleCommand>();
 
         public uint poolId, genusId;
         public ModifierList poolMods;
@@ -116,6 +117,7 @@ namespace AetherXIV.Core.Map.Actors
                 subpackets.AddRange(GetEventConditionPackets());
                 subpackets.Add(CreateSpeedPacket());
                 subpackets.Add(CreateSpawnPositonPacket(0x0));
+                subpackets.Add(CreatePositionUpdatePacket());
 
                 subpackets.Add(CreateAppearancePacket());
 

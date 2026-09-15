@@ -18,7 +18,7 @@ Build it with:
 dotnet build Aether.Umbra.SamplePlugin.csproj -c Release
 ```
 
-Copy the contents of `bin/Release/net10.0` into one directory beneath the Umbra
+Copy the contents of `bin/Release/net10.0-windows` into one directory beneath the Umbra
 plugin directory. The output includes `umbra-plugin.json`; Umbra discovers that
 manifest and loads the entry assembly in its own collectible context.
 

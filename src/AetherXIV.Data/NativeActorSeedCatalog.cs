@@ -34,15 +34,42 @@ public sealed record NativeActorSeedManifest(
     IReadOnlyDictionary<string, string> Files,
     string Notes);
 
+public sealed record NativeActorIdentitySeed(
+    string Schema,
+    IReadOnlyList<NativeActorTerritorySeed> Territories);
+
+public sealed record NativeActorTerritorySeed(
+    uint TerritoryId,
+    NativeActorPublicAreaSeed PublicArea,
+    IReadOnlyList<NativeStaticActorIdentitySeed> StaticActorAssignments,
+    IReadOnlyList<NativeResidentDirectorSeed> ResidentDirectors);
+
+public sealed record NativeActorPublicAreaSeed(
+    string PrivateAreaName,
+    uint PrivateAreaLevel,
+    uint AreaMasterNativeSlot);
+
+public sealed record NativeStaticActorIdentitySeed(
+    uint SpawnId,
+    uint NativeActorSlot);
+
+public sealed record NativeResidentDirectorSeed(
+    string ScriptPath,
+    uint NativeActorSlot,
+    uint NativeClassId,
+    string NativeClassPath);
+
 public sealed record NativeActorSeedCatalog(
     NativeActorSeedManifest Manifest,
     IReadOnlyList<ZoneRecord> Zones,
     IReadOnlyList<ActorClassRecord> ActorClasses,
     IReadOnlyList<ActorAppearanceRecord> ActorAppearances,
     IReadOnlyList<StaticActorSpawnRecord> StaticActorSpawns,
+    NativeActorIdentitySeed NativeActorIdentities,
     string ContentHash)
 {
     public const string ExpectedSchema = "aetherxiv.native-actor-seed.v1";
+    public const string ExpectedIdentitySchema = "aetherxiv.native-actor-identities.v2";
 
     public static async Task<NativeActorSeedCatalog> LoadAsync(
         string rootPath,
@@ -78,6 +105,11 @@ public sealed record NativeActorSeedCatalog(
         IReadOnlyList<StaticActorSpawnRecord> spawns = await ActorDataDatabaseLoader
             .ReadJsonAsync<IReadOnlyList<StaticActorSpawnRecord>>(Path.Combine(root, "static-actor-spawns.json"), cancellationToken)
             .ConfigureAwait(false);
+        NativeActorIdentitySeed identities = await ActorDataDatabaseLoader
+            .ReadJsonAsync<NativeActorIdentitySeed>(
+                Path.Combine(root, "native-actor-slot-overrides.json"),
+                cancellationToken)
+            .ConfigureAwait(false);
 
         if (zones.Count != manifest.ZoneCount
             || actorClasses.Count != manifest.ActorClassCount
@@ -98,11 +130,138 @@ public sealed record NativeActorSeedCatalog(
         if (actorClasses.Any(row => String.IsNullOrWhiteSpace(row.ClassPath)))
             throw new InvalidDataException("Native actor seed contains an actor class without a runtime class path.");
 
+        StaticActorSpawnRecord? invalidNativeSlot = spawns.FirstOrDefault(
+            row => row.NativeActorSlot is 0 or > 0x7FFFF);
+        if (invalidNativeSlot is not null)
+        {
+            throw new InvalidDataException(
+                $"Native static actor spawn {invalidNativeSlot.SpawnId} has invalid slot {invalidNativeSlot.NativeActorSlot}.");
+        }
+
+        IGrouping<string, StaticActorSpawnRecord>? duplicateNativeSlot = spawns
+            .Where(row => row.NativeActorSlot.HasValue)
+            .GroupBy(
+                row => $"{row.ZoneId.Value}:{row.PrivateAreaName ?? String.Empty}:{row.PrivateAreaLevel}:{row.NativeActorSlot}",
+                StringComparer.Ordinal)
+            .FirstOrDefault(group => group.Count() > 1);
+        if (duplicateNativeSlot is not null)
+        {
+            throw new InvalidDataException(
+                $"Native actor seed contains duplicate area-scope slot {duplicateNativeSlot.Key}.");
+        }
+        ValidateNativeActorIdentities(identities, spawns);
+
         string contentHashInput = String.Join(
             "\n",
             manifest.Files.OrderBy(row => row.Key, StringComparer.Ordinal).Select(row => $"{row.Key}:{row.Value}"));
         string contentHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(contentHashInput))).ToLowerInvariant();
-        return new NativeActorSeedCatalog(manifest, zones, actorClasses, appearances, spawns, contentHash);
+        return new NativeActorSeedCatalog(
+            manifest,
+            zones,
+            actorClasses,
+            appearances,
+            spawns,
+            identities,
+            contentHash);
+    }
+
+    private static void ValidateNativeActorIdentities(
+        NativeActorIdentitySeed identities,
+        IReadOnlyList<StaticActorSpawnRecord> spawns)
+    {
+        if (!String.Equals(identities.Schema, ExpectedIdentitySchema, StringComparison.Ordinal))
+            throw new InvalidDataException($"Unsupported native actor identity schema '{identities.Schema}'.");
+        if (identities.Territories is null || identities.Territories.Count == 0)
+            throw new InvalidDataException("Native actor identity catalog contains no territories.");
+
+        Dictionary<uint, StaticActorSpawnRecord> spawnsById = spawns.ToDictionary(row => row.SpawnId);
+        HashSet<uint> territoryIds = [];
+        foreach (NativeActorTerritorySeed territory in identities.Territories)
+        {
+            if (territory.TerritoryId is 0 or > 0x1FF || !territoryIds.Add(territory.TerritoryId))
+                throw new InvalidDataException("Native actor identity catalog contains an invalid or duplicate territory.");
+            if (territory.PublicArea is null
+                || !String.IsNullOrEmpty(territory.PublicArea.PrivateAreaName)
+                || territory.PublicArea.PrivateAreaLevel != 0)
+            {
+                throw new InvalidDataException(
+                    $"Territory {territory.TerritoryId} does not define the public-area identity scope.");
+            }
+
+            Dictionary<uint, string> claimedSlots = [];
+            ClaimNativeSlot(
+                claimedSlots,
+                territory.PublicArea.AreaMasterNativeSlot,
+                "area master",
+                territory.TerritoryId);
+
+            HashSet<uint> assignmentSpawnIds = [];
+            foreach (NativeStaticActorIdentitySeed assignment in
+                     territory.StaticActorAssignments ?? [])
+            {
+                if (assignment.SpawnId == 0 || !assignmentSpawnIds.Add(assignment.SpawnId))
+                {
+                    throw new InvalidDataException(
+                        $"Territory {territory.TerritoryId} contains an invalid or duplicate static actor assignment.");
+                }
+                ClaimNativeSlot(
+                    claimedSlots,
+                    assignment.NativeActorSlot,
+                    $"static actor {assignment.SpawnId}",
+                    territory.TerritoryId);
+                if (!spawnsById.TryGetValue(assignment.SpawnId, out StaticActorSpawnRecord? spawn))
+                {
+                    throw new InvalidDataException(
+                        $"Native actor identity catalog references missing spawn {assignment.SpawnId}.");
+                }
+                if (spawn.ZoneId.Value != territory.TerritoryId
+                    || !String.Equals(
+                        spawn.PrivateAreaName ?? String.Empty,
+                        territory.PublicArea.PrivateAreaName ?? String.Empty,
+                        StringComparison.Ordinal)
+                    || spawn.PrivateAreaLevel != territory.PublicArea.PrivateAreaLevel
+                    || spawn.NativeActorSlot != assignment.NativeActorSlot)
+                {
+                    throw new InvalidDataException(
+                        $"Static actor {assignment.SpawnId} disagrees with the native actor identity catalog.");
+                }
+            }
+
+            HashSet<string> scriptPaths = new(StringComparer.Ordinal);
+            foreach (NativeResidentDirectorSeed resident in territory.ResidentDirectors ?? [])
+            {
+                if (String.IsNullOrWhiteSpace(resident.ScriptPath)
+                    || !scriptPaths.Add(resident.ScriptPath)
+                    || resident.NativeClassId == 0
+                    || String.IsNullOrWhiteSpace(resident.NativeClassPath)
+                    || !resident.NativeClassPath.StartsWith("/", StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        $"Territory {territory.TerritoryId} contains an invalid or duplicate resident director.");
+                }
+                ClaimNativeSlot(
+                    claimedSlots,
+                    resident.NativeActorSlot,
+                    $"resident director {resident.ScriptPath}",
+                    territory.TerritoryId);
+            }
+        }
+    }
+
+    private static void ClaimNativeSlot(
+        IDictionary<uint, string> claimedSlots,
+        uint nativeSlot,
+        string owner,
+        uint territoryId)
+    {
+        if (nativeSlot is 0 or > 0x7FFFF)
+            throw new InvalidDataException($"Territory {territoryId} has an invalid native slot for {owner}.");
+        if (claimedSlots.TryGetValue(nativeSlot, out string? existingOwner))
+        {
+            throw new InvalidDataException(
+                $"Territory {territoryId} native slot {nativeSlot} is claimed by {existingOwner} and {owner}.");
+        }
+        claimedSlots.Add(nativeSlot, owner);
     }
 }
 
@@ -132,7 +291,7 @@ public sealed class NativeActorSeedDatabaseLoader
             .ConfigureAwait(false);
         WorldRecord world = request.World ?? new WorldRecord(
             new WorldId(1),
-            "AetherXIV 2.0 Local",
+            "AetherXIV 2.1 Local",
             new ServerEndpoint("127.0.0.1", 54992));
 
         await using MySqlConnection connection = new(request.DatabaseOptions.ToConnectionString());

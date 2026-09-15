@@ -22,22 +22,25 @@ namespace AetherXIV.Core.Map.packets.receive.events
 
         public EventUpdatePacket(byte[] data)
         {
-            using (MemoryStream mem = new MemoryStream(data))
+            try
             {
-                using (BinaryReader binReader = new BinaryReader(mem))
-                {
-                    try{
-                        triggerActorID = binReader.ReadUInt32();
-                        serverCodes = binReader.ReadUInt32();
-                        unknown1 = binReader.ReadUInt32();
-                        unknown2 = binReader.ReadUInt32();
-                        eventType = binReader.ReadByte();
-                        luaParams = LuaUtils.ReadLuaParams(binReader);
-                    }
-                    catch (Exception){
-                        invalidPacket = true;
-                    }
-                }
+                AetherXIV.Protocol.EventUpdatePacket decoded =
+                    new AetherXIV.Protocol.EventUpdatePacketCodec().Decode(
+                        AetherXIV.Protocol.SubPacket.Create(
+                            AetherXIV.Protocol.PacketOpcode.EventUpdate,
+                            0,
+                            data));
+                triggerActorID = decoded.TriggerActorId;
+                serverCodes = decoded.ServerCodes;
+                unknown1 = decoded.Unknown1;
+                unknown2 = decoded.Unknown2;
+                eventType = decoded.EventType;
+                luaParams = ProtocolPacketAdapter.DecodeLuaParameters(decoded.Parameters);
+            }
+            catch (Exception)
+            {
+                invalidPacket = true;
+                luaParams = new List<LuaParam>();
             }
         }
     }

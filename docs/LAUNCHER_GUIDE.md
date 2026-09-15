@@ -61,7 +61,7 @@ Base URL can remain empty unless the operator hosts a real patch repository.
 
 ### Select and validate the client
 
-Use **Browse** beside Client root and select:
+Use **Use Existing Client...** beside Client root and select:
 
 - `ffxivboot.exe` for an unpatched installation; or
 - `ffxivgame.exe` after the client has been patched.
@@ -69,6 +69,21 @@ Use **Browse** beside Client root and select:
 The Launcher saves the containing client folder. **Validate Client** checks the
 supported version state, required executables, and the static-actors source.
 The game must report the supported 1.23b version before launch.
+
+### Open the retail installer
+
+On macOS and Linux, **Install Game Client...** selects the top-level
+`ffxivsetup.exe` from official FFXIV 1.x installation media. The Launcher
+checks the 32-bit Square Enix bootstrapper, InstallShield product identity,
+payload cabinets, and bundled DirectX installer before opening it through the
+same compatibility runtime and isolated prefix used by the game.
+
+The Square Enix wizard remains responsible for installation choices. This
+button does not download the client, move an existing installation, choose an
+installation destination, or replace Client root automatically. Keep client
+files outside the Wine prefix so **Reset Prefix** cannot remove them, then use
+**Use Existing Client...** to select the installed executable after the wizard
+finishes.
 
 ### Launch helper
 
@@ -78,11 +93,14 @@ itself; Umbra's native bootstrap remains x86.
 
 ### Graphics target
 
-- **OpenGL compatibility** is the recommended cross-platform starting point.
-- **Wine default** leaves graphics selection to the runtime.
+- **Wine default** is the recommended cross-platform starting point. It leaves
+graphics selection to the runtime; on the pinned compatibility runtime the
+legacy DirectX 9 client resolves to WineD3D on OpenGL.
 - **OpenGL threaded** is experimental.
-- **WineD3D Vulkan** is experimental and should be used only with a compatible
-  runtime and graphics stack.
+
+The former **OpenGL compatibility** option is no longer offered: on the pinned
+runtime it selected the same backend as Wine default, so it was redundant.
+Saved profiles that still carry it are treated as Wine default.
 
 Change one graphics target at a time and keep its Launch Log when reporting a
 regression.
@@ -96,15 +114,12 @@ use **Cancel** when available and retain its log if it fails.
 
 ### FFXIV Settings
 
-The settings workflow validates the native or Wine-hosted configuration path
-before opening. On macOS/Linux, this can take several seconds while the runtime
-and prefix are checked.
-
-![FFXIV general settings](images/launcher/client-settings-general.png)
+The settings workflow checks the native or Wine-hosted configuration path
+before opening. On macOS/Linux it reuses the same signed runtime-readiness
+receipt as game launch; a full validation runs only after a runtime, Launcher,
+helper, Umbra, or prefix change, or when **Validate Runtime** is selected.
 
 The **General** tab chooses the language and can create or repair `config.sys`.
-
-![FFXIV graphics settings](images/launcher/client-settings-graphics.png)
 
 The **Graphics** tab controls screen mode, resolution, shadow-map quality,
 texture quality, background quality, and frame-rate cap. Existing configuration
@@ -116,11 +131,24 @@ files are backed up when settings are saved.
 
 - **Enable Umbra for the FFXIV client** adds the verified framework to the
   launch sequence.
-- **Update Umbra Framework** installs or refreshes the framework payload.
+- **Safe Mod** starts Umbra without loading third-party plugins.
+- **Umbra Updates (Service Offline)** is intentionally disabled in this build.
+  It becomes **Check for Umbra Updates** when the signed Demi Dev Unit service
+  is deployed and enabled.
 
-Umbra is accepted only when its downloaded/catalog payload and the supported
-client executable identity pass verification. An unknown client hash blocks
-injection rather than attempting an unsafe match.
+Every 2.1 Launcher package includes its current integrity-pinned Umbra base
+framework. Normal game launch selects the newest compatible verified framework,
+including the bundled copy, without contacting an update service. Future
+downloaded updates will be accepted only when their signed catalog, payload,
+and supported client executable identity pass verification. An unknown client
+hash blocks injection rather than attempting an unsafe match.
+
+The Launcher does not contain repository URL fields and never installs or
+updates plugins. Custom repositories, developer-plugin paths, plugin
+installation, and the **Updates** list all belong to the in-game Umbra Plugin
+Manager. If the framework update service is unavailable, the Launcher keeps the
+last verified compatible framework or its bundled base rather than replacing it
+with unverified files.
 
 For plugin installation, capabilities, the developer bridge, and SDK usage,
 read the [Umbra SDK](UMBRA_SDK.md).
@@ -130,27 +158,29 @@ read the [Umbra SDK](UMBRA_SDK.md).
 ![AetherXIV Launcher Runtime tab](images/launcher/runtime.png)
 
 Windows launches the game natively. macOS, Linux, and SteamOS use this tab to
-manage a Wine-compatible runtime.
+inspect and validate the compatibility runtime included in the Launcher build.
 
-### Automatic Wine
+### Bundled compatibility runtime
 
-This is the recommended mode. The game server is not a runtime package host.
-The Launcher selects a built-in package definition for its operating system
-and architecture. Each definition pins the upstream URL, byte length, SHA-256,
-archive layout, and Wine executable path. Use:
+The game server is not a runtime package host. AetherXIV uses only the bundled
+**AetherXIV Compatibility Runtime** and its complete checksum inventory shipped
+with the current Launcher package. It never discovers or switches to Wine
+Stable, CrossOver, Whisky, a PATH command, or a custom executable. The Runtime
+tab displays the platform, runtime source, runtime status, and validation
+progress. Use:
 
-- **Install Runtime** to download, verify, extract, and validate the pinned
-  managed Wine package;
-- **Scan Runtimes** after installation to detect recognized local Wine paths;
 - **Verify Dependencies** to check the selected runtime's platform libraries
   without recreating its prefix;
-- **Validate Runtime** to test the runtime, prefix, and helper.
+- **Validate Runtime** to perform a full checksum, platform, prefix, helper,
+  and enabled-Umbra probe;
+- **Reset Prefix** only when the isolated Wine environment must be recreated.
 
-The managed install is stored in Launcher application data and does not run
-Homebrew, `apt`, `pacman`, or another privileged package manager. A checksum,
-size, extraction, or validation failure stops the install. A runtime is not
-considered ready until validation confirms its version, creates or checks the
-managed prefix, and successfully runs the bundled client helper.
+On the first launch after installation or after a relevant file changes, the
+Launcher verifies every runtime checksum and records a versioned readiness
+receipt. Later launches compare fast file identities and the prefix generation
+marker to that receipt. Wine configuration is also fingerprinted and applied
+as one batched operation only when its desired settings change. Manual
+validation always performs the complete check.
 
 Validation also checks host prerequisites before Wine starts. On Apple silicon,
 the Launcher runs an Intel-process probe that causes macOS to offer its normal
@@ -169,32 +199,19 @@ install anything unless the user accepts the prompt. SteamOS remains on the
 persistent-environment guidance path because changing its immutable system
 image would not survive an operating-system update.
 
-The recommended OpenGL compatibility target forces WineD3D's OpenGL renderer
-but leaves Wine's supported command-stream default enabled. The threaded mode
-forces that setting explicitly; Wine default leaves the complete WineD3D
-configuration untouched; and WineD3D Vulkan remains an experimental fallback.
+The default **Wine default** target leaves graphics selection to the bundled
+compatibility runtime. AetherXIV does not expose a custom Wine command,
+provider selector, or Vulkan graphics target for the legacy DirectX 9 client.
 
-Automatic detection recognizes Wine Stable at its standard macOS application
-path and `wine` or `wine64` executables available on `PATH`. Detected Wine uses
-the isolated AetherXIV FFXIV prefix under Launcher application data, not the
-user's global `~/.wine` prefix. If a valid runtime lives elsewhere, use Custom
-Runtime and select its exact executable.
-
-The 2.0 managed definitions use Wine 11.0 builds for macOS arm64/x64 and Linux
-x64. SteamOS uses the Linux x64 package in persistent Launcher storage. On
+The 2.1 package uses the bundled compatibility runtime for macOS, Linux, and
+SteamOS. Its release branding and exact source revision are recorded in the
+`aetherxiv-runtime.json` receipt rather than inferred from a host Wine path.
+SteamOS uses the Linux x64 package in persistent Launcher storage. On
 Apple silicon, the macOS package contains Intel components and requires
 Rosetta. GStreamer is optional on macOS: Wine and the game can launch without
 it, but some movies or media may not play. The Launcher reports that warning
-without downloading the upstream unsigned installer. Platform setup guidance
-remains the fallback when a prerequisite is missing or no managed artifact is
-defined for the detected RID.
-
-### Custom Runtime
-
-Custom mode accepts a Wine command or executable and an optional prefix. It is
-for advanced users who can identify the exact runtime and take responsibility
-for its compatibility. A random prefix is not automatically treated as a
-validated runtime.
+without downloading an unsigned installer. A missing runtime or failed
+integrity check blocks launch so the matching AetherXIV package can be repaired.
 
 ### Reset Prefix
 

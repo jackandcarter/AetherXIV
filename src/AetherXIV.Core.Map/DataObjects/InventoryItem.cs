@@ -127,7 +127,7 @@ namespace AetherXIV.Core.Map.dataobjects
         //For loading already existing items
         public InventoryItem(MySqlDataReader reader)
         {
-            uniqueId = reader.GetUInt32("serverItemId");
+            uniqueId = reader.GetUInt64("serverItemId");
             itemId = reader.GetUInt32("itemId");
             itemData = Server.GetItemGamedata(itemId);
             quantity = reader.GetInt32("quantity");
@@ -153,7 +153,7 @@ namespace AetherXIV.Core.Map.dataobjects
         }
 
         //For creating new items (only should be called by the DB)
-        public InventoryItem(uint uniqueId, uint itemId, int quantity, byte qualityNumber, ItemModifier modifiers = null)
+        public InventoryItem(ulong uniqueId, uint itemId, int quantity, byte qualityNumber, ItemModifier modifiers = null)
         {
             this.uniqueId = uniqueId;
             this.itemId = itemId;

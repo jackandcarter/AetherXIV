@@ -17,6 +17,15 @@ using System.Text.Json;
 
 namespace Aether.Umbra.Framework;
 
+public sealed record UmbraRepositoryDocument(
+    string? Name,
+    IReadOnlyList<UmbraStoreEntry> Entries)
+{
+    public int SchemaVersion { get; init; } = 1;
+
+    public string? HomepageUrl { get; init; }
+}
+
 public sealed record UmbraStoreEntry(
     string Id,
     string Name,
@@ -38,7 +47,11 @@ public sealed record UmbraStoreEntry(
     string? LastUpdate,
     bool IsHidden,
     bool TestingOnly,
-    string? Entry)
+    string? Entry,
+    string TargetFramework = "net10.0-windows",
+    string Architecture = "x86",
+    string Language = "CSharp",
+    bool BuiltIn = false)
 {
     public bool IsInstallable =>
         !IsHidden
@@ -50,7 +63,10 @@ public sealed record UmbraStoreEntry(
         && !string.IsNullOrWhiteSpace(DownloadUrl)
         && SizeBytes > 0
         && !string.IsNullOrWhiteSpace(Sha256)
-        && !string.IsNullOrWhiteSpace(MinimumFrameworkVersion);
+        && !string.IsNullOrWhiteSpace(MinimumFrameworkVersion)
+        && string.Equals(TargetFramework, "net10.0-windows", StringComparison.OrdinalIgnoreCase)
+        && string.Equals(Architecture, "x86", StringComparison.OrdinalIgnoreCase)
+        && string.Equals(Language, "CSharp", StringComparison.OrdinalIgnoreCase);
 
     public void ValidateInstallable()
     {
@@ -58,8 +74,20 @@ public sealed record UmbraStoreEntry(
             throw new InvalidDataException($"Umbra store entry is not installable: {Id}");
         if (Sha256.Length != 64 || Sha256.Any(character => !Uri.IsHexDigit(character)))
             throw new InvalidDataException($"Umbra store entry has an invalid SHA256: {Id}");
-        if (!UmbraRepositorySource.IsAllowedUri(DownloadUrl))
+        if (BuiltIn)
+        {
+            // Built-in entries ship with the app; download_url names the package
+            // file relative to the bundled repository directory instead of a URL.
+            if (Path.IsPathRooted(DownloadUrl)
+                || DownloadUrl.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries).Any(part => part == ".."))
+            {
+                throw new InvalidDataException($"Umbra built-in entry has an unsafe local download path: {Id}");
+            }
+        }
+        else if (!UmbraRepositorySource.IsAllowedUri(DownloadUrl))
+        {
             throw new InvalidDataException($"Umbra store entry has a disallowed download URL: {Id}");
+        }
     }
 
     public UmbraPluginManifest ToManifest(bool enabled = false)
@@ -71,15 +99,40 @@ public sealed record UmbraStoreEntry(
             ApiVersion,
             string.IsNullOrWhiteSpace(Entry) ? $"{Id}.dll" : Entry,
             MinimumFrameworkVersion,
-            enabled);
+            enabled)
+        {
+            TargetFramework = TargetFramework,
+            Architecture = Architecture,
+            Language = Language
+        };
     }
 
     public static IReadOnlyList<UmbraStoreEntry> ParseRepository(
         string json,
         UmbraRepositorySource repository)
     {
+        return ParseRepositoryDocument(json, repository).Entries;
+    }
+
+    public static UmbraRepositoryDocument ParseRepositoryDocument(
+        string json,
+        UmbraRepositorySource repository)
+    {
         using JsonDocument document = JsonDocument.Parse(json);
         JsonElement pluginEntries = ResolvePluginEntries(document.RootElement);
+        string? repositoryName = document.RootElement.ValueKind == JsonValueKind.Object
+            ? ReadOptionalString(document.RootElement, "repository_name", "RepositoryName", "name", "Name")
+            : null;
+        int schemaVersion = document.RootElement.ValueKind == JsonValueKind.Object
+            ? (int)ReadLong(document.RootElement, "schema_version", "SchemaVersion")
+            : 1;
+        if (schemaVersion == 0)
+            schemaVersion = 1;
+        if (schemaVersion != 1)
+            throw new InvalidDataException($"Unsupported Umbra repository schema version: {schemaVersion}.");
+        string? homepageUrl = document.RootElement.ValueKind == JsonValueKind.Object
+            ? ReadOptionalString(document.RootElement, "homepage_url", "HomepageUrl", "repository_url", "RepositoryUrl")
+            : null;
 
         List<UmbraStoreEntry> entries = new();
         foreach (JsonElement element in pluginEntries.EnumerateArray())
@@ -93,11 +146,16 @@ public sealed record UmbraStoreEntry(
             entries.Add(entry);
         }
 
-        return entries
+        UmbraStoreEntry[] normalized = entries
             .OrderBy(entry => entry.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(entry => entry.Id, StringComparer.OrdinalIgnoreCase)
             .ThenByDescending(entry => entry.Version, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        return new UmbraRepositoryDocument(repositoryName, normalized)
+        {
+            SchemaVersion = schemaVersion,
+            HomepageUrl = homepageUrl
+        };
     }
 
     private static JsonElement ResolvePluginEntries(JsonElement root)
@@ -153,7 +211,11 @@ public sealed record UmbraStoreEntry(
             ReadOptionalString(element, "last_update", "LastUpdate"),
             ReadBoolean(element, "is_hidden", "IsHide", "is_hide"),
             ReadBoolean(element, "testing_only", "IsTestingExclusive", "is_testing_exclusive"),
-            ReadOptionalString(element, "entry", "Entry", "AssemblyPath"));
+            ReadOptionalString(element, "entry", "Entry", "AssemblyPath"),
+            ReadOptionalString(element, "target_framework", "TargetFramework") ?? "net10.0-windows",
+            ReadOptionalString(element, "architecture", "Architecture") ?? "x86",
+            ReadOptionalString(element, "language", "Language") ?? "CSharp",
+            ReadBoolean(element, "built_in", "BuiltIn", "is_built_in"));
     }
 
     private static string ReadString(JsonElement element, params string[] names)

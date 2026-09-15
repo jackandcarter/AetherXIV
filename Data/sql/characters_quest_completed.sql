@@ -26,7 +26,8 @@ CREATE TABLE `characters_quest_completed` (
   `id` int(10) unsigned NOT NULL AUTO_INCREMENT,
   `characterId` int(10) unsigned NOT NULL,
   `questId` int(10) unsigned NOT NULL,
-  PRIMARY KEY (`id`)
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_characters_quest_completed_character_quest` (`characterId`,`questId`)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
 /*!40101 SET character_set_client = @saved_cs_client */;
 

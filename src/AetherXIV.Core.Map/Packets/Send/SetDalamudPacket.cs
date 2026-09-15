@@ -12,17 +12,10 @@ namespace AetherXIV.Core.Map.packets.send
 
         public static SubPacket BuildPacket(uint playerActorId, sbyte dalamudLevel)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    binWriter.Write((Int32)dalamudLevel);
-                }
-            }
-
-            return new SubPacket(OPCODE, playerActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetDalamudPacketCodec(),
+                playerActorId,
+                new AetherXIV.Protocol.SetDalamudPacket(dalamudLevel));
         }
     }
 }

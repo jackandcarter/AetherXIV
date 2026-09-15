@@ -34,15 +34,15 @@ public enum AetherXivDatabasePreflightStatus
 public static class AetherXivDatabaseCompatibility
 {
     // These two values are immutable identifiers already recorded by released
-    // AetherXIV 2.0 databases. They describe schema lineage only; no alternate
+    // AetherXIV 2.1 databases. They describe schema lineage only; no alternate
     // server implementation is selected at runtime.
     public const string Key = "direct-core";
     public const uint SchemaGeneration = 2;
-    public const uint SchemaVersion = 1;
+    public const uint SchemaVersion = 2;
     public const string CompatibilityId = "aetherxiv-direct-core-v2";
     public const string BaselineId = "20260716_000001_ffxiv_server_v2_baseline";
     public const string GuildleveContentMigration = "20260716_000005_guildleve_content_contract.sql";
-    public const string LatestDirectCoreMigration = "20260724_000028_social_state_persistence.sql";
+    public const string LatestDirectCoreMigration = "20260914_000039_restore_launcher_news_post.sql";
     public static readonly IReadOnlyList<string> RequiredDirectCoreMigrations =
     [
         "20260627_battlenpc_spawn_audit_pins.sql",
@@ -74,7 +74,18 @@ public static class AetherXivDatabaseCompatibility
         "20260722_000025_gridania_man0g1_escort_actor_presentation.sql",
         "20260723_000026_class_job_progression.sql",
         "20260724_000027_correct_1x_player_baselines.sql",
-        "20260724_000028_social_state_persistence.sql"
+        "20260724_000028_social_state_persistence.sql",
+        "20260727_000029_separate_umbra_control_plane.sql",
+        "20260727_000030_native_actor_slots.sql",
+        "20260728_000031_private_area_spawn_contract.sql",
+        "20260802_000032_quest_runtime_contract.sql",
+        "20260819_000033_character_aetheryte_attunement.sql",
+        "20260824_000034_battlenpc_mob_skill_list.sql",
+        "20260913_000035_limsa_man0l1_push_triggers.sql",
+        "20260913_000036_limsa_mini_aetherytes_and_man0l1_escort.sql",
+        "20260914_000037_repair_limsa_private_area_identity.sql",
+        "20260914_000038_limsa_man0l1_musketeers_echo.sql",
+        "20260914_000039_restore_launcher_news_post.sql"
     ];
     public const string NpcServiceCatalogId = "zone-service-npcs-1.23b";
     public const string NpcServiceCatalogVersion = "2026.07.19.1";
@@ -147,7 +158,7 @@ public sealed class AetherXivDatabasePreflightService
             Add(
                 "database.bootstrap",
                 AetherXivDatabasePreflightStatus.NeedsAdminCredentials,
-                "The AetherXIV 2.0 database or app account does not exist or is not accessible. MariaDB administrator credentials are needed once so startup can create the canonical database and application account.");
+                "The AetherXIV 2.1 database or app account does not exist or is not accessible. MariaDB administrator credentials are needed once so startup can create the canonical database and application account.");
         }
         catch (Exception ex)
         {
@@ -175,7 +186,7 @@ public sealed class AetherXivDatabasePreflightService
         if (tableCount == 0)
         {
             add("database.bootstrap", AetherXivDatabasePreflightStatus.NeedsAdminCredentials,
-                "The configured database exists but is empty. MariaDB administrator credentials are needed once to install the AetherXIV 2 database and application account.");
+                "The configured database exists but is empty. MariaDB administrator credentials are needed once to install the AetherXIV 2.1 database and application account.");
             return;
         }
 
@@ -184,7 +195,7 @@ public sealed class AetherXivDatabasePreflightService
             add(
                 "database.version",
                 AetherXivDatabasePreflightStatus.NeedsRepair,
-                "This database predates AetherXIV 2 or is incomplete. Setup will keep a full backup, install a clean AetherXIV 2 database, and restore compatible account and character data when possible.");
+                "This database predates AetherXIV 2.1 or is incomplete. Setup will keep a full backup, install a clean AetherXIV 2.1 database, and restore compatible account and character data when possible.");
             return;
         }
 
@@ -204,7 +215,7 @@ LIMIT 1;
                 add(
                     "database.version",
                     AetherXivDatabasePreflightStatus.NeedsRepair,
-                    "The AetherXIV 2 database version record is missing. Setup will preserve a full backup and rebuild the canonical schema before services start.");
+                    "The AetherXIV 2.1 database version record is missing. Setup will preserve a full backup and rebuild the canonical schema before services start.");
                 return;
             }
 
@@ -218,18 +229,18 @@ LIMIT 1;
             if (!sameContractFamily || version != AetherXivDatabaseCompatibility.SchemaVersion)
             {
                 add("database.version", AetherXivDatabasePreflightStatus.NeedsRepair,
-                    $"The installed database is not the AetherXIV 2 schema (generation {generation}, version {version}). "
+                    $"The installed database is not the AetherXIV 2.1 schema (generation {generation}, version {version}). "
                     + "Setup will preserve a full backup and rebuild it before services start.");
                 return;
             }
         }
         add("database.version", AetherXivDatabasePreflightStatus.Passed,
-            $"Verified AetherXIV 2 database schema {AetherXivDatabaseCompatibility.SchemaGeneration}.{AetherXivDatabaseCompatibility.SchemaVersion}.");
+            $"Verified AetherXIV 2.1 database schema {AetherXivDatabaseCompatibility.SchemaGeneration}.{AetherXivDatabaseCompatibility.SchemaVersion}.");
 
         if (!await TableExistsAsync(connection, "aether_schema_migrations", cancellationToken).ConfigureAwait(false))
         {
             add("database.migrations", AetherXivDatabasePreflightStatus.NeedsRepair,
-                "The AetherXIV 2 migration ledger is missing, so this database cannot be safely advanced in place. "
+                "The AetherXIV 2.1 migration ledger is missing, so this database cannot be safely advanced in place. "
                 + "Setup will retain a backup and offer a fresh canonical install.");
             return;
         }
@@ -322,7 +333,7 @@ WHERE migration_name IN ({String.Join(",", parameterNames)});
         if (missingMigrations.Length > 0)
         {
             add("database.migrations", AetherXivDatabasePreflightStatus.NeedsMigration,
-                $"Pending AetherXIV 2.0 migrations: {missingMigrations.Length}/{expectedMigrations.Count}; "
+                $"Pending AetherXIV 2.1 migrations: {missingMigrations.Length}/{expectedMigrations.Count}; "
                 + $"latest required is {AetherXivDatabaseCompatibility.LatestDirectCoreMigration}. "
                 + "The packaged updater will back up the database, apply every missing migration, and verify the result in place.");
             return;
@@ -333,7 +344,7 @@ WHERE migration_name IN ({String.Join(",", parameterNames)});
         string[] requiredTables =
         [
             "users", "sessions", "servers", "characters", "characters_appearance",
-            "characters_quest_scenario", "characters_quest_completed", "characters_hotbar",
+            "characters_quest_scenario", "characters_quest_completed", "characters_hotbar", "characters_snpc", "gamedata_quests",
             "server_sessions", "server_zones", "server_zones_privateareas",
             "server_battlenpc_spawn_locations", "server_battlenpc_spawn_audit_pins", "server_battlenpc_groups", "server_battlenpc_pools",
             "server_battle_commands", "server_player_base_stats", "characters_class_attributes", "server_spawn_locations",
@@ -341,9 +352,8 @@ WHERE migration_name IN ({String.Join(",", parameterNames)});
             "characters_inventory", "characters_chocobo", "server_npc_spawn_evidence",
             "server_npc_spawn_evidence_catalog",
             "aether_database_compatibility",
-            "launcher_config", "launcher_config_plugin_catalogs", "launcher_status", "launcher_news", "launcher_patch_files",
-            "launcher_presentation", "launcher_reel_text", "launcher_runtime_artifacts", "launcher_umbra_framework_artifacts",
-            "launcher_umbra_plugin_repositories", "launcher_umbra_plugins", "launcher_umbra_plugin_blocks"
+            "launcher_config", "launcher_status", "launcher_news", "launcher_patch_files",
+            "launcher_presentation", "launcher_reel_text", "launcher_runtime_artifacts"
         ];
         List<string> missing = new();
         foreach (string table in requiredTables)
@@ -355,11 +365,30 @@ WHERE migration_name IN ({String.Join(",", parameterNames)});
         if (missing.Count > 0)
         {
             add("database.schema", AetherXivDatabasePreflightStatus.NeedsRepair,
-                $"The AetherXIV 2 database is missing required tables: {String.Join(", ", missing)}. Setup will back it up and rebuild the canonical schema.");
+                $"The AetherXIV 2.1 database is missing required tables: {String.Join(", ", missing)}. Setup will back it up and rebuild the canonical schema.");
             return;
         }
         add("database.schema", AetherXivDatabasePreflightStatus.Passed,
             $"Verified {requiredTables.Length} AetherXIV server and launcher tables.");
+
+        int orphanedPrivateAreaSpawns = await CountAsync(connection, """
+SELECT COUNT(*)
+FROM server_spawn_locations s
+LEFT JOIN server_zones_privateareas p
+  ON p.parentZoneId=s.zoneId
+ AND p.privateAreaName=s.privateAreaName
+ AND p.privateAreaType=s.privateAreaLevel
+WHERE s.privateAreaName<>''
+  AND p.id IS NULL;
+""", cancellationToken).ConfigureAwait(false);
+        if (orphanedPrivateAreaSpawns != 0)
+        {
+            add("area.private-spawn-contract", AetherXivDatabasePreflightStatus.NeedsRepair,
+                $"{orphanedPrivateAreaSpawns} static actor spawn(s) target a private-area instance that does not exist.");
+            return;
+        }
+        add("area.private-spawn-contract", AetherXivDatabasePreflightStatus.Passed,
+            "Verified that every private-area static actor targets a declared area name and instance.");
 
         int obsoleteTables = await CountAsync(connection, """
 SELECT COUNT(*)
@@ -385,22 +414,24 @@ WHERE table_schema=DATABASE()
         int invalidCharacterTribes = await CountAsync(connection, """
 SELECT COUNT(*)
 FROM characters
-WHERE tribe NOT BETWEEN 1 AND 15;
+WHERE state=2
+  AND tribe NOT BETWEEN 1 AND 15;
 """, cancellationToken).ConfigureAwait(false);
         if (invalidCharacterTribes != 0)
         {
             add("player-identity.tribe-contract", AetherXivDatabasePreflightStatus.NeedsRepair,
-                $"{invalidCharacterTribes} character record(s) have an invalid retail tribe id. Their race and sex cannot be inferred safely; restore those characters from a known-good backup.");
+                $"{invalidCharacterTribes} active character record(s) have an invalid retail tribe id. Their race and sex cannot be inferred safely; restore those characters from a known-good backup.");
             return;
         }
         add("player-identity.tribe-contract", AetherXivDatabasePreflightStatus.Passed,
-            "Verified retail tribe ids for every character.");
+            "Verified retail tribe ids for every active character; incomplete lobby reservations are excluded.");
 
         const string mismatchedCharacterModelsSql = """
 SELECT COUNT(*)
 FROM characters c
 JOIN characters_appearance a ON a.characterId=c.id
-WHERE a.baseId <> 4294967295
+WHERE c.state=2
+  AND a.baseId <> 4294967295
   AND a.baseId <> CASE c.tribe
       WHEN 1 THEN 1
       WHEN 2 THEN 2
@@ -437,7 +468,8 @@ WHERE a.baseId <> 4294967295
 UPDATE characters_appearance a
 JOIN characters c ON c.id=a.characterId
 SET a.baseId=4294967295
-WHERE a.baseId <> 4294967295
+WHERE c.state=2
+  AND a.baseId <> 4294967295
   AND a.baseId <> CASE c.tribe
       WHEN 1 THEN 1
       WHEN 2 THEN 2
@@ -828,6 +860,53 @@ WHERE table_schema=DATABASE() AND (
         }
         add("launcher.storage-contract", AetherXivDatabasePreflightStatus.Passed,
             "Modern Launcher/UI storage is available without changing gameplay tables.");
+
+        int nativeActorSlotColumns = await CountAsync(connection, """
+SELECT COUNT(*)
+FROM information_schema.columns
+WHERE table_schema=DATABASE()
+  AND table_name='server_spawn_locations'
+  AND column_name='nativeActorSlot';
+""", cancellationToken).ConfigureAwait(false);
+        if (nativeActorSlotColumns != 1)
+        {
+            add("actor.native-slot-contract", AetherXivDatabasePreflightStatus.NeedsRepair,
+                "The native actor-slot column is missing from the static actor schema.");
+            return;
+        }
+
+        int nativeActorSlotContract = await CountAsync(connection, """
+SELECT COUNT(*)
+FROM (
+  SELECT 1 AS contract_ok
+  WHERE
+    (SELECT COUNT(*) FROM server_spawn_locations
+         WHERE zoneId=155 AND privateAreaName='' AND privateAreaLevel=0
+           AND nativeActorSlot IS NOT NULL) = 46
+    AND (SELECT COUNT(*) FROM server_spawn_locations
+         WHERE zoneId=206 AND privateAreaName='' AND privateAreaLevel=0
+           AND nativeActorSlot IS NOT NULL) = 103
+    AND (SELECT COUNT(*) FROM server_spawn_locations
+         WHERE zoneId=244 AND privateAreaName='' AND privateAreaLevel=0
+           AND nativeActorSlot IS NOT NULL) = 5
+    AND (SELECT COUNT(*) FROM server_spawn_locations
+         WHERE id=587 AND nativeActorSlot=8) = 1
+    AND (SELECT COUNT(*) FROM server_spawn_locations
+         WHERE id IN (589,590) AND nativeActorSlot IN (53,54)) = 2
+    AND (SELECT COUNT(*) FROM information_schema.statistics
+         WHERE table_schema=DATABASE()
+           AND table_name='server_spawn_locations'
+           AND index_name='uq_server_spawn_native_slot') = 4
+) AS native_actor_contract;
+""", cancellationToken).ConfigureAwait(false);
+        if (nativeActorSlotContract != 1)
+        {
+            add("actor.native-slot-contract", AetherXivDatabasePreflightStatus.NeedsRepair,
+                "The native actor-slot schema or reviewed Canopy, Gridania, and inn assignments are incomplete.");
+            return;
+        }
+        add("actor.native-slot-contract", AetherXivDatabasePreflightStatus.Passed,
+            "Verified the native actor-slot schema, unique scope index, and reviewed Canopy, Gridania, and inn assignments.");
 
         int zones = await CountAsync(connection, "SELECT COUNT(*) FROM server_zones;", cancellationToken).ConfigureAwait(false);
         int commands = await CountAsync(connection, "SELECT COUNT(*) FROM server_battle_commands;", cancellationToken).ConfigureAwait(false);

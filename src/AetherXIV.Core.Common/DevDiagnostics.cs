@@ -14,8 +14,13 @@ namespace AetherXIV.Core.Common
         private static readonly object sync = new object();
         private static string serverName = "Unknown";
         private static string tracePath;
+        private static bool wireLoggingEnabled;
+        private static string diagnosticRunId = "";
+        private static long traceSequence;
+        private const int WIRE_PREVIEW_BYTES = 256;
 
         public static bool Enabled { get; private set; }
+        public static bool WireLoggingEnabled => Enabled && wireLoggingEnabled;
 
         public static void Configure(string server, string[] args)
         {
@@ -23,9 +28,18 @@ namespace AetherXIV.Core.Common
             Enabled =
                 HasFlag(args, "dev-diagnostics") ||
                 IsEnabledEnvironmentValue(Environment.GetEnvironmentVariable("AETHERXIV_DEV_DIAGNOSTICS"));
+            wireLoggingEnabled =
+                HasFlag(args, "wire-diagnostics") ||
+                IsEnabledEnvironmentValue(Environment.GetEnvironmentVariable("AETHERXIV_WIRE_DIAGNOSTICS"));
 
             if (!Enabled)
                 return;
+
+            diagnosticRunId = String.Format(
+                "{0}-{1:N}",
+                serverName.ToLowerInvariant(),
+                Guid.NewGuid());
+            traceSequence = 0;
 
             string outputDir = Environment.GetEnvironmentVariable("AETHERXIV_DEV_DIAGNOSTICS_DIR");
             if (String.IsNullOrEmpty(outputDir))
@@ -41,15 +55,28 @@ namespace AetherXIV.Core.Common
             return arg != null && arg.Trim().TrimStart('-').Equals("dev-diagnostics", StringComparison.OrdinalIgnoreCase);
         }
 
+        public static bool IsLinkpearlDiagnosticOpcode(ushort opcode)
+        {
+            return opcode == 0x012D
+                || opcode == 0x012E
+                || opcode == 0x012F
+                || opcode == 0x0130
+                || opcode == 0x0131
+                || opcode == 0x0133
+                || opcode == 0x0134
+                || opcode == 0x00CE
+                || opcode == 0x00E2
+                || opcode == 0x00E3;
+        }
+
         public static void Trace(string category, params object[] keyValues)
         {
             if (!Enabled)
                 return;
 
-            string line = BuildJsonLine(category, keyValues);
-
             lock (sync)
             {
+                string line = BuildJsonLine(category, keyValues);
                 logger.Info("[DEVTRACE] {0}", line);
 
                 if (!String.IsNullOrEmpty(tracePath))
@@ -76,6 +103,46 @@ namespace AetherXIV.Core.Common
                 "target", FormatHex(subpacket.header.targetId),
                 "size", subpacket.header.subpacketSize,
                 "payloadLength", subpacket.data == null ? 0 : subpacket.data.Length);
+        }
+
+        public static void TraceWireSubPacket(string context, string direction, SubPacket subpacket)
+        {
+            if (!WireLoggingEnabled || subpacket == null)
+                return;
+
+            byte[] bytes = subpacket.GetBytes();
+            int previewLength = Math.Min(bytes.Length, WIRE_PREVIEW_BYTES);
+            Trace(
+                "wire.subpacket",
+                "context", context,
+                "direction", direction,
+                "type", FormatHex(subpacket.header.type),
+                "opcode", FormatHex(subpacket.gameMessage.opcode),
+                "source", FormatHex(subpacket.header.sourceId),
+                "target", FormatHex(subpacket.header.targetId),
+                "size", bytes.Length,
+                "hex", Convert.ToHexString(bytes, 0, previewLength),
+                "truncated", previewLength < bytes.Length);
+        }
+
+        public static void TraceWireBasePacket(string context, string direction, BasePacket packet)
+        {
+            if (!WireLoggingEnabled || packet == null)
+                return;
+
+            byte[] bytes = packet.GetPacketBytes();
+            int previewLength = Math.Min(bytes.Length, WIRE_PREVIEW_BYTES);
+            Trace(
+                "wire.basePacket",
+                "context", context,
+                "direction", direction,
+                "auth", packet.header.isAuthenticated,
+                "compressed", packet.header.isCompressed,
+                "connectionType", FormatHex(packet.header.connectionType),
+                "size", bytes.Length,
+                "subpackets", packet.header.numSubpackets,
+                "hex", Convert.ToHexString(bytes, 0, previewLength),
+                "truncated", previewLength < bytes.Length);
         }
 
         public static void TraceUnknownSubPacket(string context, SubPacket subpacket)
@@ -107,6 +174,10 @@ namespace AetherXIV.Core.Common
             AppendJsonProperty(builder, "timestamp", DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture));
             builder.Append(",");
             AppendJsonProperty(builder, "server", serverName);
+            builder.Append(",");
+            AppendJsonProperty(builder, "diagnosticRunId", diagnosticRunId);
+            builder.Append(",");
+            AppendJsonProperty(builder, "traceSequence", ++traceSequence);
             builder.Append(",");
             AppendJsonProperty(builder, "category", category);
 

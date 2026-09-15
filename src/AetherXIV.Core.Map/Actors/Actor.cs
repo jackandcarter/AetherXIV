@@ -59,6 +59,49 @@ namespace AetherXIV.Core.Map.Actors
         public Area zone2 = null;
         public bool isZoning = false;
 
+        // Lua scripts use the original Project Meteor actor contract. These
+        // properties deliberately project the current runtime fields instead
+        // of maintaining a second copy of actor state.
+        public uint Id
+        {
+            get { return actorId; }
+            set { actorId = value; }
+        }
+
+        public string Name
+        {
+            get { return actorName; }
+            set { actorName = value; }
+        }
+
+        public uint LocalizedDisplayName
+        {
+            get { return displayNameId; }
+            set { displayNameId = value; }
+        }
+
+        public string DisplayName
+        {
+            get { return customDisplayName; }
+            set { customDisplayName = value; }
+        }
+
+        public Area CurrentArea
+        {
+            get { return zone; }
+            set
+            {
+                zone = value;
+                zoneId = value == null ? 0 : value.GetTerritoryId();
+            }
+        }
+
+        public bool IsZoneing
+        {
+            get { return isZoning; }
+            set { isZoning = value; }
+        }
+
         public bool spawnedFirstTime = false;
 
         public string classPath;
@@ -202,6 +245,29 @@ namespace AetherXIV.Core.Map.Actors
             return MoveActorToPositionPacket.BuildPacket(actorId, positionX, positionY, positionZ, rotation, moveState);
         }
 
+        protected ushort GetActorInstantiationAreaKey(Player player = null)
+        {
+            Area currentArea = player == null
+                ? this as Area ?? zone
+                : player.zone;
+            if (currentArea == null)
+                throw new InvalidOperationException(
+                    String.Format(
+                        "Actor 0x{0:X8} ({1}) has no area context for ActorInstantiate.",
+                        actorId,
+                        actorName));
+
+            uint key = currentArea.GetTerritoryId() << 6;
+            if (key > UInt16.MaxValue)
+                throw new InvalidOperationException(
+                    String.Format(
+                        "Territory {0} produces invalid ActorInstantiate area key 0x{1:X}.",
+                        currentArea.GetTerritoryId(),
+                        key));
+
+            return (ushort)key;
+        }
+
         public SubPacket CreateStatePacket()
         {
             return SetActorStatePacket.BuildPacket(actorId, currentMainState, 0);
@@ -254,7 +320,31 @@ namespace AetherXIV.Core.Map.Actors
             return subpackets;
         }
 
-        public List<SubPacket> GetSetEventStatusPackets()
+        /// <summary>
+        /// Notice-only variant of <see cref="GetEventConditionPackets"/>.
+        /// Retail re-arms the notice conditions (SetNotice, 0x016B) after the
+        /// client's type-101 notice ack without re-sending the other condition
+        /// kinds — war_quest_update2 shows the director's 3-condition set
+        /// (noticeEvent 0xE/0, noticeRequest 0/1, reqForChild 0/1) plus a
+        /// per-target noticeEvent(0,1) on each quest NPC. This keeps the
+        /// re-arm narrow so it cannot re-stage talk/push conditions the
+        /// client already holds.
+        /// </summary>
+        public List<SubPacket> GetNoticeEventConditionPackets()
+        {
+            List<SubPacket> subpackets = new List<SubPacket>();
+            if (eventConditions?.noticeEventConditions == null)
+                return subpackets;
+            foreach (EventList.NoticeEventCondition condition in eventConditions.noticeEventConditions)
+                subpackets.Add(SetNoticeEventCondition.BuildPacket(actorId, condition));
+            return subpackets;
+        }
+
+        public List<SubPacket> GetSetEventStatusPackets(
+            bool talkEnabled = true,
+            bool emoteEnabled = true,
+            Boolean? pushEnabled = null,
+            Boolean? noticeEnabled = true)
         {
             List<SubPacket> subpackets = new List<SubPacket>();
 
@@ -265,40 +355,52 @@ namespace AetherXIV.Core.Map.Actors
             if (eventConditions.talkEventConditions != null)
             {
                 foreach (EventList.TalkEventCondition condition in eventConditions.talkEventConditions)
-                    subpackets.Add(SetEventStatusPacket.BuildPacket(actorId, true, 1, condition.conditionName));
+                    subpackets.Add(SetEventStatusPacket.BuildPacket(actorId, talkEnabled, 1, condition.conditionName));
             }
 
             if (eventConditions.noticeEventConditions != null)
             {
                 foreach (EventList.NoticeEventCondition condition in eventConditions.noticeEventConditions)
                 {
-                    if (condition.sendStatus)
-                        subpackets.Add(SetEventStatusPacket.BuildPacket(actorId, true, 5, condition.conditionName));
+                    if (condition.sendStatus && noticeEnabled.HasValue)
+                        subpackets.Add(SetEventStatusPacket.BuildPacket(actorId, noticeEnabled.Value, 5, condition.conditionName));
                 }
             }
 
             if (eventConditions.emoteEventConditions != null)
             {
                 foreach (EventList.EmoteEventCondition condition in eventConditions.emoteEventConditions)
-                    subpackets.Add(SetEventStatusPacket.BuildPacket(actorId, true, 3, condition.conditionName));
+                    subpackets.Add(SetEventStatusPacket.BuildPacket(actorId, emoteEnabled, 3, condition.conditionName));
             }
 
             if (eventConditions.pushWithCircleEventConditions != null)
             {
                 foreach (EventList.PushCircleEventCondition condition in eventConditions.pushWithCircleEventConditions)
-                    subpackets.Add(SetEventStatusPacket.BuildPacket(actorId, !condition.isDisabled, 2, condition.conditionName));
+                    subpackets.Add(SetEventStatusPacket.BuildPacket(
+                        actorId,
+                        pushEnabled ?? !condition.isDisabled,
+                        2,
+                        condition.conditionName));
             }
 
             if (eventConditions.pushWithFanEventConditions != null)
             {
                 foreach (EventList.PushFanEventCondition condition in eventConditions.pushWithFanEventConditions)
-                    subpackets.Add(SetEventStatusPacket.BuildPacket(actorId, true, 2, condition.conditionName));
+                    subpackets.Add(SetEventStatusPacket.BuildPacket(
+                        actorId,
+                        pushEnabled ?? true,
+                        2,
+                        condition.conditionName));
             }
 
             if (eventConditions.pushWithBoxEventConditions != null)
             {
                 foreach (EventList.PushBoxEventCondition condition in eventConditions.pushWithBoxEventConditions)
-                    subpackets.Add(SetEventStatusPacket.BuildPacket(actorId, true, 2, condition.conditionName));
+                    subpackets.Add(SetEventStatusPacket.BuildPacket(
+                        actorId,
+                        pushEnabled ?? true,
+                        2,
+                        condition.conditionName));
             }
 
             return subpackets;
@@ -311,12 +413,22 @@ namespace AetherXIV.Core.Map.Actors
 
         public virtual SubPacket CreateScriptBindPacket(Player player)
         {
-            return ActorInstantiatePacket.BuildPacket(actorId, actorName, className, classParams);
+            return ActorInstantiatePacket.BuildPacket(
+                actorId,
+                actorName,
+                className,
+                classParams,
+                GetActorInstantiationAreaKey(player));
         }
 
         public virtual SubPacket CreateScriptBindPacket()
         {
-            return ActorInstantiatePacket.BuildPacket(actorId, actorName, className, classParams);
+            return ActorInstantiatePacket.BuildPacket(
+                actorId,
+                actorName,
+                className,
+                classParams,
+                GetActorInstantiationAreaKey());
         }
 
         public virtual List<SubPacket> GetSpawnPackets(Player player, ushort spawnType)
@@ -543,7 +655,7 @@ namespace AetherXIV.Core.Map.Actors
             string classNumber = Utils.ToStringBase63(actorNumber);
 
             //Get stuff after @
-            uint zoneId = zone.actorId;
+            uint zoneId = zone.GetActorNameZoneId();
             uint privLevel = 0;
             if (zone is PrivateArea)
                 privLevel = ((PrivateArea)zone).GetPrivateAreaType();

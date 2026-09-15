@@ -32,9 +32,15 @@ internal sealed class UmbraPluginLoadContext : AssemblyLoadContext
 
     protected override Assembly? Load(AssemblyName assemblyName)
     {
-        // The SDK contract must retain a single identity in the default context.
+        // The framework is the single authority for the plugin API contract:
+        // plugins compile against the Aether.Umbra.PluginApi package, and the
+        // framework provides that contract at runtime. Handing every plugin the
+        // framework's own already-loaded instance (instead of loading the file
+        // into this context) keeps one type identity, so the host's
+        // `is IUmbraPlugin` cast succeeds no matter where the file lives or
+        // which assembly version the plugin package compiled against.
         if (string.Equals(assemblyName.Name, PluginApiAssemblyName, StringComparison.OrdinalIgnoreCase))
-            return null;
+            return typeof(IUmbraPlugin).Assembly;
 
         string? path = resolver.ResolveAssemblyToPath(assemblyName);
         return path is null ? null : LoadFromAssemblyPath(path);

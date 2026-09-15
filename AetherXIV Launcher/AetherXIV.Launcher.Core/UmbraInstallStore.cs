@@ -34,7 +34,19 @@ public static class UmbraInstallStore
 
     public static string PluginsRoot => Path.Combine(Root, "Plugins");
 
+    /// <summary>
+    /// The built-in plugin catalog and packages that ship inside the launcher
+    /// payload next to the bundled framework, as opposed to the user data root
+    /// used for installed plugins. The bundled <c>repository.json</c> is the
+    /// foundation catalog: built-in entries resolve their packages here.
+    /// </summary>
+    public static string BundledPluginsRoot => Path.Combine(AppContext.BaseDirectory, "Umbra", "BundledPlugins");
+
+    public static string BundledRepositoryPath => Path.Combine(BundledPluginsRoot, "repository.json");
+
     public static string LogsRoot => Path.Combine(Root, "Logs");
+
+    public static string FrameworkQuarantineRoot => Path.Combine(Root, "FrameworkQuarantine");
 
     public static string FrameworkInstallRootFor(UmbraFrameworkArtifact artifact, string? frameworksRoot = null)
     {
@@ -51,7 +63,17 @@ public static class UmbraInstallStore
     {
         ArgumentNullException.ThrowIfNull(install);
         Directory.CreateDirectory(install.InstallPath);
-        File.WriteAllText(ManifestPathFor(install.InstallPath), JsonSerializer.Serialize(install, JsonOptions));
+        UmbraFrameworkInstall persisted = install.IsBundled
+            ? install with
+            {
+                InstallPath = ".",
+                BootstrapPath = "Aether.Umbra.Bootstrap.x86.dll",
+                FrameworkPath = "Managed/Aether.Umbra.Framework.dll"
+            }
+            : install;
+        File.WriteAllText(
+            ManifestPathFor(install.InstallPath),
+            JsonSerializer.Serialize(persisted, JsonOptions));
     }
 
     public static UmbraFrameworkInstall Load(string installRoot)
@@ -69,7 +91,7 @@ public static class UmbraInstallStore
             return null;
 
         UmbraFrameworkInstall install = Load(installRoot);
-        return IsUsable(install) ? install : null;
+        return IsUsableAndVerified(install) ? install : null;
     }
 
     public static UmbraFrameworkInstall? FindLatestInstalled(string? frameworksRoot = null)
@@ -80,9 +102,57 @@ public static class UmbraInstallStore
 
         return Directory.EnumerateDirectories(root)
             .Select(TryLoad)
-            .Where(install => install is not null && IsUsable(install))
+            .Where(install => install is not null && IsUsableAndVerified(install))
             .OrderByDescending(install => install!.InstalledAt)
             .FirstOrDefault();
+    }
+
+    public static UmbraFrameworkInstall? FindBestAvailable(
+        string? gameSha256 = null,
+        string? frameworksRoot = null,
+        string? bundledBaseDirectory = null)
+    {
+        List<UmbraFrameworkInstall> candidates = [];
+        string root = frameworksRoot ?? FrameworksRoot;
+        if (Directory.Exists(root))
+        {
+            foreach (string installRoot in Directory.EnumerateDirectories(root))
+            {
+                UmbraFrameworkInstall? install = TryLoadVerified(installRoot);
+                if (install is not null)
+                    candidates.Add(install);
+            }
+        }
+
+        UmbraFrameworkInstall? bundled = FindBundled(bundledBaseDirectory);
+        if (bundled is not null)
+            candidates.Add(bundled);
+
+        return candidates
+            .Where(install => string.IsNullOrWhiteSpace(gameSha256) || install.SupportsGameHash(gameSha256))
+            .OrderByDescending(install => ParseVersion(install.Version))
+            .ThenByDescending(install => install.ChannelSequence)
+            .ThenByDescending(install => install.InstalledAt)
+            .FirstOrDefault();
+    }
+
+    public static long GetHighestInstalledChannelSequence(
+        string? frameworksRoot = null,
+        string? bundledBaseDirectory = null)
+    {
+        long highest = FindBundled(bundledBaseDirectory)?.ChannelSequence ?? 0;
+        string root = frameworksRoot ?? FrameworksRoot;
+        if (!Directory.Exists(root))
+            return highest;
+
+        foreach (string installRoot in Directory.EnumerateDirectories(root))
+        {
+            UmbraFrameworkInstall? install = TryLoadVerified(installRoot);
+            if (install is not null)
+                highest = Math.Max(highest, install.ChannelSequence);
+        }
+
+        return highest;
     }
 
     public static UmbraFrameworkInstall? FindBundled(string? baseDirectory = null)
@@ -94,19 +164,18 @@ public static class UmbraInstallStore
         if (!File.Exists(frameworkPath))
             frameworkPath = Path.Combine(root, "Managed", "Aether.Umbra.Framework.exe");
 
-        if (!File.Exists(bootstrapPath) || !File.Exists(frameworkPath))
+        string receiptPath = ManifestPathFor(root);
+        if (!File.Exists(bootstrapPath) || !File.Exists(frameworkPath) || !File.Exists(receiptPath))
             return null;
 
-        return new UmbraFrameworkInstall(
-            "Aether Umbra",
-            ReadBundledVersion(root),
-            UmbraCompatibility.CurrentApiVersion,
-            "win-x86",
-            root,
-            bootstrapPath,
-            frameworkPath,
-            new[] { UmbraCompatibility.Known123bGameSha256 },
-            File.GetLastWriteTimeUtc(bootstrapPath));
+        UmbraFrameworkInstall install = Load(root) with
+        {
+            InstallPath = root,
+            BootstrapPath = bootstrapPath,
+            FrameworkPath = frameworkPath,
+            IsBundled = true
+        };
+        return IsUsableAndVerified(install) ? install : null;
     }
 
     public static string CreateLogPath(string prefix = "umbra")
@@ -122,6 +191,28 @@ public static class UmbraInstallStore
             Directory.Delete(FrameworksRoot, true);
     }
 
+    public static UmbraFrameworkInstall? TryLoadVerified(string installRoot)
+    {
+        try
+        {
+            UmbraFrameworkInstall install = Load(installRoot);
+            return IsUsableAndVerified(install) ? install : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static string CreateFrameworkQuarantinePath(string installRoot)
+    {
+        Directory.CreateDirectory(FrameworkQuarantineRoot);
+        string name = Path.GetFileName(Path.TrimEndingDirectorySeparator(installRoot));
+        return Path.Combine(
+            FrameworkQuarantineRoot,
+            $"{RuntimeInstallStore.SanitizePathSegment(name)}-{DateTimeOffset.UtcNow:yyyyMMddHHmmssfff}");
+    }
+
     private static UmbraFrameworkInstall? TryLoad(string installRoot)
     {
         try
@@ -134,21 +225,25 @@ public static class UmbraInstallStore
         }
     }
 
-    private static string ReadBundledVersion(string root)
-    {
-        string versionPath = Path.Combine(root, "version.txt");
-        if (!File.Exists(versionPath))
-            return "0.1.0";
+    private static Version ParseVersion(string value) =>
+        Version.TryParse(value, out Version? version) ? version : new Version(0, 0);
 
-        string value = File.ReadAllText(versionPath).Trim();
-        return string.IsNullOrWhiteSpace(value) ? "0.1.0" : value;
-    }
-
-    private static bool IsUsable(UmbraFrameworkInstall? install)
+    private static bool IsUsableAndVerified(UmbraFrameworkInstall? install)
     {
-        return install is not null
-            && install.UsesAetherEntrypoints
-            && File.Exists(install.BootstrapPath)
-            && File.Exists(install.FrameworkPath);
+        if (install is null
+            || !install.UsesAetherEntrypoints
+            || !File.Exists(install.BootstrapPath)
+            || !File.Exists(install.FrameworkPath))
+            return false;
+
+        try
+        {
+            install.ValidateIntegrity();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

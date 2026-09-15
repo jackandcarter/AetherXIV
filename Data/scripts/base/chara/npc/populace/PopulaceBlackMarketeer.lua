@@ -156,4 +156,3 @@ function processSealShop(player)
         end   
     end
 end
-

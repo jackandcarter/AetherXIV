@@ -205,7 +205,10 @@ public sealed class V1SqlDumpActorDataImporter
                 ToUInt16(row.Values[10]),
                 ToUInt32(row.Values[11]),
                 row.Values[12],
-                $"server_spawn_locations:{spawnId}")));
+                $"server_spawn_locations:{spawnId}",
+                NativeActorSlot: row.Values.Count >= 14 && row.Values[13] is not null
+                    ? ToUInt32(row.Values[13])
+                    : null)));
         }
 
         return rows;

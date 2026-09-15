@@ -17,17 +17,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
 
         public static SubPacket BuildPacket(uint sourceActorId, int iconCode)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    binWriter.Write((Int32)iconCode);
-                }
-            }
-
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetActorQuestGraphicPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetActorQuestGraphicPacket(unchecked((uint)iconCode)));
         }
     }
 }

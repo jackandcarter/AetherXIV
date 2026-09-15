@@ -170,7 +170,8 @@ internal static partial class NativeMethods
     internal enum ProcessCreationFlags : uint
     {
         CREATE_SUSPENDED = 0x00000004,
-        NORMAL_PRIORITY_CLASS = 0x00000020
+        NORMAL_PRIORITY_CLASS = 0x00000020,
+        CREATE_NO_WINDOW = 0x08000000
     }
 
     [Flags]

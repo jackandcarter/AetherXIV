@@ -41,19 +41,6 @@ public static class LauncherEndpoints
             LauncherContentService content,
             CancellationToken cancellationToken) =>
             await content.GetRuntimeCatalogAsync(platform, cancellationToken).ConfigureAwait(false));
-        launcher.MapGet("/umbra/framework-catalog", async (
-            string? platform,
-            LauncherContentService content,
-            CancellationToken cancellationToken) =>
-            await content.GetUmbraFrameworkCatalogAsync(platform, cancellationToken).ConfigureAwait(false));
-        launcher.MapGet("/umbra/plugin-catalog", async (
-            LauncherContentService content,
-            CancellationToken cancellationToken) =>
-            await content.GetUmbraPluginCatalogAsync(cancellationToken).ConfigureAwait(false));
-        launcher.MapGet("/umbra/plugin-blocklist", async (
-            LauncherContentService content,
-            CancellationToken cancellationToken) =>
-            await content.GetUmbraPluginBlocklistAsync(cancellationToken).ConfigureAwait(false));
         launcher.MapPost("/login", async (
             HttpRequest httpRequest,
             LauncherAuthService auth,
@@ -81,7 +68,7 @@ public static class LauncherEndpoints
             """
             <!doctype html>
             <html><head><title>AetherXIV Launcher</title></head>
-            <body><h1>AetherXIV Launcher</h1><p>Use AetherXIV Launcher 2.0 to start the local client.</p></body></html>
+            <body><h1>AetherXIV Launcher</h1><p>Use AetherXIV Launcher 2.1 to start the local client.</p></body></html>
             """,
             "text/html"));
     }

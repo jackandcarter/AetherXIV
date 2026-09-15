@@ -152,6 +152,7 @@ namespace AetherXIV.Core.Map.Actors
         public const int NPCLS_INACTIVE = 1;
         public const int NPCLS_ACTIVE = 2;
         public const int NPCLS_ALERT = 3;
+        public const uint NPC_LINKSHELL_COUNT = 64;
 
         public const int SLOT_MAINHAND = 0;
         public const int SLOT_OFFHAND = 1;
@@ -178,14 +179,11 @@ namespace AetherXIV.Core.Map.Actors
                                      45000, 47000, 50000, 53000, 56000, 59000, 62000, 65000, 68000, 71000,       //Level <= 40
                                      74000, 78000, 81000, 85000, 89000, 92000, 96000, 100000, 100000, 110000};   //Level <= 50
 
-        //Event Related
+        // Event Related — plain fields, matching legacy Meteor/Garlemald.
         public uint currentEventOwner = 0;
         public string currentEventName = "";
         public byte currentEventType = 0;
         public Coroutine currentEventRunning;
-        public string currentEventFunctionName = "";
-        public ulong currentEventFunctionStartedAt = 0;
-        public bool currentEventFunctionReceivedUpdate = false;
         public uint currentCutsceneState = 0;
         public string currentCutsceneName = "";
         public uint currentCutsceneDetail = 0;
@@ -200,6 +198,7 @@ namespace AetherXIV.Core.Map.Actors
         public bool isGM = false;
         public bool isZoneChanging = true;
         private bool hasExpectedZoneChangePosition;
+        private bool awaitingZoneReadyAcknowledgement;
         private uint expectedZoneChangeZone;
         private float expectedZoneChangeX;
         private float expectedZoneChangeY;
@@ -238,10 +237,15 @@ namespace AetherXIV.Core.Map.Actors
         //Quest Actors (MUST MATCH playerWork.questScenario/questGuildleve)
         public Quest[] questScenario = new Quest[16];
         public uint[] questGuildleve = new uint[8];
+        public QuestStateManager questStateManager;
 
         //Aetheryte
         public uint homepoint = 0;
         public byte homepointInn = 0;
+        // Attuned-aetheryte set (Garlemald characters_aetherytes parity):
+        // hydrated from the DB at load, mutated by UnlockAetheryteNode,
+        // gate for HasAetheryteNodeUnlocked and the TeleportCommand refusal.
+        public readonly HashSet<uint> unlockedAetherytes = new HashSet<uint>();
 
         //Nameplate Stuff
         public uint currentLSPlate = 0;
@@ -257,6 +261,21 @@ namespace AetherXIV.Core.Map.Actors
         private Actor deferredContentKickOwner = null;
         private string deferredContentKickEventName = null;
         private object[] deferredContentKickParameters = null;
+
+        // Garlemald pending_kick_event / pending_content_kick_event: a notice
+        // kicked in a SetLoginDirector (login-scoped) burst is parked instead
+        // of sent immediately. A non-content warp (login zone-in, ordinary
+        // zone change) emits it at the END of the zone-in bundle, after all
+        // spawns; a DoZoneChangeContent re-parks it to the content slot, and
+        // the client's 0x0007(-1) zone-in-complete ack releases it — so the
+        // kick survives the content warp's actor wipe and lands on a director
+        // the client knows. (Garlemald processor.rs is_login_scoped_burst /
+        // pending_content_kick_event; port ledger "content-warp kick".)
+        // Path companion (legacy "special NPC") state used by quest events.
+        public string SNpcNickname { set; get; } = "???";
+        public byte SNpcSkin { set; get; } = 1;
+        public byte SNpcPersonality { set; get; } = 1;
+        public short SNpcCoordinate { set; get; } = 1;
 
         List<ushort> hotbarSlotsToUpdate = new List<ushort>();
 
@@ -339,7 +358,11 @@ namespace AetherXIV.Core.Map.Actors
 
             charaWork.commandAcquired[27150 - 26000] = true;
 
-            playerWork.questScenarioComplete[110001 - 110001] = true;
+            // Do not pre-mark 110001 (Man0l0, Limsa's opening) complete here. Doing so made
+            // IsQuestCompleted(110001) true at construction, blocking player.lua's
+            // ensureOpeningQuest from ever accepting it and leaving Limsa characters with no
+            // OpeningDirector, opening cutscene, or control-scheme widget. Completion is set
+            // by the normal CompleteQuest/ReplaceQuest paths once the opening actually runs.
             playerWork.questGuildleveComplete[120050 - 120001] = true;
 
             for (int i = 0; i < charaWork.additionalCommandAcquired.Length; i++ )
@@ -371,6 +394,13 @@ namespace AetherXIV.Core.Map.Actors
             this.aiContainer = new AIContainer(this, new PlayerController(this), null, new TargetFind(this));
             allegiance = CharacterTargetingAllegiance.Player;
             RecalculateStats("login");
+
+            questStateManager = new QuestStateManager(this);
+            questStateManager.Init(questScenario, playerWork.questScenarioComplete);
+            questStateManager.DiagnoseConsistency(
+                questScenario,
+                playerWork.questScenario,
+                "player-construction");
         }
 
         public List<SubPacket> Create0x132Packets()
@@ -411,10 +441,20 @@ namespace AetherXIV.Core.Map.Actors
             else
                 lParams = LuaUtils.CreateLuaParamList("/Chara/Player/Player_work", false, false, false, false, false, true);
 
-            ActorInstantiatePacket.BuildPacket(actorId, actorName, className, lParams).DebugPrintSubPacket();
+            ActorInstantiatePacket.BuildPacket(
+                actorId,
+                actorName,
+                className,
+                lParams,
+                GetActorInstantiationAreaKey(requestPlayer)).DebugPrintSubPacket();
 
 
-            return ActorInstantiatePacket.BuildPacket(actorId, actorName, className, lParams);
+            return ActorInstantiatePacket.BuildPacket(
+                actorId,
+                actorName,
+                className,
+                lParams,
+                GetActorInstantiationAreaKey(requestPlayer));
         }
 
         public override List<SubPacket> GetSpawnPackets(Player requestPlayer, ushort spawnType)
@@ -659,7 +699,7 @@ namespace AetherXIV.Core.Map.Actors
         {
             QueuePacket(SetMusicPacket.BuildPacket(actorId, zone.bgmDay, SetMusicPacket.EFFECT_FADEIN));
             QueuePacket(SetWeatherPacket.BuildPacket(actorId, SetWeatherPacket.WEATHER_CLEAR, 1));
-            QueuePacket(SetMapPacket.BuildPacket(actorId, zone.regionId, zone.actorId));
+            QueuePacket(SetMapPacket.BuildPacket(actorId, zone.regionId, zone.GetTerritoryId()));
         }
 
         public void SendZoneInPackets(
@@ -688,7 +728,7 @@ namespace AetherXIV.Core.Map.Actors
 
             QueuePacket(SetWeatherPacket.BuildPacket(actorId, SetWeatherPacket.WEATHER_CLEAR, 1));
 
-            QueuePacket(SetMapPacket.BuildPacket(actorId, zone.regionId, zone.actorId));
+            QueuePacket(SetMapPacket.BuildPacket(actorId, zone.regionId, zone.GetTerritoryId()));
 
             List<SubPacket> selfSpawnPackets = GetSpawnPackets(this, spawnType);
             QueuePackets(selfSpawnPackets);
@@ -719,12 +759,43 @@ namespace AetherXIV.Core.Map.Actors
             playerSession.QueuePacket(GetInitPackets());
 
             List<SubPacket> areaMasterSpawn = zone.GetSpawnPackets();
-            List<SubPacket> debugSpawn = world.GetDebugActor().GetSpawnPackets();
-            List<SubPacket> worldMasterSpawn = world.GetActor().GetSpawnPackets();
+            List<SubPacket> debugSpawn = world.GetDebugActor().GetSpawnPackets(this, 0);
+            List<SubPacket> worldMasterSpawn = world.GetActor().GetSpawnPackets(this, 0);
 
             playerSession.QueuePacket(areaMasterSpawn);
             playerSession.QueuePacket(debugSpawn);
             playerSession.QueuePacket(worldMasterSpawn);
+
+            // Nearby NPCs ride the bundle (Garlemald parity): the client's
+            // 0x0007 acks can't complete until the scene's actors are
+            // instantiated, so the scene mounts populated instead of waiting
+            // on a post-bundle resync. Content instances scan the content
+            // area's own pool by radius (base populace is structurally
+            // absent per pmeteor's per-Area pool); private areas spawn their
+            // WHOLE population (a radius scan drops far push-triggers like
+            // the canopy exit); root zones stream the 50-yalm radius. The
+            // instance list is re-seeded so continuous movement streaming
+            // won't re-AddActor them.
+            List<Actor> bundleActors;
+            if (zone is PrivateAreaContent)
+                bundleActors = zone.GetActorsAroundActor(this, 50);
+            else if (zone is PrivateArea)
+                bundleActors = zone.GetAllActors();
+            else
+            {
+                bundleActors = zone.GetActorsAroundActor(this, 50);
+                bundleActors.AddRange(world.GetSeamlessPartnerActorsAround(this, 50));
+            }
+
+            playerSession.ClearInstance();
+            playerSession.UpdateInstance(bundleActors, true);
+            DevDiagnostics.Trace(
+                "zone.in.bundle.npcFanout",
+                "player", customDisplayName,
+                "zone", zoneId,
+                "areaKind", zone == null ? "" : zone.GetType().Name,
+                "bundleActorCount", bundleActors.Count,
+                "instanceActorCount", playerSession.actorInstanceList.Count);
 
             int weatherDirectorPackets = 0;
             if (zone.GetWeatherDirector() != null)
@@ -773,12 +844,10 @@ namespace AetherXIV.Core.Map.Actors
                     npcLinkshellExtraCount++;
             }
 
-            if (currentContentGroup != null)
-            {
-                currentContentGroup.SendGroupPackets(playerSession);
-                currentContentGroup.StartAfterZoneIn();
-            }
-
+            // The content-group roster trio is emitted pre-warp by
+            // DoZoneChangeContent (EmitContentWarpPreWarpSequence), never in
+            // the zone-in bundle — Garlemald's send_zone_in_bundle ships only
+            // the party trio here.
             if (currentParty != null)
                 currentParty.SendGroupPackets(playerSession);
 
@@ -1024,6 +1093,16 @@ namespace AetherXIV.Core.Map.Actors
         {
             playerSession.LockUpdates(true);
 
+            ClearPendingKicks("session-end");
+            DetachOwnedDirectorsForSessionEnd("session-end");
+
+            // Purge any _WAIT_EVENT-parked coroutine so a mid-cutscene
+            // disconnect can't be resumed by an unrelated talk after relog
+            // (Garlemald handle_session_end purge_owner — the stale
+            // Charlys→Hobriaut hijack that silently drained quest counter +
+            // gil + EndEvent).
+            LuaEngine.GetInstance().PurgePlayerEventWaiter(this);
+
             // Rental state is intentionally session-scoped in 1.x. Logging out
             // (including a disconnect) ends the ride immediately.
             if (GetMountState() != 0 || IsChocoboRentalActive())
@@ -1104,6 +1183,12 @@ namespace AetherXIV.Core.Map.Actors
         public void CleanupAndSave(uint destinationZone, ushort spawnType, float destinationX, float destinationY, float destinationZ, float destinationRot)
         {
             playerSession.LockUpdates(true);
+
+            // A cross-map handoff reconstructs the Player on the destination
+            // map. Its source-map directors must not retain this dead object;
+            // parked notices would reference actors the destination never saw.
+            ClearPendingKicks("map-handoff");
+            DetachOwnedDirectorsForSessionEnd("map-handoff");
 
             //Remove actor from zone and main server list
             if (zone != null)
@@ -1369,6 +1454,11 @@ namespace AetherXIV.Core.Map.Actors
                 QueuePacket(GameMessagePacket.BuildPacket(Server.GetWorldManager().GetActor().actorId, textIdOwner.actorId, textId, displayId, log, LuaUtils.CreateLuaParamList(msgParams)));
         }
 
+        public void SendGameMessageLocalizedDisplayName(Actor textIdOwner, ushort textId, byte log, uint displayId, params object[] msgParams)
+        {
+            SendGameMessageDisplayIDSender(textIdOwner, textId, log, displayId, msgParams);
+        }
+
         private static string FormatTraceActorId(Actor actor)
         {
             return actor == null ? "0x0" : String.Format("0x{0:X}", actor.actorId);
@@ -1425,17 +1515,11 @@ namespace AetherXIV.Core.Map.Actors
         public void GraphicChange(uint slot, uint weapId, uint equipId, uint variantId, uint colorId)
         {
 
-            uint mixedVariantId;
-
-            if (weapId == 0)
-                mixedVariantId = ((variantId & 0x1F) << 5) | colorId;
-            else
-                mixedVariantId = variantId;
-
-            uint graphicId =
-                    (weapId & 0x3FF)  << 20 |
-                    (equipId & 0x3FF) << 10 |
-                    (mixedVariantId & 0x3FF);
+            uint graphicId = EquipmentRequestPolicy.PackAppearance(
+                weapId,
+                equipId,
+                variantId,
+                colorId);
 
             appearanceIds[slot] = graphicId;            
             
@@ -1453,17 +1537,11 @@ namespace AetherXIV.Core.Map.Actors
                 {
                     EquipmentItem eqItem = (EquipmentItem)item;
 
-                    uint mixedVariantId;
-
-                    if (eqItem.graphicsWeaponId == 0)
-                        mixedVariantId = ((eqItem.graphicsVariantId & 0x1F) << 5) | eqItem.graphicsColorId;
-                    else
-                        mixedVariantId = eqItem.graphicsVariantId;
-
-                    uint graphicId =
-                            (eqItem.graphicsWeaponId & 0x3FF) << 20 |
-                            (eqItem.graphicsEquipmentId & 0x3FF) << 10 |
-                            (mixedVariantId & 0x3FF);
+                    uint graphicId = EquipmentRequestPolicy.PackAppearance(
+                        eqItem.graphicsWeaponId,
+                        eqItem.graphicsEquipmentId,
+                        eqItem.graphicsVariantId,
+                        eqItem.graphicsColorId);
 
                     appearanceIds[slot] = graphicId;
                 }
@@ -1569,6 +1647,51 @@ namespace AetherXIV.Core.Map.Actors
                 QueuePacket(charaInfo1.BuildPacket(actorId));
             }
            
+        }
+
+        private void SendAchievedAetheryte(ushort from, ushort to)
+        {
+            Bitstream achievedAetheryte = new Bitstream(512, true);
+            SetActorPropetyPacket update = new SetActorPropetyPacket(
+                from,
+                to,
+                "work/achieveAetheryte");
+            update.AddBitfield(
+                Utils.MurmurHash2("work.event_achieve_aetheryte", 0),
+                achievedAetheryte.GetSlice(from, to));
+            update.AddTarget();
+            QueuePacket(update.BuildPacket(actorId));
+        }
+
+        private void SendCompletedQuests(ushort from, ushort to)
+        {
+            SetActorPropetyPacket update = new SetActorPropetyPacket(
+                from,
+                to,
+                "playerWork/journal");
+            update.AddBitfield(
+                Utils.MurmurHash2("playerWork.questScenarioComplete", 0),
+                questStateManager.GetCompletionSliceBytes(from, to));
+            update.AddTarget();
+            QueuePacket(update.BuildPacket(actorId));
+        }
+
+        public bool OnWorkSyncRequest(string propertyName, ushort from = 0, ushort to = 0)
+        {
+            switch (propertyName)
+            {
+                case "charaWork/exp":
+                    SendCharaExpInfo();
+                    return true;
+                case "work/achieveAetheryte":
+                    SendAchievedAetheryte(from, to);
+                    return true;
+                case "playerWork/questCompleteS":
+                    SendCompletedQuests(from, to);
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         public int GetHighestLevel()
@@ -1794,11 +1917,39 @@ namespace AetherXIV.Core.Map.Actors
             expectedZoneChangeRotation = expectedRotation;
             rejectedZoneChangePositionCount = 0;
             hasExpectedZoneChangePosition = true;
+            awaitingZoneReadyAcknowledgement = true;
             SetZoneChanging(true);
         }
 
         public bool IsZoneChangePositionAcceptable(float x, float y, float z)
         {
+            // During a reload the 1.x client can continue transmitting its
+            // source-area coordinates after the destination actor bundle has
+            // been sent. Those samples are movement, not the zone lifecycle
+            // acknowledgement. Only RX 0x0007(-1) completes the transition.
+            if (awaitingZoneReadyAcknowledgement)
+            {
+                rejectedZoneChangePositionCount++;
+                if (rejectedZoneChangePositionCount == 1 || rejectedZoneChangePositionCount % 10 == 0)
+                {
+                    DevDiagnostics.Trace(
+                        "zone.change.position.ignoredUntilReady",
+                        "player", customDisplayName,
+                        "zone", zoneId,
+                        "expectedZone", expectedZoneChangeZone,
+                        "expectedX", expectedZoneChangeX,
+                        "expectedY", expectedZoneChangeY,
+                        "expectedZ", expectedZoneChangeZ,
+                        "expectedRot", expectedZoneChangeRotation,
+                        "receivedX", x,
+                        "receivedY", y,
+                        "receivedZ", z,
+                        "rejectedCount", rejectedZoneChangePositionCount);
+                }
+
+                return false;
+            }
+
             bool accepted = ZoneTransitionPositionPolicy.IsDestinationConsistent(
                 hasExpectedZoneChangePosition,
                 zoneId,
@@ -1882,12 +2033,20 @@ namespace AetherXIV.Core.Map.Actors
                 "z", positionZ,
                 "rot", rotation);
 
+            // Re-arm the destination zone's quest ENPCs now that the client
+            // finished loading and the zone-in actors are instantiated
+            // (Garlemald handle_zone_in_complete tail). A sequence whose
+            // onStateChange ran in the ORIGIN zone needs its talk/push enables
+            // + head markers re-established here, or the destination step is
+            // dead until some other re-broadcast.
+            ReestablishQuestENpcs("zone-change-ack");
             Database.SavePlayerPosition(this);
         }
 
         private void ClearExpectedZoneChangePosition()
         {
             hasExpectedZoneChangePosition = false;
+            awaitingZoneReadyAcknowledgement = false;
             expectedZoneChangeZone = 0;
             expectedZoneChangeX = 0;
             expectedZoneChangeY = 0;
@@ -1899,7 +2058,106 @@ namespace AetherXIV.Core.Map.Actors
         public ReferencedItemPackage GetEquipment()
         {
             return equipment;
-        }     
+        }
+
+        public bool IsValidEquipmentPoint(int requestedEquipPoint)
+        {
+            return requestedEquipPoint > 0
+                && requestedEquipPoint <= equipment.GetCapacity();
+        }
+
+        public InventoryItem GetValidatedEquipmentItem(
+            ItemRefParam reference,
+            int requestedEquipPoint,
+            Type9Param itemIds)
+        {
+            InventoryItem item = reference == null ? null : GetItem(reference);
+            EquipmentItem equipmentItem = item == null ? null : item.itemData as EquipmentItem;
+            bool equippedElsewhere = false;
+            bool itemTypeMatchesSlot = equipmentItem != null;
+
+            // Head/body are the first capture-backed armor slice. Weapons use
+            // a different equipPoint domain (the captured gladius is 36 while
+            // its wire equipment point is 1), so do not generalize their slot
+            // rules here. Still prevent a forged weapon from entering either
+            // restored armor slot.
+            if (requestedEquipPoint == SLOT_HEAD + 1
+                || requestedEquipPoint == SLOT_BODY + 1)
+                itemTypeMatchesSlot = equipmentItem is ArmorItem;
+
+            if (item != null && IsValidEquipmentPoint(requestedEquipPoint))
+            {
+                int requestedSlot = requestedEquipPoint - 1;
+                for (ushort slot = 0; slot < equipment.GetCapacity(); slot++)
+                {
+                    InventoryItem equipped = equipment.GetItemAtSlot(slot);
+                    if (slot != requestedSlot
+                        && equipped != null
+                        && equipped.uniqueId == item.uniqueId)
+                    {
+                        equippedElsewhere = true;
+                        break;
+                    }
+                }
+            }
+
+            EquipmentRequestRejection rejection = EquipmentRequestPolicy.Validate(
+                requestedEquipPoint,
+                equipment.GetCapacity(),
+                actorId,
+                reference == null ? 0 : reference.actorId,
+                reference == null ? ushort.MaxValue : reference.itemPackage,
+                ItemPackage.NORMAL,
+                reference == null ? ushort.MaxValue : reference.slot,
+                item != null,
+                itemIds == null ? ulong.MaxValue : itemIds.item1,
+                item == null ? 0 : item.uniqueId,
+                item != null && ReferenceEquals(item.owner, this),
+                item == null ? ushort.MaxValue : item.itemPackage,
+                item == null ? ushort.MaxValue : item.slot,
+                equipmentItem != null,
+                itemTypeMatchesSlot,
+                equipmentItem is ArmorItem || equipmentItem is AccessoryItem,
+                equipmentItem == null ? -1 : equipmentItem.equipPoint,
+                equippedElsewhere);
+
+            if (rejection == EquipmentRequestRejection.None)
+                return item;
+
+            DevDiagnostics.Trace(
+                "inventory.equipment.requestRejected",
+                "player", String.Format("0x{0:X}", actorId),
+                "reason", rejection,
+                "requestedEquipPoint", requestedEquipPoint,
+                "referenceActor", reference == null ? "" : String.Format("0x{0:X}", reference.actorId),
+                "referencePackage", reference == null ? -1 : reference.itemPackage,
+                "referenceSlot", reference == null ? -1 : reference.slot,
+                "echoedItemId", itemIds == null ? "" : String.Format("0x{0:X16}", itemIds.item1),
+                "actualItemId", item == null ? "" : String.Format("0x{0:X16}", item.uniqueId));
+            return null;
+        }
+
+        public void CompleteEquipmentCommand()
+        {
+            // All seven retail EquipCommand requests in the equipment corpus
+            // complete with the equipment substate + command result and no
+            // server 0x0131 EndEvent packet.
+            SubState commandSubState = new SubState();
+            commandSubState.waste = EquipmentRequestPolicy.EquipSubstateWaste;
+            QueuePacket(SetActorSubStatePacket.BuildPacket(actorId, commandSubState));
+            BroadcastPacket(
+                CommandResultX01Packet.BuildPacket(
+                    actorId,
+                    EquipmentRequestPolicy.EquipAnimationId,
+                    EquipmentRequestPolicy.EquipCommandId,
+                    new CommandResult(actorId, 0, 1)),
+                true);
+
+            currentEventOwner = 0;
+            currentEventName = "";
+            currentEventType = 0;
+            currentEventRunning = null;
+        }
 
         public byte GetInitialTown()
         {
@@ -1930,10 +2188,44 @@ namespace AetherXIV.Core.Map.Actors
 
         public bool HasAetheryteNodeUnlocked(uint aetheryteId)
         {
-            if (aetheryteId != 0)
-                return true;
-            else
+            if (aetheryteId == 0)
                 return false;
+
+            return unlockedAetherytes.Contains(aetheryteId);
+        }
+
+        /// <summary>
+        /// First-touch aetheryte attunement — Garlemald apply_unlock_aetheryte
+        /// (#46 round 5). Pushed by AetheryteParent.lua / AetheryteChild.lua
+        /// onEventStarted when HasAetheryteNodeUnlocked is false. Persists via
+        /// characters_aetherytes (INSERT IGNORE) so the TeleportCommand.lua
+        /// destination gate and the aetheryte menu's per-child gates survive a
+        /// relog. aetheryteId is the aetheryte's actor class id (128xxxx —
+        /// the characters.homepoint namespace).
+        /// </summary>
+        public void UnlockAetheryteNode(uint aetheryteId)
+        {
+            if (aetheryteId == 0)
+                return;
+
+            if (!unlockedAetherytes.Add(aetheryteId))
+            {
+                DevDiagnostics.Trace(
+                    "aetheryte.unlock.duplicate",
+                    "player", customDisplayName,
+                    "aetheryteId", aetheryteId);
+                return;
+            }
+
+            Database.SavePlayerAetheryte(this, aetheryteId);
+            // No retail 1.x text-sheet id is mapped for the attunement line;
+            // Garlemald ships the same literal-system-line path.
+            SendMessage(SendMessagePacket.MESSAGE_TYPE_SYSTEM, "", "You are now attuned to the aetheryte.");
+            DevDiagnostics.Trace(
+                "aetheryte.unlock",
+                "player", customDisplayName,
+                "aetheryteId", aetheryteId,
+                "unlockedCount", unlockedAetherytes.Count);
         }
 
         public int GetFreeQuestSlot()
@@ -2122,63 +2414,129 @@ namespace AetherXIV.Core.Map.Actors
         public void AddQuest(uint id, bool isSilent = false)
         {
             Actor actor = Server.GetStaticActors((0xA0F00000 | id));
-            AddQuest(actor.actorName, isSilent);
+            if (actor != null)
+                AddQuest(actor.actorName, isSilent);
         }
 
         public void AddQuest(string name, bool isSilent = false)
         {
-            Actor actor = Server.GetStaticActors(name);
+            Quest staticQuest = Server.GetStaticActors(name) as Quest;
 
-            if (actor == null)
+            if (staticQuest == null)
                 return;
 
-            uint id = actor.actorId;
+            Quest quest = new Quest(this, staticQuest);
+            AcceptQuest(quest, isSilent);
+        }
+
+        public bool AcceptQuest(Quest instance, bool isSilent = false)
+        {
+            if (instance == null || HasQuest(instance.GetQuestId()))
+                return false;
 
             int freeSlot = GetFreeQuestSlot();
-
             if (freeSlot == -1)
-                return;
+            {
+                SendGameMessage(Server.GetWorldManager().GetActor(), 25234, 0x20);
+                return false;
+            }
 
-            playerWork.questScenario[freeSlot] = id;
-            questScenario[freeSlot] = new Quest(this, playerWork.questScenario[freeSlot], name, null, 0, 0);
-            Database.SaveQuest(this, questScenario[freeSlot]);
+            playerWork.questScenario[freeSlot] = instance.actorId;
+            questScenario[freeSlot] = instance;
             SendQuestClientUpdate(freeSlot);
 
             if (!isSilent)
             {
-                SendGameMessage(Server.GetWorldManager().GetActor(), 25224, 0x20, (object)questScenario[freeSlot].GetQuestId());
-                questScenario[freeSlot].NextPhase(0);
+                SendDataPacket(
+                    "attention",
+                    Server.GetWorldManager().GetActor(),
+                    "",
+                    25224,
+                    (object)instance.GetQuestId());
+                SendGameMessage(Server.GetWorldManager().GetActor(), 25224, 0x20, (object)instance.GetQuestId());
             }
+
+            instance.OnAccept();
+            Database.SaveQuest(this, instance, freeSlot);
+            questStateManager?.DiagnoseConsistency(
+                questScenario,
+                playerWork.questScenario,
+                "quest-accepted");
+            return true;
         }        
 
         public void CompleteQuest(uint id)
         {
             Actor actor = Server.GetStaticActors((0xA0F00000 | id));
-            CompleteQuest(actor.actorName);
+            if (actor != null)
+                CompleteQuest(actor.actorName);
         }
 
         public void CompleteQuest(string name)
         {
-            Actor actor = Server.GetStaticActors(name);
-
-            if (actor == null)
-                return;
-
-            uint id = actor.actorId;
-            if (HasQuest(id))
-            {
-                Database.CompleteQuest(playerSession.GetActor(), id);
-                SendGameMessage(Server.GetWorldManager().GetActor(), 25086, 0x20, (object)GetQuest(id).GetQuestId());
-                RemoveQuest(id);
-            }
+            Quest completed = GetQuest(name);
+            if (completed != null)
+                CompleteQuest(completed);
         }
 
-        //TODO: Add checks for you being in an instance or main scenario
-        public void AbandonQuest(uint id)
+        public void CompleteQuest(Quest completed)
         {
+            int slot = completed == null ? -1 : GetQuestSlot(completed.GetQuestId());
+            if (slot < 0)
+                return;
+
+            uint questId = completed.GetQuestId();
+            if (questId >= QuestStateManager.ScenarioStart
+                && questId < QuestStateManager.ScenarioStart + QuestStateManager.ScenarioCount)
+            {
+                playerWork.questScenarioComplete[questId - QuestStateManager.ScenarioStart] = true;
+            }
+
+            questScenario[slot] = null;
+            playerWork.questScenario[slot] = 0;
+            SendQuestClientUpdate(slot);
+
+            completed.OnComplete();
+            Database.CompleteQuest(this, completed.actorId);
+            Database.RemoveQuest(this, completed.actorId);
+            questStateManager?.UpdateQuestCompleted(completed);
+            questStateManager?.DiagnoseConsistency(
+                questScenario,
+                playerWork.questScenario,
+                "quest-completed");
+            SendGameMessage(Server.GetWorldManager().GetActor(), 25086, 0x20, (object)questId);
+        }
+
+        public bool AbandonQuest(uint id)
+        {
+            if (zone is PrivateArea)
+            {
+                SendGameMessage(Server.GetWorldManager().GetActor(), 25235, 0x20);
+                return false;
+            }
+
             Quest quest = GetQuest(id);
-            RemoveQuestByQuestId(id);
-            quest.DoAbandon();       
+            if (quest == null)
+                return false;
+            if (quest.IsMainScenario())
+            {
+                SendGameMessage(Server.GetWorldManager().GetActor(), 25233, 0x20);
+                return false;
+            }
+
+            int slot = GetQuestSlot(id);
+            questScenario[slot] = null;
+            playerWork.questScenario[slot] = 0;
+            SendQuestClientUpdate(slot);
+            quest.OnAbandon();
+            Database.RemoveQuest(this, quest.actorId);
+            questStateManager?.UpdateQuestAbandoned();
+            questStateManager?.DiagnoseConsistency(
+                questScenario,
+                playerWork.questScenario,
+                "quest-abandoned");
+            SendGameMessage(this, Server.GetWorldManager().GetActor(), 25236, 0x20, (object)quest.GetQuestId());
+            return true;
         }
 
         public void RemoveQuestByQuestId(uint id)
@@ -2195,9 +2553,11 @@ namespace AetherXIV.Core.Map.Actors
                     if (questScenario[i] != null && questScenario[i].actorId == id)
                     {
                         Database.RemoveQuest(this, questScenario[i].actorId);
+                        questScenario[i].DeleteENpcState();
                         questScenario[i] = null;
                         playerWork.questScenario[i] = 0;
                         SendQuestClientUpdate(i);
+                        questStateManager?.UpdateQuestAbandoned();
                         break;
                     }
                 }
@@ -2206,21 +2566,39 @@ namespace AetherXIV.Core.Map.Actors
 
         public void ReplaceQuest(uint oldId, uint newId)
         {
-            if (HasQuest(oldId))
+            Quest oldQuest = GetQuest(oldId);
+            Quest newStaticQuest = Server.GetStaticActors(0xA0F00000 | newId) as Quest;
+            if (oldQuest != null && newStaticQuest != null)
+                ReplaceQuest(oldQuest, newStaticQuest.actorName);
+        }
+
+        public void ReplaceQuest(Quest oldQuestInstance, string questName)
+        {
+            int slot = oldQuestInstance == null ? -1 : GetQuestSlot(oldQuestInstance.GetQuestId());
+            Quest newStaticQuest = Server.GetStaticActors(questName) as Quest;
+            if (slot < 0 || newStaticQuest == null)
+                return;
+
+            uint oldQuestId = oldQuestInstance.GetQuestId();
+            if (oldQuestId >= QuestStateManager.ScenarioStart
+                && oldQuestId < QuestStateManager.ScenarioStart + QuestStateManager.ScenarioCount)
             {
-                for (int i = 0; i < questScenario.Length; i++)
-                {
-                    if (questScenario[i] != null && questScenario[i].GetQuestId() == oldId)
-                    {
-                        Actor actor = Server.GetStaticActors((0xA0F00000 | newId));
-                        playerWork.questScenario[i] = (0xA0F00000 | newId);
-                        questScenario[i] = new Quest(this, playerWork.questScenario[i], actor.actorName, null, 0, 0);
-                        Database.SaveQuest(this, questScenario[i]);
-                        SendQuestClientUpdate(i);
-                        break;
-                    }
-                }
+                playerWork.questScenarioComplete[oldQuestId - QuestStateManager.ScenarioStart] = true;
             }
+
+            oldQuestInstance.OnComplete();
+            Database.CompleteQuest(this, oldQuestInstance.actorId);
+            questScenario[slot] = null;
+            playerWork.questScenario[slot] = 0;
+            questStateManager?.UpdateQuestCompleted(oldQuestInstance);
+
+            Quest newQuestInstance = new Quest(this, newStaticQuest);
+
+            questScenario[slot] = newQuestInstance;
+            playerWork.questScenario[slot] = newQuestInstance.actorId;
+            SendQuestClientUpdate(slot);
+            newQuestInstance.OnAccept(true);
+            Database.SaveQuest(this, newQuestInstance, slot);
         }
 
         public bool CanAcceptQuest(string name)
@@ -2251,12 +2629,15 @@ namespace AetherXIV.Core.Map.Actors
         public bool IsQuestCompleted(string questName)
         {
             Actor actor = Server.GetStaticActors(questName);
-            return IsQuestCompleted(actor.actorId);
+            return actor != null && IsQuestCompleted(actor.actorId);
         }
 
         public bool IsQuestCompleted(uint questId)
         {
-            return Database.IsQuestCompleted(this, 0xFFFFF & questId);
+            uint compactQuestId = 0xFFFFF & questId;
+            return questStateManager != null
+                ? questStateManager.IsQuestComplete(compactQuestId)
+                : Database.IsQuestCompleted(this, compactQuestId);
         }
 
         public Quest GetQuest(uint id)
@@ -2303,6 +2684,221 @@ namespace AetherXIV.Core.Map.Actors
             return false;
         }
 
+        public bool HasQuest(Quest questInstance)
+        {
+            return GetQuestSlot(questInstance) != -1;
+        }
+
+        public void SetQuestComplete(uint id, bool flag)
+        {
+            if (flag)
+            {
+                Quest currentQuest = GetQuest(id);
+                if (currentQuest != null)
+                {
+                    CompleteQuest(currentQuest);
+                    return;
+                }
+            }
+
+            questStateManager?.ForceQuestCompleteFlag(id, flag);
+            if (id >= QuestStateManager.ScenarioStart
+                && id < QuestStateManager.ScenarioStart + QuestStateManager.ScenarioCount)
+            {
+                playerWork.questScenarioComplete[id - QuestStateManager.ScenarioStart] = flag;
+            }
+        }
+
+        public Quest[] GetQuestsForNpc(Npc npc)
+        {
+            if (npc == null)
+                return Array.Empty<Quest>();
+
+            Quest[] quests = questScenario
+                .Where(quest => quest != null && quest.IsQuestENPC(this, npc))
+                .ToArray();
+            Array.Sort(quests, (left, right) => left.HasData().CompareTo(right.HasData()));
+            return quests;
+        }
+
+        /// <summary>
+        /// Merged quest-ENPC overlay across every active quest slot for one
+        /// actor class (later slots win). See QuestStateManager for the
+        /// Garlemald quest_enpc_overrides contract. (#46.)
+        /// </summary>
+        public QuestENpc GetQuestEnpcOverlay(uint actorClassId)
+        {
+            QuestENpc overlay = null;
+            foreach (Quest quest in questScenario)
+            {
+                if (quest == null)
+                    continue;
+
+                QuestENpc enpc = quest.GetQuestState().GetENpc(actorClassId);
+                if (enpc != null)
+                    overlay = enpc;
+            }
+
+            return overlay;
+        }
+
+        public Quest GetDefaultTalkQuest(Npc npc)
+        {
+            if (npc?.zone == null)
+                return null;
+
+            string questName = npc.zone.regionId switch
+            {
+                101 => "DftSea",
+                102 => "DftRoc",
+                103 => "DftFst",
+                104 or 107 => "DftWil",
+                105 => "DftLak",
+                805 => "DftSrt",
+                _ => null
+            };
+
+            Quest defaultTalk = questName == null
+                ? null
+                : Server.GetStaticActors(questName) as Quest;
+            return defaultTalk != null && defaultTalk.IsQuestENPCByScript(this, npc)
+                ? defaultTalk
+                : null;
+        }
+
+        public Quest GetTutorialQuest(Npc npc)
+        {
+            if (npc?.zone == null
+                || (npc.zone.regionId != 101 && npc.zone.regionId != 103 && npc.zone.regionId != 104))
+            {
+                return null;
+            }
+
+            string questName = npc.GetActorClassId() switch
+            {
+                1000137 => "Trl0l1",
+                1000230 => "Trl0g1",
+                1000841 => "Trl0u1",
+                _ => null
+            };
+            return questName == null ? null : Server.GetStaticActors(questName) as Quest;
+        }
+
+        public void ForceQuestStateUpdate()
+        {
+            questStateManager?.ForceQuestStateUpdate();
+        }
+
+        public void HandleBNpcKill(uint actorClassId)
+        {
+            foreach (Quest quest in questScenario)
+            {
+                quest?.OnKillBNpc(this, actorClassId);
+            }
+        }
+
+        /// <summary>
+        /// Re-runs each active quest's onStateChange + ENPC diff so the
+        /// destination zone's quest-set is armed after a relog or a warp where
+        /// the arm ran in the origin zone (Garlemald apply_quest_update_enpcs
+        /// parity — login, RX 0x0007 ack, and seamless flips).
+        /// </summary>
+        public void ReestablishQuestENpcs(string reason)
+        {
+            if (zone is PrivateAreaContent)
+            {
+                DevDiagnostics.Trace(
+                    "quest.enpc.reestablish.skipped",
+                    "player", customDisplayName,
+                    "reason", reason ?? "",
+                    "zone", zoneId,
+                    "privateArea", privateArea ?? "",
+                    "privateAreaType", privateAreaType,
+                    "guard", "content-instance");
+                return;
+            }
+
+            int activeQuestCount = 0;
+            foreach (Quest quest in questScenario)
+            {
+                if (quest != null && quest.HasData())
+                {
+                    activeQuestCount++;
+                    quest.GetQuestState().UpdateState();
+                }
+            }
+
+            DevDiagnostics.Trace(
+                "quest.enpc.reestablish",
+                "player", customDisplayName,
+                "reason", reason ?? "",
+                "zone", zoneId,
+                "privateArea", privateArea ?? "",
+                "privateAreaType", privateAreaType,
+                "activeQuestCount", activeQuestCount);
+        }
+
+        public bool HandleNpcLs(uint id)
+        {
+            // Garlemald handle_npc_ls_chat (#46): the clicked linkshell id is
+            // a best-effort HINT only. The client speaks ZERO-BASED (it
+            // mirrors the playerWork.npcLinkshellChatCalling[N] index that
+            // SetNpcLs stores zero-based), while the quest stores the RAW
+            // 1-based value passed to NewNpcLsMsg(from) — man0l1/man0g1
+            // branch on `from == 1`. A hint H therefore matches stored H (raw)
+            // or H+1 (zero-based). When the hint is absent (nil arrives as 0)
+            // or does not match, fall back to the sole pending pearl (the
+            // first quest whose npcLsFrom != 0), mirroring pmeteor's "the
+            // linkshell window only lists pearls with a pending message"
+            // click contract.
+            Quest pendingFallback = null;
+
+            foreach (Quest quest in questScenario)
+            {
+                if (quest == null || quest.GetNpcLsFrom() == 0)
+                    continue;
+
+                if (pendingFallback == null)
+                    pendingFallback = quest;
+
+                if (quest.GetNpcLsFrom() == id || quest.GetNpcLsFrom() == id + 1)
+                {
+                    DevDiagnostics.Trace(
+                        "npcLinkshell.command",
+                        "player", customDisplayName,
+                        "hint", id,
+                        "hintInterpretation", quest.GetNpcLsFrom() == id ? "one-based" : "zero-based",
+                        "matchedFrom", quest.GetNpcLsFrom(),
+                        "matchedQuestId", quest.GetQuestId(),
+                        "matchedQuestName", quest.GetName(),
+                        "matchedQuestSequence", quest.GetSequence(),
+                        "matchedStep", quest.GetNpcLsMessageStep(),
+                        "fallback", false);
+                    quest.OnNpcLs(this);
+                    return true;
+                }
+            }
+
+            if (pendingFallback != null)
+            {
+                DevDiagnostics.Trace(
+                    "npcLinkshell.command",
+                    "player", customDisplayName,
+                    "hint", id,
+                    "hintInterpretation", "pending-quest-fallback",
+                    "matchedFrom", pendingFallback.GetNpcLsFrom(),
+                    "matchedQuestId", pendingFallback.GetQuestId(),
+                    "matchedQuestName", pendingFallback.GetName(),
+                    "matchedQuestSequence", pendingFallback.GetSequence(),
+                    "matchedStep", pendingFallback.GetNpcLsMessageStep(),
+                    "fallback", true);
+                pendingFallback.OnNpcLs(this);
+                return true;
+            }
+
+            return false;
+        }
+
         public bool HasGuildleve(uint id)
         {
             for (int i = 0; i < playerWork.questGuildleve.Length; i++)
@@ -2312,6 +2908,72 @@ namespace AetherXIV.Core.Map.Actors
             }
 
             return false;
+        }
+
+        public void SetSNpc(string nickname, uint actorClassId, byte classType)
+        {
+            SNpcNickname = nickname;
+            SNpcSkin = (byte)(actorClassId - 1070000);
+
+            switch (SNpcSkin % 16)
+            {
+                case 1:
+                    SNpcPersonality = 1;
+                    break;
+                case 2:
+                case 16:
+                    SNpcPersonality = 2;
+                    break;
+                case 3:
+                case 4:
+                    SNpcPersonality = 3;
+                    break;
+                case 5:
+                case 6:
+                    SNpcPersonality = 4;
+                    break;
+                case 7:
+                case 8:
+                    SNpcPersonality = 5;
+                    break;
+                case 9:
+                case 10:
+                    SNpcPersonality = 6;
+                    break;
+                case 11:
+                case 12:
+                    SNpcPersonality = 8;
+                    break;
+                case 13:
+                case 14:
+                    SNpcPersonality = 7;
+                    break;
+                case 15:
+                    SNpcPersonality = 9;
+                    break;
+            }
+
+            Database.CreateOrUpdateSNpc(this, SNpcNickname, SNpcSkin, SNpcPersonality);
+        }
+
+        public string GetSNpcNickname()
+        {
+            return SNpcNickname ?? "???";
+        }
+
+        public byte GetSNpcSkin()
+        {
+            return SNpcSkin;
+        }
+
+        public byte GetSNpcPersonality()
+        {
+            return SNpcPersonality;
+        }
+
+        public short GetSNpcCoordinate()
+        {
+            return SNpcCoordinate;
         }
 
         public bool HasLocalGuildleve(uint id)
@@ -2352,12 +3014,27 @@ namespace AetherXIV.Core.Map.Actors
             return -1;
         }
 
-        public void SetNpcLS(uint npcLSId, uint state)
+        public int GetQuestSlot(Quest quest)
         {
-            if (npcLSId >= (uint)playerWork.npcLinkshellChatCalling.Length ||
-                npcLSId >= (uint)playerWork.npcLinkshellChatExtra.Length)
+            if (quest == null)
+                return -1;
+
+            for (int slot = 0; slot < questScenario.Length; slot++)
             {
-                Program.Log.Error("Ignoring invalid NPC linkshell id {0} for player {1}.", npcLSId, actorId);
+                if (questScenario[slot] != null && questScenario[slot].actorId == quest.actorId)
+                    return slot;
+            }
+
+            return -1;
+        }
+
+        public void SetNpcLs(uint npcLsId, uint state)
+        {
+            if (npcLsId < 1 || npcLsId > NPC_LINKSHELL_COUNT ||
+                npcLsId > (uint)playerWork.npcLinkshellChatCalling.Length ||
+                npcLsId > (uint)playerWork.npcLinkshellChatExtra.Length)
+            {
+                Program.Log.Error("Ignoring invalid NPC linkshell id {0} for player {1}.", npcLsId, actorId);
                 return;
             }
 
@@ -2367,8 +3044,9 @@ namespace AetherXIV.Core.Map.Actors
                 return;
             }
 
-            bool wasOwned = playerWork.npcLinkshellChatCalling[npcLSId] ||
-                            playerWork.npcLinkshellChatExtra[npcLSId];
+            uint npcLsIndex = npcLsId - 1;
+            bool wasOwned = playerWork.npcLinkshellChatCalling[npcLsIndex] ||
+                            playerWork.npcLinkshellChatExtra[npcLsIndex];
             bool isCalling, isExtra;
             isCalling = isExtra = false;
 
@@ -2376,9 +3054,9 @@ namespace AetherXIV.Core.Map.Actors
             {
                 case NPCLS_INACTIVE:
 
-                    if (playerWork.npcLinkshellChatExtra[npcLSId] == true && playerWork.npcLinkshellChatCalling[npcLSId] == false)
+                    if (playerWork.npcLinkshellChatExtra[npcLsIndex] == true && playerWork.npcLinkshellChatCalling[npcLsIndex] == false)
                     {
-                        TraceNpcLinkshellState(npcLSId, state, playerWork.npcLinkshellChatCalling[npcLSId], playerWork.npcLinkshellChatExtra[npcLSId], true);
+                        TraceNpcLinkshellState(npcLsId, state, playerWork.npcLinkshellChatCalling[npcLsIndex], playerWork.npcLinkshellChatExtra[npcLsIndex], true);
                         return;
                     }
 
@@ -2386,9 +3064,9 @@ namespace AetherXIV.Core.Map.Actors
                     break;
                 case NPCLS_ACTIVE:
 
-                    if (playerWork.npcLinkshellChatExtra[npcLSId] == false && playerWork.npcLinkshellChatCalling[npcLSId] == true)
+                    if (playerWork.npcLinkshellChatExtra[npcLsIndex] == false && playerWork.npcLinkshellChatCalling[npcLsIndex] == true)
                     {
-                        TraceNpcLinkshellState(npcLSId, state, playerWork.npcLinkshellChatCalling[npcLSId], playerWork.npcLinkshellChatExtra[npcLSId], true);
+                        TraceNpcLinkshellState(npcLsId, state, playerWork.npcLinkshellChatCalling[npcLsIndex], playerWork.npcLinkshellChatExtra[npcLsIndex], true);
                         return;
                     }
 
@@ -2396,9 +3074,9 @@ namespace AetherXIV.Core.Map.Actors
                     break;
                 case NPCLS_ALERT:
 
-                    if (playerWork.npcLinkshellChatExtra[npcLSId] == true && playerWork.npcLinkshellChatCalling[npcLSId] == true)
+                    if (playerWork.npcLinkshellChatExtra[npcLsIndex] == true && playerWork.npcLinkshellChatCalling[npcLsIndex] == true)
                     {
-                        TraceNpcLinkshellState(npcLSId, state, playerWork.npcLinkshellChatCalling[npcLSId], playerWork.npcLinkshellChatExtra[npcLSId], true);
+                        TraceNpcLinkshellState(npcLsId, state, playerWork.npcLinkshellChatCalling[npcLsIndex], playerWork.npcLinkshellChatExtra[npcLsIndex], true);
                         return;
                     }
 
@@ -2406,37 +3084,76 @@ namespace AetherXIV.Core.Map.Actors
                     break;
             }
 
-            playerWork.npcLinkshellChatExtra[npcLSId] = isExtra;
-            playerWork.npcLinkshellChatCalling[npcLSId] = isCalling;
+            playerWork.npcLinkshellChatExtra[npcLsIndex] = isExtra;
+            playerWork.npcLinkshellChatCalling[npcLsIndex] = isCalling;
 
-            Database.SaveNpcLS(this, npcLSId, isCalling, isExtra);
+            Database.SaveNpcLS(this, npcLsIndex, isCalling, isExtra);
 
-            TraceNpcLinkshellState(npcLSId, state, isCalling, isExtra, false);
+            TraceNpcLinkshellState(npcLsId, state, isCalling, isExtra, false);
 
             ActorPropertyPacketUtil propPacketUtil = new ActorPropertyPacketUtil("playerWork/npcLinkshellChat", this);
-            propPacketUtil.AddProperty(String.Format("playerWork.npcLinkshellChatExtra[{0}]", npcLSId));
-            propPacketUtil.AddProperty(String.Format("playerWork.npcLinkshellChatCalling[{0}]", npcLSId));
+            propPacketUtil.AddProperty(String.Format("playerWork.npcLinkshellChatExtra[{0}]", npcLsIndex));
+            propPacketUtil.AddProperty(String.Format("playerWork.npcLinkshellChatCalling[{0}]", npcLsIndex));
             QueuePackets(propPacketUtil.Done());
 
-            // The client must learn that this NPC linkshell now belongs to the
-            // player before it is asked to open or display a pending message.
-            // Quest-facing identifiers are one-based; playerWork is zero-based.
+            // Match the legacy/original grant contract: publish the requested
+            // final state once, then tell the client that the slot was acquired.
+            // Calling AddNpcLs before an ALERT transition publishes an extra
+            // transient INACTIVE state and makes the client rebuild this UI twice.
             if (!wasOwned && (isCalling || isExtra))
-                SendGameMessage(Server.GetWorldManager().GetActor(), 25118, 0x20, (object)(npcLSId + 1));
+            {
+                DevDiagnostics.Trace(
+                    "npcLinkshell.ownershipGranted",
+                    "player", customDisplayName,
+                    "npcLsId", npcLsId,
+                    "state", state,
+                    "isCalling", isCalling,
+                    "isExtra", isExtra);
+                SendGameMessage(Server.GetWorldManager().GetActor(), 25118, 0x20, (object)npcLsId);
+            }
         }
 
-        private void TraceNpcLinkshellState(uint npcLSId, uint state, bool isCalling, bool isExtra, bool unchanged)
+        public void AddNpcLs(uint npcLsId)
+        {
+            if (HasNpcLs(npcLsId))
+                return;
+
+            SetNpcLs(npcLsId, NPCLS_INACTIVE);
+        }
+
+        public bool HasNpcLs(uint npcLsId)
+        {
+            if (npcLsId < 1 || npcLsId > NPC_LINKSHELL_COUNT ||
+                npcLsId > (uint)playerWork.npcLinkshellChatCalling.Length ||
+                npcLsId > (uint)playerWork.npcLinkshellChatExtra.Length)
+                return false;
+
+            uint npcLsIndex = npcLsId - 1;
+            return playerWork.npcLinkshellChatCalling[npcLsIndex] ||
+                   playerWork.npcLinkshellChatExtra[npcLsIndex];
+        }
+
+        private void TraceNpcLinkshellState(uint npcLsId, uint state, bool isCalling, bool isExtra, bool unchanged)
         {
             if (!DevDiagnostics.Enabled)
                 return;
 
+            uint npcLsIndex = npcLsId > 0 ? npcLsId - 1 : 0;
             DevDiagnostics.Trace(
                 "npcLinkshell.state",
                 "player", customDisplayName,
-                "npcLsId", npcLSId,
+                "actor", String.Format("0x{0:X}", actorId),
+                "npcLsId", npcLsId,
+                "zeroBasedIndex", npcLsIndex,
                 "state", state,
                 "isCalling", isCalling,
                 "isExtra", isExtra,
+                "storedCalling", npcLsId > 0 && npcLsIndex < playerWork.npcLinkshellChatCalling.Length
+                    ? playerWork.npcLinkshellChatCalling[npcLsIndex]
+                    : false,
+                "storedExtra", npcLsId > 0 && npcLsIndex < playerWork.npcLinkshellChatExtra.Length
+                    ? playerWork.npcLinkshellChatExtra[npcLsIndex]
+                    : false,
                 "unchanged", unchanged);
         }
 
@@ -2483,17 +3200,70 @@ namespace AetherXIV.Core.Map.Actors
 
         public void SetLoginDirector(Director director)
         {
-            if (ownedDirectors.Contains(director))
+            bool owned = director != null && ownedDirectors.Contains(director);
+            if (owned)
+            {
                 loginInitDirector = director;
+            }
+
+            DevDiagnostics.Trace(
+                "director.login.select",
+                "player", customDisplayName,
+                "playerActorId", String.Format("0x{0:X}", actorId),
+                "playerZone", zoneId,
+                "playerAreaKind", zone == null ? "" : zone.GetType().Name,
+                "playerPrivateArea", privateArea ?? "",
+                "playerPrivateAreaType", privateAreaType,
+                "path", director == null ? "" : director.GetScriptPath(),
+                "directorActorId", director == null ? "" : String.Format("0x{0:X}", director.actorId),
+                "directorZone", director == null || director.zone == null ? 0 : director.zone.GetTerritoryId(),
+                "directorAreaKind", director == null || director.zone == null ? "" : director.zone.GetType().Name,
+                "owned", owned,
+                "accepted", owned,
+                "ownedDirectorCount", ownedDirectors.Count,
+                "loginDirectorActorId", loginInitDirector == null ? "" : String.Format("0x{0:X}", loginInitDirector.actorId));
         }
 
         public void AddDirector(Director director, bool spawnImmediatly = false)
-        {            
-            if (!ownedDirectors.Contains(director))
+        {
+            if (director == null)
+            {
+                DevDiagnostics.Trace(
+                    "director.owner.add",
+                    "player", customDisplayName,
+                    "playerActorId", String.Format("0x{0:X}", actorId),
+                    "playerZone", zoneId,
+                    "playerAreaKind", zone == null ? "" : zone.GetType().Name,
+                    "playerPrivateArea", privateArea ?? "",
+                    "playerPrivateAreaType", privateAreaType,
+                    "action", "ignored-null",
+                    "ownedDirectorCount", ownedDirectors.Count);
+                return;
+            }
+
+            bool added = !ownedDirectors.Contains(director);
+            if (added)
             {
                 ownedDirectors.Add(director);
-                director.AddMember(this);                
+                director.AddMember(this);
             }
+
+            DevDiagnostics.Trace(
+                "director.owner.add",
+                "player", customDisplayName,
+                "playerActorId", String.Format("0x{0:X}", actorId),
+                "playerZone", zoneId,
+                "playerAreaKind", zone == null ? "" : zone.GetType().Name,
+                "playerPrivateArea", privateArea ?? "",
+                "playerPrivateAreaType", privateAreaType,
+                "path", director.GetScriptPath(),
+                "directorActorId", String.Format("0x{0:X}", director.actorId),
+                "directorZone", director.zone == null ? 0 : director.zone.GetTerritoryId(),
+                "directorAreaKind", director.zone == null ? "" : director.zone.GetType().Name,
+                "directorIsCreated", director.IsCreated(),
+                "directorIsDeleted", director.IsDeleted(),
+                "action", added ? "added" : "already-owned",
+                "ownedDirectorCount", ownedDirectors.Count);
         }
 
         public void SendDirectorPackets(Director director)
@@ -2501,6 +3271,55 @@ namespace AetherXIV.Core.Map.Actors
             QueuePackets(director.GetSpawnPackets());
             QueuePackets(director.GetInitPackets());
             QueuePackets(director.GetSetEventStatusPackets());
+        }
+
+        /// <summary>
+        /// Retail condition re-arm after the client's type-101 notice ack.
+        /// war_quest_update2 shows the server re-sending the notice conditions
+        /// (SetNotice, 0x016B) after the ack: the notice owner's full
+        /// 3-condition set (noticeEvent 0xE/0, noticeRequest 0/1, reqForChild
+        /// 0/1) plus a per-target noticeEvent(0,1) on each quest ENPC, so the
+        /// blinking icon stays armed for the next interaction instead of being
+        /// consumed by the ack. Deliberately narrow: only notice conditions
+        /// are re-sent — never talk/push/emote — matching retail's payload
+        /// exactly (see GetNoticeEventConditionPackets).
+        /// </summary>
+        public void SendNoticeConditionReArm(Actor noticeOwner, Quest quest)
+        {
+            int ownerPackets = 0;
+            if (noticeOwner != null)
+            {
+                List<SubPacket> ownerConditions = noticeOwner.GetNoticeEventConditionPackets();
+                ownerPackets = ownerConditions.Count;
+                QueuePackets(ownerConditions);
+            }
+
+            int targetPackets = 0;
+            int targetCount = 0;
+            if (quest != null && playerSession != null)
+            {
+                foreach (Actor actor in playerSession.actorInstanceList)
+                {
+                    if (actor is Npc npc && quest.HasENpc(npc.GetActorClassId()))
+                    {
+                        List<SubPacket> targetConditions = npc.GetNoticeEventConditionPackets();
+                        targetPackets += targetConditions.Count;
+                        targetCount++;
+                        QueuePackets(targetConditions);
+                    }
+                }
+            }
+
+            DevDiagnostics.Trace(
+                "event.notice.rearm",
+                "player", customDisplayName,
+                "actor", String.Format("0x{0:X}", actorId),
+                "owner", noticeOwner == null ? "" : String.Format("0x{0:X}", noticeOwner.actorId),
+                "ownerName", noticeOwner == null ? "" : noticeOwner.GetName(),
+                "quest", quest == null ? "" : quest.GetName(),
+                "ownerConditionPackets", ownerPackets,
+                "targetCount", targetCount,
+                "targetConditionPackets", targetPackets);
         }
 
         public void RemoveDirector(Director director)
@@ -2513,6 +3332,29 @@ namespace AetherXIV.Core.Map.Actors
                     loginInitDirector = null;
                 director.RemoveMember(this);
             }
+        }
+
+        private void DetachOwnedDirectorsForSessionEnd(string reason)
+        {
+            Director[] directors = ownedDirectors.ToArray();
+            loginInitDirector = null;
+
+            // Teardown may run after the socket is already gone. Remove
+            // ownership without queuing RemoveActor packets to that dead
+            // client, then let the director end when its final member leaves.
+            foreach (Director director in directors)
+            {
+                ownedDirectors.Remove(director);
+                director.RemoveMember(this);
+            }
+
+            DevDiagnostics.Trace(
+                "director.owner.detachAll",
+                "player", customDisplayName,
+                "playerActorId", String.Format("0x{0:X}", actorId),
+                "reason", reason ?? "",
+                "detachedCount", directors.Length,
+                "remainingCount", ownedDirectors.Count);
         }
         
         public GuildleveDirector GetGuildleveDirector()
@@ -2532,26 +3374,6 @@ namespace AetherXIV.Core.Map.Actors
             {
                 if (d.GetScriptPath().Equals(directorName))                
                     return d;                
-            }
-
-            // The unchanged player.lua asks for OpeningDirector during every opening-zone
-            // login. If native login recovery has already reconstructed the successor
-            // SimpleContent director, that lookup must be treated as satisfied; otherwise
-            // Lua starts and kicks a second public director over the active battle.
-            if (directorName.Equals("OpeningDirector", StringComparison.Ordinal)
-                && zone is AetherXIV.Core.Map.actors.area.PrivateAreaContent contentArea
-                && privateArea != null
-                && privateArea.StartsWith("SimpleContent", StringComparison.Ordinal))
-            {
-                Director contentDirector = contentArea.GetContentDirector();
-                DevDiagnostics.Trace(
-                    "director.openingContentAlias",
-                    "player", customDisplayName,
-                    "zone", zoneId,
-                    "privateArea", privateArea,
-                    "requestedDirector", directorName,
-                    "resolvedDirector", contentDirector == null ? "" : contentDirector.GetScriptPath());
-                return contentDirector;
             }
 
             return null;
@@ -2590,6 +3412,29 @@ namespace AetherXIV.Core.Map.Actors
                 "actor", String.Format("0x{0:X}", actorId),
                 "paramCount", lParams.Count,
                 "params", LuaUtils.DumpParams(lParams));
+
+            if (parameters != null && parameters.Length > 0 && parameters[0] is int)
+            {
+                int packetKind = (int)parameters[0];
+                if (packetKind == 2 || packetKind == 4 || packetKind == 5 || packetKind == 7 || packetKind == 9)
+                {
+                    DevDiagnostics.Trace(
+                        "tutorial.packet",
+                        "player", customDisplayName,
+                        "actor", String.Format("0x{0:X}", actorId),
+                        "packetKind", packetKind,
+                        "semantic", packetKind == 2 ? "success-widget"
+                            : packetKind == 4 ? "open-widget"
+                            : packetKind == 5 ? "close-widget"
+                            : packetKind == 7 ? "end-tutorial-mode"
+                            : "start-tutorial-mode",
+                        "parameters", LuaUtils.DumpParams(lParams),
+                        "zone", zoneId,
+                        "privateArea", privateArea ?? "",
+                        "privateAreaType", privateAreaType);
+                }
+            }
+
             SubPacket spacket = GenericDataPacket.BuildPacket(actorId, lParams);
             spacket.DebugPrintSubPacket();
             QueuePacket(spacket);
@@ -2619,31 +3464,171 @@ namespace AetherXIV.Core.Map.Actors
             currentEventOwner = start.ownerActorID;
             currentEventName = start.eventName;
             currentEventType = start.eventType;
-            currentEventFunctionName = "";
-            currentEventFunctionStartedAt = 0;
-            currentEventFunctionReceivedUpdate = false;
             DevDiagnostics.Trace(
                 "event.start",
                 "player", customDisplayName,
                 "actor", String.Format("0x{0:X}", actorId),
                 "owner", String.Format("0x{0:X}", start.ownerActorID),
                 "ownerName", owner == null ? "(none)" : owner.GetName(),
+                "ownerClass", owner == null ? "" : owner.GetClassName(),
+                "ownerUniqueId", owner is Npc ? ((Npc)owner).GetUniqueId() : "",
+                "ownerZone", owner == null || owner.zone == null ? 0 : owner.zone.GetTerritoryId(),
+                "ownerAreaKind", owner == null || owner.zone == null ? "" : owner.zone.GetType().Name,
+                "ownerPrivateArea", owner == null || owner.zone == null ? "" : owner.zone.GetPrivateAreaName(),
+                "ownerPrivateAreaType", owner == null || owner.zone == null ? 0 : owner.zone.GetPrivateAreaType(),
                 "trigger", String.Format("0x{0:X}", start.triggerActorID),
                 "eventName", start.eventName,
                 "eventType", start.eventType,
+                "zone", zoneId,
+                "playerPrivateArea", privateArea ?? "",
+                "playerPrivateAreaType", privateAreaType,
+                "currentEventOwnerBefore", String.Format("0x{0:X}", currentEventOwner),
+                "currentEventNameBefore", currentEventName,
+                "currentEventTypeBefore", currentEventType,
                 "params", LuaUtils.DumpParams(start.luaParams));
 
+            Npc transitionNpc = owner as Npc;
+            if (transitionNpc != null &&
+                AnonymousTransitionActorPolicy.IsExpectedNoOp(
+                    transitionNpc.GetZone() == null ? 0 : transitionNpc.GetZone().GetTerritoryId(),
+                    transitionNpc.GetActorClassId(),
+                    transitionNpc.GetUniqueId(),
+                    start.eventName))
+            {
+                DevDiagnostics.Trace(
+                    "event.expectedNoOp",
+                    "player", customDisplayName,
+                    "actor", String.Format("0x{0:X}", actorId),
+                    "owner", String.Format("0x{0:X}", start.ownerActorID),
+                    "ownerClassId", transitionNpc.GetActorClassId(),
+                    "ownerUniqueId", transitionNpc.GetUniqueId(),
+                    "zone", transitionNpc.GetZone() == null ? 0 : transitionNpc.GetZone().GetTerritoryId(),
+                    "eventName", start.eventName,
+                    "eventType", start.eventType,
+                    "action", "end-without-populace-fallback");
+                EndEvent();
+                return;
+            }
+
+            // Legacy Meteor ENPC-membership routing: a quest that registers
+            // this NPC as its ENPC owns the interaction and its Lua hook
+            // (onTalk/onPush/onEmote) is fired directly. Only when no quest
+            // claims the NPC does the event fall through to the generic
+            // dispatch (child script first, base NPC script fallback).
             Npc questNpc = owner as Npc;
             if (questNpc != null)
             {
+                Quest[] routeCandidates = GetQuestsForNpc(questNpc);
+                if (DevDiagnostics.Enabled)
+                {
+                    List<string> candidateDetails = new List<string>();
+                    foreach (Quest candidate in routeCandidates)
+                    {
+                        QuestENpc candidateEnpc = candidate.GetENpc(questNpc.GetActorClassId());
+                        candidateDetails.Add(String.Format(
+                            "{0}:{1}:seq={2}:flag={3}:talk={4}:push={5}:emote={6}",
+                            candidate.GetQuestId(),
+                            candidate.GetName(),
+                            candidate.GetSequence(),
+                            candidateEnpc == null ? 0 : candidateEnpc.QuestFlagType,
+                            candidateEnpc != null && candidateEnpc.IsTalkEnabled,
+                            candidateEnpc != null && candidateEnpc.IsPushEnabled,
+                            candidateEnpc != null && candidateEnpc.IsEmoteEnabled));
+                    }
+
+                    DevDiagnostics.Trace(
+                        "quest.event.route.decision",
+                        "player", customDisplayName,
+                        "triggerActor", String.Format("0x{0:X}", start.triggerActorID),
+                        "ownerActor", String.Format("0x{0:X}", start.ownerActorID),
+                        "ownerClassId", questNpc.GetActorClassId(),
+                        "ownerUniqueId", questNpc.GetUniqueId(),
+                        "ownerAreaKind", questNpc.zone == null ? "" : questNpc.zone.GetType().Name,
+                        "ownerPrivateArea", questNpc.zone == null ? "" : questNpc.zone.GetPrivateAreaName(),
+                        "ownerPrivateAreaType", questNpc.zone == null ? 0 : questNpc.zone.GetPrivateAreaType(),
+                        "eventName", start.eventName,
+                        "eventType", start.eventType,
+                        "candidateCount", routeCandidates.Length,
+                        "candidates", String.Join(",", candidateDetails),
+                        "selectedRoute", routeCandidates.Length == 0 ? "npc-script" : "quest-candidate-scan");
+                }
+
                 foreach (Quest quest in questScenario)
                 {
                     if (quest != null && quest.TryHandleNpcEvent(this, questNpc, start))
+                    {
+                        DevDiagnostics.Trace(
+                            "quest.event.route.selected",
+                            "player", customDisplayName,
+                            "quest", quest.GetName(),
+                            "questId", quest.GetQuestId(),
+                            "sequence", quest.GetSequence(),
+                            "npcClassId", questNpc.GetActorClassId(),
+                            "npcActor", String.Format("0x{0:X}", questNpc.actorId),
+                            "eventName", start.eventName,
+                            "eventType", start.eventType,
+                            "selectedRoute", "quest");
                         return;
+                    }
                 }
+
+                DevDiagnostics.Trace(
+                    "quest.event.route.selected",
+                    "player", customDisplayName,
+                    "npcClassId", questNpc.GetActorClassId(),
+                    "npcActor", String.Format("0x{0:X}", questNpc.actorId),
+                    "eventName", start.eventName,
+                    "eventType", start.eventType,
+                    "selectedRoute", "npc-script");
             }
 
             LuaEngine.GetInstance().EventStarted(this, owner, start);
+        }
+
+        public void TraceLinkpearlNoticeInvariants(string action)
+        {
+            int pendingCount = 0;
+            List<string> pending = new List<string>();
+            foreach (Quest quest in questScenario)
+            {
+                if (quest == null || quest.GetNpcLsFrom() == 0)
+                    continue;
+
+                pendingCount++;
+                pending.Add(String.Format(
+                    "{0}:seq={1}:from={2}:step={3}",
+                    quest.GetQuestId(),
+                    quest.GetSequence(),
+                    quest.GetNpcLsFrom(),
+                    quest.GetNpcLsMessageStep()));
+            }
+
+            Director director = GetDirector(currentEventOwner);
+            Quest man0g1 = GetQuest(110002) ?? GetQuest(110006);
+            DevDiagnostics.Trace(
+                "linkpearl.notice.invariants",
+                "player", customDisplayName,
+                "playerActor", String.Format("0x{0:X}", actorId),
+                "action", action ?? "",
+                "zone", zoneId,
+                "areaKind", zone == null ? "" : zone.GetType().Name,
+                "privateArea", privateArea ?? "",
+                "privateAreaType", privateAreaType,
+                "eventOwner", String.Format("0x{0:X}", currentEventOwner),
+                "eventName", currentEventName,
+                "eventType", currentEventType,
+                "eventOwnerResolved", director != null,
+                "eventOwnerPath", director == null ? "" : director.GetScriptPath(),
+                "eventOwnerCreated", director != null && director.IsCreated(),
+                "eventOwnerDeleted", director != null && director.IsDeleted(),
+                "ownedDirector", director != null && ownedDirectors.Contains(director),
+                "questId", man0g1 == null ? 0 : man0g1.GetQuestId(),
+                "questSequence", man0g1 == null ? 0 : man0g1.GetSequence(),
+                "questHasMiounneEnpc", man0g1 != null && man0g1.HasENpc(1000230),
+                "questHasVkorolonEnpc", man0g1 != null && man0g1.HasENpc(1000458),
+                "pendingNpcLsCount", pendingCount,
+                "pendingNpcLs", String.Join(",", pending),
+                "instanceActorCount", playerSession == null ? 0 : playerSession.actorInstanceList.Count);
         }
 
         public void UpdateCutsceneState(CutsceneStatePacket packet)
@@ -2663,125 +3648,34 @@ namespace AetherXIV.Core.Map.Actors
                 "detail", String.Format("0x{0:X8}", currentCutsceneDetail));
         }
 
-        public void RefreshQuestENpcs()
-        {
-            foreach (Quest quest in questScenario)
-            {
-                if (quest != null)
-                    quest.UpdateENPCs(true);
-            }
-
-            DisableRetiredGridaniaOpeningTrigger();
-        }
-
-        private void DisableRetiredGridaniaOpeningTrigger()
-        {
-            // The unnamed public copy is Man0g0's adventurers' guild push
-            // trigger. Once that quest has been replaced by Man0g1 it must
-            // remain present for the map layout but its push event is off.
-            if (zone == null || HasQuest(110005))
-                return;
-
-            foreach (Npc npc in zone.GetAllActors<Npc>())
-            {
-                if (npc.GetActorClassId() != 1099046 || !String.IsNullOrEmpty(npc.GetUniqueId()))
-                    continue;
-
-                if (npc.eventConditions != null && npc.eventConditions.pushWithCircleEventConditions != null)
-                {
-                    foreach (var condition in npc.eventConditions.pushWithCircleEventConditions)
-                        SetEventStatus(npc, condition.conditionName, false, 2);
-                }
-
-                npc.SetQuestGraphic(this, 0);
-            }
-        }
-
-        public void StartNpcLinkshellEvent(EventStartPacket start)
-        {
-            currentEventOwner = start.ownerActorID;
-            currentEventName = start.eventName;
-            currentEventType = start.eventType;
-            currentEventFunctionName = "";
-            currentEventFunctionStartedAt = 0;
-            currentEventFunctionReceivedUpdate = false;
-
-            uint? npcLsHint = null;
-            if (start.luaParams != null)
-            {
-                foreach (LuaParam parameter in start.luaParams)
-                {
-                    if (parameter.value is byte byteValue)
-                        npcLsHint = byteValue;
-                    else if (parameter.value is ushort ushortValue)
-                        npcLsHint = ushortValue;
-                    else if (parameter.value is short shortValue && shortValue >= 0)
-                        npcLsHint = (uint)shortValue;
-                    else if (parameter.value is int intValue && intValue >= 0)
-                        npcLsHint = (uint)intValue;
-                    else if (parameter.value is uint uintValue)
-                        npcLsHint = uintValue;
-
-                    if (npcLsHint.HasValue)
-                        break;
-                }
-            }
-
-            Quest pendingQuest = null;
-            foreach (Quest quest in questScenario)
-            {
-                if (quest == null || quest.GetNpcLsFrom() == 0)
-                    continue;
-
-                uint from = quest.GetNpcLsFrom();
-                if (!npcLsHint.HasValue || from == npcLsHint.Value || from == npcLsHint.Value + 1)
-                {
-                    pendingQuest = quest;
-                    break;
-                }
-
-                if (pendingQuest == null)
-                    pendingQuest = quest;
-            }
-
-            DevDiagnostics.Trace(
-                "npcLinkshell.event",
-                "player", customDisplayName,
-                "owner", String.Format("0x{0:X}", start.ownerActorID),
-                "eventName", start.eventName,
-                "hint", npcLsHint.HasValue ? npcLsHint.Value.ToString() : "",
-                "quest", pendingQuest == null ? "" : pendingQuest.GetName(),
-                "from", pendingQuest == null ? 0 : pendingQuest.GetNpcLsFrom(),
-                "messageStep", pendingQuest == null ? 0 : pendingQuest.GetNpcLsMessageStep());
-
-            if (pendingQuest == null)
-            {
-                EndEvent();
-                return;
-            }
-
-            pendingQuest.OnNpcLs(this, pendingQuest.GetNpcLsFrom(), pendingQuest.GetNpcLsMessageStep());
-        }
-
         public void UpdateEvent(EventUpdatePacket update)
         {
-            ulong updateTime = Utils.MilisUnixTimeStampUTC();
-            ulong functionElapsedMilliseconds =
-                currentEventFunctionStartedAt == 0 || updateTime < currentEventFunctionStartedAt
-                    ? 0
-                    : updateTime - currentEventFunctionStartedAt;
-            currentEventFunctionReceivedUpdate = currentEventFunctionStartedAt != 0;
+            if (update == null || update.invalidPacket)
+            {
+                DevDiagnostics.Trace(
+                    "event.update.ignored",
+                    "player", customDisplayName,
+                    "actor", String.Format("0x{0:X}", actorId),
+                    "reason", "invalid-packet");
+                return;
+            }
+
             DevDiagnostics.Trace(
                 "event.update",
                 "player", customDisplayName,
                 "actor", String.Format("0x{0:X}", actorId),
+                "trigger", String.Format("0x{0:X}", update.triggerActorID),
+                "serverCodes", String.Format("0x{0:X8}", update.serverCodes),
+                "unknown1", String.Format("0x{0:X8}", update.unknown1),
+                "unknown2", String.Format("0x{0:X8}", update.unknown2),
+                "wireStep", update.eventType,
                 "owner", String.Format("0x{0:X}", currentEventOwner),
                 "eventName", currentEventName,
                 "eventType", currentEventType,
-                "pendingFunction", currentEventFunctionName,
-                "functionElapsedMilliseconds", functionElapsedMilliseconds,
                 "params", LuaUtils.DumpParams(update.luaParams));
-            LuaEngine.GetInstance().OnEventUpdate(this, update.luaParams);
+            LuaEngine.GetInstance().OnEventUpdate(
+                this,
+                update.luaParams);
         }
 
         public void KickEvent(Actor actor, string eventName, params object[] parameters)
@@ -2794,10 +3688,20 @@ namespace AetherXIV.Core.Map.Actors
                 "event.kick",
                 "player", customDisplayName,
                 "actor", String.Format("0x{0:X}", actorId),
+                "playerZone", zoneId,
+                "playerAreaKind", zone == null ? "" : zone.GetType().Name,
+                "playerPrivateArea", privateArea ?? "",
+                "playerPrivateAreaType", privateAreaType,
                 "owner", String.Format("0x{0:X}", actor.actorId),
                 "ownerName", actor.GetName(),
+                "ownerZone", actor.zone == null ? 0 : actor.zone.GetTerritoryId(),
+                "ownerAreaKind", actor.zone == null ? "" : actor.zone.GetType().Name,
+                "ownerIsCreated", actor is Director && ((Director)actor).IsCreated(),
+                "ownerIsDeleted", actor is Director && ((Director)actor).IsDeleted(),
                 "eventName", eventName,
                 "eventType", 5,
+                "loginDirectorSelected", loginInitDirector == actor,
+                "ownedDirector", actor is Director && ownedDirectors.Contains((Director)actor),
                 "params", LuaUtils.DumpParams(lParams));
             SubPacket spacket = KickEventPacket.BuildPacket(actorId, actor.actorId, eventName, 5, lParams);
             spacket.DebugPrintSubPacket();
@@ -2856,6 +3760,35 @@ namespace AetherXIV.Core.Map.Actors
             deferredContentKickParameters = null;
         }
 
+        /// <summary>
+        /// Emits the content group's pre-warp registration sequence. Event
+        /// kicks remain owned by KickEvent and are not deferred here.
+        /// </summary>
+        public bool EmitContentWarpPreWarpSequence(Actor contentDirector)
+        {
+            // The kick receiver dispatches against charaWork/currentContentGroup,
+            // so Garlemald's pre-warp block emits it FIRST, session-targeted.
+            // SetCurrentContentGroup broadcasts it at member-add time; this is
+            // the explicit targeted send that rides the pre-warp sequence.
+            if (currentContentGroup != null)
+            {
+                ActorPropertyPacketUtil propPacketUtil =
+                    new ActorPropertyPacketUtil("charaWork/currentContentGroup", this);
+                propPacketUtil.AddProperty("charaWork.currentContentGroup");
+                QueuePackets(propPacketUtil.Done());
+
+                currentContentGroup.SendGroupPackets(playerSession);
+                currentContentGroup.StartAfterZoneIn();
+            }
+
+            return false;
+        }
+
+        public void ClearPendingKicks(string reason)
+        {
+            ClearDeferredContentKickEvent();
+        }
+
         public void KickEventSpecial(Actor actor, uint unknown, string eventName, params object[] parameters)
         {
             if (actor == null)
@@ -2898,13 +3831,20 @@ namespace AetherXIV.Core.Map.Actors
 
         public void RunEventFunction(string functionName, params object[] parameters)
         {
-            List<LuaParam> lParams = LuaUtils.CreateLuaParamList(parameters);
-            currentEventFunctionName = functionName ?? "";
-            currentEventFunctionStartedAt = Utils.MilisUnixTimeStampUTC();
-            currentEventFunctionReceivedUpdate = false;
-            bool detached = currentEventOwner == 0 &&
-                String.IsNullOrEmpty(currentEventName) &&
-                currentEventType == 0;
+            List<LuaParam> lParams =
+                LuaUtils.CreateRunEventFunctionParamList(
+                    functionName,
+                    parameters);
+            bool isLinkpearlTutorialDispatch = parameters != null
+                && parameters.Any(parameter =>
+                    parameter is string
+                    && String.Equals(
+                        (string)parameter,
+                        "processEventTu_001",
+                        StringComparison.Ordinal));
+            if (isLinkpearlTutorialDispatch)
+                TraceLinkpearlNoticeInvariants("before-processEventTu_001");
+
             DevDiagnostics.Trace(
                 "event.runFunction",
                 "player", customDisplayName,
@@ -2912,33 +3852,43 @@ namespace AetherXIV.Core.Map.Actors
                 "owner", String.Format("0x{0:X}", currentEventOwner),
                 "eventName", currentEventName,
                 "eventType", currentEventType,
-                "detached", detached,
-                "envelopeSize", RunEventFunctionPacket.GetPacketSize(currentEventType),
+                "envelopeSize",
+                    RunEventFunctionPacket.GetPacketSize(currentEventType),
                 "function", functionName,
+                "delegatedFunction", isLinkpearlTutorialDispatch ? "processEventTu_001" : "",
                 "params", LuaUtils.DumpParams(lParams));
-            SubPacket spacket = RunEventFunctionPacket.BuildPacket(actorId, currentEventOwner, currentEventName, currentEventType, functionName, lParams);
+            SubPacket spacket = RunEventFunctionPacket.BuildPacket(
+                actorId,
+                currentEventOwner,
+                currentEventName,
+                currentEventType,
+                functionName,
+                lParams);
             spacket.DebugPrintSubPacket();
             QueuePacket(spacket);
+            if (isLinkpearlTutorialDispatch)
+                TraceLinkpearlNoticeInvariants("after-processEventTu_001-queued");
         }
 
         public void EndEvent()
         {
-            ulong endTime = Utils.MilisUnixTimeStampUTC();
-            ulong functionElapsedMilliseconds =
-                currentEventFunctionStartedAt == 0 || endTime < currentEventFunctionStartedAt
-                    ? 0
-                    : endTime - currentEventFunctionStartedAt;
+            uint endingOwner = currentEventOwner;
+            string endingName = currentEventName;
+            byte endingType = currentEventType;
+            SubPacket p = EndEventPacket.BuildPacket(
+                actorId,
+                endingOwner,
+                endingName,
+                endingType);
             DevDiagnostics.Trace(
-                "event.end",
+                "event.end.beforeClear",
                 "player", customDisplayName,
                 "actor", String.Format("0x{0:X}", actorId),
-                "owner", String.Format("0x{0:X}", currentEventOwner),
-                "eventName", currentEventName,
-                "eventType", currentEventType,
-                "pendingFunction", currentEventFunctionName,
-                "functionElapsedMilliseconds", functionElapsedMilliseconds,
-                "functionHadClientResponse", currentEventFunctionReceivedUpdate);
-            SubPacket p = EndEventPacket.BuildPacket(actorId, currentEventOwner, currentEventName, currentEventType);
+                "owner", String.Format("0x{0:X}", endingOwner),
+                "eventName", endingName,
+                "eventType", endingType,
+                "packetOpcode", String.Format("0x{0:X4}", p.gameMessage.opcode),
+                "packetSize", p.header.subpacketSize);
             p.DebugPrintSubPacket();
             QueuePacket(p);
 
@@ -2946,10 +3896,20 @@ namespace AetherXIV.Core.Map.Actors
             currentEventName = "";
             currentEventType = 0;
             currentEventRunning = null;
-            currentEventFunctionName = "";
-            currentEventFunctionStartedAt = 0;
-            currentEventFunctionReceivedUpdate = false;
+
+            DevDiagnostics.Trace(
+                "event.end.afterClear",
+                "player", customDisplayName,
+                "actor", String.Format("0x{0:X}", actorId),
+                "owner", String.Format("0x{0:X}", currentEventOwner),
+                "eventName", currentEventName,
+                "eventType", currentEventType);
+            if (String.Equals(endingName, "noticeEvent", StringComparison.Ordinal)
+                || endingType == 5)
+                TraceLinkpearlNoticeInvariants("after-event-end");
         }
+
+
 
         public void BroadcastCountdown(byte countdownLength, ulong syncTime)
         {
@@ -3020,6 +3980,13 @@ namespace AetherXIV.Core.Map.Actors
         {
             SubPacket oustPacket = PartyModifyPacket.BuildPacket(playerSession, 1, name);
             QueuePacket(oustPacket);
+        }
+
+        //Legacy script name (PartyDisbandCommand.lua calls player:PartyKickPlayer(name)).
+        //Same semantics as PartyOustPlayer: the leader ousts the named member.
+        public void PartyKickPlayer(string name)
+        {
+            PartyOustPlayer(name);
         }
 
         public void PartyLeave()
@@ -3201,7 +4168,8 @@ namespace AetherXIV.Core.Map.Actors
             retainer.positionZ = posZ;
             retainer.rotation = (float)Math.Atan2(positionX - posX, positionZ - posZ);
 
-            retainerMeetingGroup = new RetainerMeetingRelationGroup(5555, this, retainer);
+            retainerMeetingGroup = Server.GetWorldManager()
+                .CreateRetainerMeetingRelationGroup(this, retainer);
             retainerMeetingGroup.SendGroupPackets(playerSession);
 
             currentSpawnedRetainer = retainer;
@@ -3214,9 +4182,12 @@ namespace AetherXIV.Core.Map.Actors
         {
             if (currentSpawnedRetainer != null)
             {
+                Retainer despawnedRetainer = currentSpawnedRetainer;
                 currentSpawnedRetainer = null;
                 retainerMeetingGroup.SendDeletePacket(playerSession);
                 retainerMeetingGroup = null;
+                despawnedRetainer.GetZone().ReleaseTransientActorNumber(
+                    despawnedRetainer.actorId);
             }
         }
         
@@ -3240,7 +4211,11 @@ namespace AetherXIV.Core.Map.Actors
             }
 
             aiContainer.Update(tick);
-            statusEffects.Update(tick);            
+            statusEffects.Update(tick);
+            questStateManager?.Update(tick);
+            // A parked notice that no zone change consumed in the same
+            // synchronous script stretch dispatches now (Garlemald
+            // burst-scoped capture semantics on the Meteor inline engine).
         }
 
         public override void PostUpdate(DateTime tick, List<SubPacket> packets = null)
@@ -3945,6 +4920,8 @@ namespace AetherXIV.Core.Map.Actors
 
                 if (classId == GetClass())
                     RecalculateStats("level-up");
+
+                questStateManager?.UpdateLevel(GetHighestLevel());
             }
         }
 

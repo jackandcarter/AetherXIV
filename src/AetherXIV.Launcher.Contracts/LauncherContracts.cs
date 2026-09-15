@@ -199,7 +199,7 @@ public static class AetherXivLauncherDefaults
     public const string TargetGameVersion = "2012.09.19.0001";
 
     public static AetherXivLauncherServerProfile LocalAetherXiv2 { get; } = new(
-        "Local AetherXIV 2.0",
+        "Local AetherXIV 2.1",
         AetherXivServerGeneration.AetherXiv2,
         new ServerEndpoint("127.0.0.1", 8080),
         new ServerEndpoint("127.0.0.1", 54994),
@@ -210,7 +210,7 @@ public static class AetherXivLauncherDefaults
 
     public static LauncherConfig LocalConfig { get; } = new(
         1,
-        "AetherXIV 2 Local",
+        "AetherXIV 2.1 Local",
         "status",
         "news",
         "patch-manifest",
@@ -221,7 +221,7 @@ public static class AetherXivLauncherDefaults
         "",
         TargetBootVersion,
         TargetGameVersion,
-        "umbra/framework-catalog",
-        ["umbra/plugin-catalog"],
-        "umbra/plugin-blocklist");
+        null,
+        [],
+        null);
 }

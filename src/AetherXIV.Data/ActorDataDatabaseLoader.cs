@@ -62,7 +62,7 @@ public sealed class ActorDataDatabaseLoader
         IReadOnlyList<ZoneRecord> zones = await zoneImporter.ImportAsync(
             Path.Combine(v1SqlRoot, "server_zones.sql"),
             cancellationToken).ConfigureAwait(false);
-        WorldRecord world = request.World ?? new WorldRecord(new WorldId(1), "AetherXIV 2.0 Local", new ServerEndpoint("127.0.0.1", 54992));
+        WorldRecord world = request.World ?? new WorldRecord(new WorldId(1), "AetherXIV 2.1 Local", new ServerEndpoint("127.0.0.1", 54992));
         List<string> warnings = [];
 
         await using MySqlConnection connection = new(request.DatabaseOptions.ToConnectionString());
@@ -352,17 +352,18 @@ ON DUPLICATE KEY UPDATE base = VALUES(base), size = VALUES(size), hair_style = V
         command.CommandText = """
 INSERT INTO static_actor_spawns (spawn_id, actor_class_id, unique_id, zone_id, private_area_name,
     private_area_level, position_x, position_y, position_z, rotation, actor_state, animation_id,
-    custom_display_name, map_object_layout_id, map_object_instance_id, provenance_id)
+    custom_display_name, map_object_layout_id, map_object_instance_id, native_actor_slot, provenance_id)
 VALUES (@spawn_id, @actor_class_id, @unique_id, @zone_id, @private_area_name,
     @private_area_level, @position_x, @position_y, @position_z, @rotation, @actor_state, @animation_id,
-    @custom_display_name, @map_object_layout_id, @map_object_instance_id, @provenance_id)
+    @custom_display_name, @map_object_layout_id, @map_object_instance_id, @native_actor_slot, @provenance_id)
 ON DUPLICATE KEY UPDATE actor_class_id = VALUES(actor_class_id), unique_id = VALUES(unique_id),
     zone_id = VALUES(zone_id), private_area_name = VALUES(private_area_name),
     private_area_level = VALUES(private_area_level), position_x = VALUES(position_x),
     position_y = VALUES(position_y), position_z = VALUES(position_z), rotation = VALUES(rotation),
     actor_state = VALUES(actor_state), animation_id = VALUES(animation_id),
     custom_display_name = VALUES(custom_display_name), map_object_layout_id = VALUES(map_object_layout_id),
-    map_object_instance_id = VALUES(map_object_instance_id), provenance_id = VALUES(provenance_id);
+    map_object_instance_id = VALUES(map_object_instance_id), native_actor_slot = VALUES(native_actor_slot),
+    provenance_id = VALUES(provenance_id);
 """;
         command.Parameters.AddWithValue("@spawn_id", spawn.SpawnId);
         command.Parameters.AddWithValue("@actor_class_id", spawn.ActorClassId);
@@ -379,6 +380,7 @@ ON DUPLICATE KEY UPDATE actor_class_id = VALUES(actor_class_id), unique_id = VAL
         command.Parameters.AddWithValue("@custom_display_name", String.IsNullOrEmpty(spawn.CustomDisplayName) ? DBNull.Value : spawn.CustomDisplayName);
         command.Parameters.AddWithValue("@map_object_layout_id", spawn.MapObjectLayoutId is null ? DBNull.Value : spawn.MapObjectLayoutId.Value);
         command.Parameters.AddWithValue("@map_object_instance_id", spawn.MapObjectInstanceId is null ? DBNull.Value : spawn.MapObjectInstanceId.Value);
+        command.Parameters.AddWithValue("@native_actor_slot", spawn.NativeActorSlot is null ? DBNull.Value : spawn.NativeActorSlot.Value);
         command.Parameters.AddWithValue("@provenance_id", provenanceId);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }

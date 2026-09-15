@@ -81,6 +81,13 @@ local function setOpeningCheckpoint(player)
 end
 
 local function startOpeningDirector(player, spawnImmediate)
+	-- The login director must exist before the zone-in bundle is built. Its
+	-- notice is owned by the selected opening quest and rides that bundle.
+	local privateAreaName = player:GetPrivateAreaName();
+	if (privateAreaName ~= nil and string.sub(privateAreaName, 1, string.len("SimpleContent")) == "SimpleContent") then
+		return;
+	end
+
 	if (player:GetDirector("OpeningDirector") ~= nil) then
 		return;
 	end
@@ -94,47 +101,31 @@ local function startOpeningDirector(player, spawnImmediate)
 	player:AddDirector(director);
 	director:StartDirector(spawnImmediate);
 	player:SetLoginDirector(director);
-	player:KickEvent(director, "noticeEvent", true);
-end
-
-local function repairBuild21989UldahHandoff(player)
-	if (player:HasQuest(110010) == false) then
-		return;
-	end
-
-	local quest = player:GetQuest(110010);
-	if (quest == nil or quest:GetSequence() ~= 0) then
-		return;
-	end
-
-	if (player:GetZoneID() == 175 and
-		player:GetPrivateAreaName() == "PrivateAreaMasterPast" and
-		player.privateAreaType == 4) then
-		return;
-	end
-
-	-- Build 21989 replaced Flowers for All but left Court in the Sands at
-	-- sequence 0 after Momodi's briefing, then lit a pearl with no owning
-	-- quest message. Outside the Quicksand intro instance, that state can
-	-- only be the old broken handoff. Restore the granted pearl and camp leg.
-	quest:NewNpcLsMsg(1);
-	quest:StartSequence(5);
+	-- The opening notice must not race the login zone bundle. DoZoneIn parks it
+	-- until every director/actor packet has been queued, then releases it at
+	-- the login-only bundle boundary. Actor-replacement warps keep using the
+	-- final 0x0007(-1) readiness acknowledgement instead.
+	player:DeferContentKickEvent(director, "noticeEvent", true);
 end
 
 function onBeginLogin(player)		
 	--New character, set the initial quest
+	local pendingOpeningQuest = 0;
 	if (player:GetPlayTime(false) == 0) then
 		initialTown = player:GetInitialTown();
 		if (initialTown == 1 and player:HasQuest(110001) == false) then
 			ensureOpeningQuest(player, 110001, false);
 			player:SetHomePoint(1280001);
+			pendingOpeningQuest = 110001;
 		elseif (initialTown == 2 and player:HasQuest(110005) == false) then
 			ensureOpeningQuest(player, 110005, false);
 			player:SetHomePoint(1280061);
+			pendingOpeningQuest = 110005;
 		elseif (initialTown == 3 and player:HasQuest(110009) == false) then
 			ensureOpeningQuest(player, 110009, false);
 			player:SetHomePoint(1280031);
-		end		
+			pendingOpeningQuest = 110009;
+		end
 	end
 
 	--Repair opening quest state for characters created before tutorial initialization was restored.
@@ -146,8 +137,19 @@ function onBeginLogin(player)
 		ensureOpeningQuest(player, 110009, true);
 	end
 
+	-- Stage the login OpeningDirector BEFORE the zone-in bundle is built:
+	-- its notice is owned by the selected opening quest and must ride the
+	-- login zone bundle (startOpeningDirector's own guard returns early
+	-- for SimpleContent areas, so content sessions never double-stage).
+	if (pendingOpeningQuest == 110001 and player:GetZoneID() == 193) then
+		startOpeningDirector(player, true);
+	elseif (pendingOpeningQuest == 110005 and player:GetZoneID() == 166) then
+		startOpeningDirector(player, true);
+	elseif (pendingOpeningQuest == 110009 and player:GetZoneID() == 184) then
+		startOpeningDirector(player, true);
+	end
+
 	setOpeningCheckpoint(player);
-	repairBuild21989UldahHandoff(player);
 end
 
 function onLogin(player)
@@ -155,7 +157,7 @@ function onLogin(player)
 	--For Opening. Set Director and reset position in case of reconnect.
 	if (player:HasQuest(110001) == true and player:GetZoneID() == 193) then
 		startOpeningDirector(player, true);
-	elseif (player:HasQuest(110005) == true and player:GetZoneID() == 166) then 
+	elseif (player:HasQuest(110005) == true and player:GetZoneID() == 166) then
 		startOpeningDirector(player, true);
 	elseif (player:HasQuest(110009) == true and player:GetZoneID() == 184) then
 		startOpeningDirector(player, true);
@@ -168,8 +170,8 @@ function onLogin(player)
 		initRaceItems(player);	
 		player:RecalculateStats("starter-equipment");
 
-		player:SavePlayTime();		
-	end	
+		player:SavePlayTime();
+	end
 	
 end
 

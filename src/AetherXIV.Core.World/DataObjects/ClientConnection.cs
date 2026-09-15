@@ -25,6 +25,7 @@ namespace AetherXIV.Core.World
 
         public void QueuePacket(BasePacket packet)
         {
+            DevDiagnostics.TraceWireBasePacket("World", "server-to-client", packet);
             if (SendPacketQueue.Count == SendPacketQueue.BoundedCapacity - 1)
                 FlushQueuedSendPackets();
 
@@ -39,7 +40,22 @@ namespace AetherXIV.Core.World
             bool isAuthed = true;
             bool isEncrypted = false;
             subpacket.SetTargetId(owner.sessionId);
-            SendPacketQueue.Add(BasePacket.CreatePacket(subpacket, isAuthed, isEncrypted));
+            BasePacket packet = BasePacket.CreatePacket(subpacket, isAuthed, isEncrypted);
+            SendPacketQueue.Add(packet);
+            if (DevDiagnostics.IsLinkpearlDiagnosticOpcode(subpacket.gameMessage.opcode))
+            {
+                DevDiagnostics.Trace(
+                    "world.packet.queued",
+                    "session", owner == null ? 0 : owner.sessionId,
+                    "character", owner == null ? "" : owner.characterName ?? "",
+                    "opcode", String.Format("0x{0:X4}", subpacket.gameMessage.opcode),
+                    "type", String.Format("0x{0:X4}", subpacket.header.type),
+                    "source", String.Format("0x{0:X8}", subpacket.header.sourceId),
+                    "target", String.Format("0x{0:X8}", subpacket.header.targetId),
+                    "subpacketSize", subpacket.header.subpacketSize,
+                    "basePacketSize", packet.header.packetSize,
+                    "queueDepth", SendPacketQueue.Count);
+            }
         }
 
         public void QueueRelayPacket(SubPacket subpacket)
@@ -48,6 +64,7 @@ namespace AetherXIV.Core.World
                 return;
 
             subpacket.SetTargetId(owner.sessionId);
+            DevDiagnostics.TraceWireSubPacket("World", "server-to-client-relay", subpacket);
             lock (relayLock)
                 relaySubPacketQueue.Add(subpacket);
         }
@@ -82,6 +99,7 @@ namespace AetherXIV.Core.World
                 List<SubPacket> frameSubpackets = new List<SubPacket>();
                 int bodyBytes = 0;
                 bool frameContainsRunEventFunction = false;
+                bool frameContainsEndEvent = false;
 
                 while (offset < pending.Count)
                 {
@@ -89,6 +107,7 @@ namespace AetherXIV.Core.World
                     int candidateSize = candidate.header.subpacketSize;
                     if (WorldRelayFramePolicy.RequiresBoundaryBefore(
                         frameContainsRunEventFunction,
+                        frameContainsEndEvent,
                         candidate.header.type,
                         candidate.gameMessage.opcode))
                     {
@@ -119,11 +138,13 @@ namespace AetherXIV.Core.World
                         && candidate.gameMessage.opcode
                             == WorldRelayFramePolicy
                                 .RunEventFunctionOpcode;
+                    frameContainsEndEvent |=
+                        candidate.header.type == 0x0003
+                        && candidate.gameMessage.opcode
+                            == WorldRelayFramePolicy.EndEventOpcode;
                     offset++;
-                }
-
-                BasePacket frame = BasePacket.CreatePacket(
-                    frameSubpackets,
+                }                    BasePacket frame = BasePacket.CreatePacket(
+                        frameSubpackets,
                     isAuthed: true,
                     isCompressed: true);
                 SendPacketQueue.Add(frame);
@@ -172,6 +193,15 @@ namespace AetherXIV.Core.World
                     BasePacket packet = SendPacketQueue.Take();
 
                     byte[] packetBytes = packet.GetPacketBytes();
+                    DevDiagnostics.Trace(
+                        "world.packet.write",
+                        "session", owner == null ? 0 : owner.sessionId,
+                        "character", owner == null ? "" : owner.characterName ?? "",
+                        "packetCount", packet.header.numSubpackets,
+                        "bytes", packetBytes.Length,
+                        "compressed", packet.header.isCompressed,
+                        "queueDepthBeforeWrite", SendPacketQueue.Count,
+                        "transport", "base");
 
                     try
                     {

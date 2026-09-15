@@ -32,11 +32,9 @@ namespace AetherXIV.Core.Map.Actors
 
         internal static bool ShouldBroadcast(
             QuestENpc previous,
-            QuestENpc current,
-            bool forceForAreaChange)
+            QuestENpc current)
         {
-            return forceForAreaChange
-                || previous == null
+            return previous == null
                 || !previous.HasSamePresentation(current);
         }
     }

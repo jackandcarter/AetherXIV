@@ -23,7 +23,6 @@ public sealed record LauncherConfig(
     [property: JsonPropertyName("server_status_url")] string? ServerStatusUrl,
     [property: JsonPropertyName("news_url")] string NewsUrl,
     [property: JsonPropertyName("patch_manifest_url")] string PatchManifestUrl,
-    [property: JsonPropertyName("runtime_catalog_url")] string? RuntimeCatalogUrl,
     [property: JsonPropertyName("login_url")] string? LoginUrl,
     [property: JsonPropertyName("account_create_url")] string? AccountCreateUrl,
     [property: JsonPropertyName("client_login_url")] string? ClientLoginUrl,
@@ -115,36 +114,3 @@ public sealed record LauncherPatchFile(
     [property: JsonPropertyName("size_bytes")] long SizeBytes,
     [property: JsonPropertyName("crc32")] string Crc32,
     [property: JsonPropertyName("sha256")] string? Sha256);
-
-public sealed record RuntimeCatalog(
-    [property: JsonPropertyName("platform")] string Platform,
-    [property: JsonPropertyName("artifacts")] IReadOnlyList<RuntimeArtifact> Artifacts)
-{
-    public RuntimeArtifact? SelectDefault()
-    {
-        return Artifacts
-            .Where(artifact => artifact.IsActive)
-            .OrderByDescending(artifact => artifact.IsDefault)
-            .ThenBy(artifact => artifact.SortOrder)
-            .FirstOrDefault();
-    }
-}
-
-public sealed record RuntimeArtifact(
-    [property: JsonPropertyName("name")] string Name,
-    [property: JsonPropertyName("version")] string Version,
-    [property: JsonPropertyName("platform_rid")] string PlatformRid,
-    [property: JsonPropertyName("runtime_kind")] string RuntimeKind,
-    [property: JsonPropertyName("archive_url")] string ArchiveUrl,
-    [property: JsonPropertyName("archive_format")] string ArchiveFormat,
-    [property: JsonPropertyName("size_bytes")] long SizeBytes,
-    [property: JsonPropertyName("sha256")] string Sha256,
-    [property: JsonPropertyName("executable_relative_path")] string ExecutableRelativePath,
-    [property: JsonPropertyName("prefix_arch")] string PrefixArch,
-    [property: JsonPropertyName("environment")] IReadOnlyDictionary<string, string> Environment,
-    [property: JsonPropertyName("is_default")] bool IsDefault,
-    [property: JsonPropertyName("is_active")] bool IsActive,
-    [property: JsonPropertyName("sort_order")] int SortOrder)
-{
-    public string StableId => RuntimeInstallStore.SanitizePathSegment($"{PlatformRid}-{Name}-{Version}");
-}

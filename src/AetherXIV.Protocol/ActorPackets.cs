@@ -391,7 +391,9 @@ public sealed class MapPlayerSpawnUnknownPacketCodec : IPacketCodec<MapPlayerSpa
 public sealed record ActorInstantiatePacket(
     string ObjectName,
     string ClassName,
-    IReadOnlyList<LuaParameter> InitParameters);
+    IReadOnlyList<LuaParameter> InitParameters,
+    ushort Unknown = 0,
+    ushort AreaContainerKey = 0);
 
 public sealed class ActorInstantiatePacketCodec : IPacketCodec<ActorInstantiatePacket>
 {
@@ -408,14 +410,16 @@ public sealed class ActorInstantiatePacketCodec : IPacketCodec<ActorInstantiateP
         return new ActorInstantiatePacket(
             EventStartPacketCodec.ReadFixedString(payload[4..], 0x20),
             EventStartPacketCodec.ReadFixedString(payload[0x24..], 0x20),
-            LuaParameterCodec.Decode(payload[0x44..]));
+            LuaParameterCodec.Decode(payload[0x44..]),
+            PacketBinary.ReadUInt16LittleEndian(payload),
+            PacketBinary.ReadUInt16LittleEndian(payload[2..]));
     }
 
     public SubPacket Encode(uint sourceActorId, ActorInstantiatePacket packet)
     {
         byte[] payload = new byte[PayloadSize];
-        PacketBinary.WriteUInt16LittleEndian(payload, 0);
-        PacketBinary.WriteUInt16LittleEndian(payload.AsSpan(2), 0x3040);
+        PacketBinary.WriteUInt16LittleEndian(payload, packet.Unknown);
+        PacketBinary.WriteUInt16LittleEndian(payload.AsSpan(2), packet.AreaContainerKey);
         EventStartPacketCodec.WriteFixedString(payload.AsSpan(4), 0x20, packet.ObjectName);
         EventStartPacketCodec.WriteFixedString(payload.AsSpan(0x24), 0x20, packet.ClassName);
         LuaParameterCodec.Encode(packet.InitParameters).CopyTo(payload.AsSpan(0x44));
@@ -446,16 +450,48 @@ public sealed record ActorPropertyValue(uint PropertyId, ActorPropertyValueKind 
         new(propertyId, ActorPropertyValueKind.Buffer, value.ToArray());
 }
 
-public sealed record SetActorPropertyPacket(
-    string Target,
+/// <summary>
+/// One [values][target] run inside an actor-property packet. Retail 1.23b
+/// packets carry one or more runs in sequence; a run's target is null when it
+/// ends with unclosed values, which the retail client keeps pending for the
+/// next target marker (possibly in the following packet).
+/// </summary>
+public sealed record SetActorPropertySegment(
     IReadOnlyList<ActorPropertyValue> Values,
+    string? Target,
     bool IsArrayMode = false,
     bool HasMore = false);
+
+public sealed record SetActorPropertyPacket(
+    string? Target,
+    IReadOnlyList<ActorPropertyValue> Values,
+    bool IsArrayMode = false,
+    bool HasMore = false)
+{
+    /// <summary>
+    /// The [values][target] runs after the primary one; empty for
+    /// single-segment packets.
+    /// </summary>
+    public IReadOnlyList<SetActorPropertySegment> Segments { get; init; } = Array.Empty<SetActorPropertySegment>();
+
+    /// <summary>All [values][target] runs in wire order, primary segment first.</summary>
+    public IEnumerable<SetActorPropertySegment> AllSegments
+    {
+        get
+        {
+            yield return new SetActorPropertySegment(Values, Target, IsArrayMode, HasMore);
+            foreach (SetActorPropertySegment segment in Segments)
+                yield return segment;
+        }
+    }
+}
 
 public sealed class SetActorPropertyPacketCodec : IPacketCodec<SetActorPropertyPacket>
 {
     public const int PayloadSize = 0xA8 - 0x20;
-    public const int MaxBytes = 0x7D;
+
+    /// <summary>Retail 1.23b sends used-byte counts up to 128 (0x80) per payload.</summary>
+    public const int MaxBytes = 0x80;
 
     public PacketOpcode Opcode => PacketOpcode.SetActorProperty;
 
@@ -472,16 +508,41 @@ public sealed class SetActorPropertyPacketCodec : IPacketCodec<SetActorPropertyP
 
         int offset = 1;
         List<ActorPropertyValue> values = new();
+        List<SetActorPropertySegment> followingSegments = new();
+        int segmentCount = 0;
+        string? primaryTarget = null;
+        IReadOnlyList<ActorPropertyValue> primaryValues = Array.Empty<ActorPropertyValue>();
+        bool primaryIsArrayMode = false;
+        bool primaryHasMore = false;
         while (offset < endOffset)
         {
-            byte marker = payload[offset];
-            if (IsTargetMarker(marker))
-                break;
+            if (IsTargetMarker(payload[offset]))
+            {
+                (string target, bool isArrayMode, bool hasMore) =
+                    DecodeTargetMarker(payload, offset, endOffset);
+                offset += 1 + Encoding.ASCII.GetByteCount(target);
+
+                if (segmentCount == 0)
+                {
+                    primaryTarget = target;
+                    primaryValues = values.ToArray();
+                    primaryIsArrayMode = isArrayMode;
+                    primaryHasMore = hasMore;
+                }
+                else
+                {
+                    followingSegments.Add(new SetActorPropertySegment(values.ToArray(), target, isArrayMode, hasMore));
+                }
+
+                segmentCount++;
+                values = new List<ActorPropertyValue>();
+                continue;
+            }
 
             if (offset + 5 > endOffset)
                 throw new InvalidDataException("Actor property entry ended before its property id.");
 
-            byte size = marker;
+            byte size = payload[offset];
             uint propertyId = PacketBinary.ReadUInt32LittleEndian(payload[(offset + 1)..]);
             offset += 5;
 
@@ -492,42 +553,46 @@ public sealed class SetActorPropertyPacketCodec : IPacketCodec<SetActorPropertyP
             offset += size;
         }
 
-        if (offset >= endOffset)
-            throw new InvalidDataException("Actor property packet ended before target marker.");
+        if (segmentCount == 0)
+        {
+            if (values.Count == 0)
+                throw new InvalidDataException("Actor property packet contained no values and no target marker.");
+            // Values-only packet: retail leaves the values pending for the
+            // next target marker, so the packet carries no target at all.
+            return new SetActorPropertyPacket(null, values.ToArray());
+        }
 
-        byte targetMarker = payload[offset++];
-        int remainingTargetBytes = endOffset - offset;
-        bool isArrayMode = targetMarker >= 0xA4
-            && targetMarker - 0xA4 == remainingTargetBytes;
-        bool hasMore = !isArrayMode
-            && targetMarker >= 0x60
-            && targetMarker - 0x60 == remainingTargetBytes;
-        bool isFinalTarget = !isArrayMode
-            && !hasMore
-            && targetMarker >= 0x82
-            && targetMarker - 0x82 == remainingTargetBytes;
-        if (!isArrayMode && !hasMore && !isFinalTarget)
-            throw new InvalidDataException("Actor property target marker had an invalid target length.");
+        if (values.Count > 0)
+            followingSegments.Add(new SetActorPropertySegment(values.ToArray(), null));
 
-        string target = Encoding.ASCII.GetString(payload.Slice(offset, remainingTargetBytes));
-        return new SetActorPropertyPacket(target, values, isArrayMode, hasMore);
+        return new SetActorPropertyPacket(primaryTarget, primaryValues, primaryIsArrayMode, primaryHasMore)
+        {
+            Segments = followingSegments,
+        };
     }
 
     public SubPacket Encode(uint sourceActorId, SetActorPropertyPacket packet)
     {
         byte[] payload = new byte[PayloadSize];
         int offset = 1;
-        foreach (ActorPropertyValue value in packet.Values)
-            offset += WriteValue(payload.AsSpan(offset), value);
+        foreach (SetActorPropertySegment segment in packet.AllSegments)
+        {
+            foreach (ActorPropertyValue value in segment.Values)
+                offset += WriteValue(payload.AsSpan(offset), value);
 
-        int targetByteCount = Encoding.ASCII.GetByteCount(packet.Target);
-        int payloadBytes = offset + 1 + targetByteCount;
-        int usedBytes = payloadBytes - 1;
+            if (segment.Target is null)
+                continue;
+
+            int targetByteCount = Encoding.ASCII.GetByteCount(segment.Target);
+            payload[offset++] = BuildTargetMarker(segment.Target, segment.IsArrayMode, segment.HasMore);
+            Encoding.ASCII.GetBytes(segment.Target, payload.AsSpan(offset, targetByteCount));
+            offset += targetByteCount;
+        }
+
+        int usedBytes = offset - 1;
         if (usedBytes > MaxBytes)
-            throw new InvalidDataException($"Actor property packet would use {usedBytes} bytes, exceeding the legacy v1 server's {MaxBytes} byte payload limit.");
+            throw new InvalidDataException($"Actor property packet would use {usedBytes} bytes, exceeding the retail v1 payload limit of {MaxBytes} bytes.");
 
-        payload[offset++] = BuildTargetMarker(packet.Target, packet.IsArrayMode, packet.HasMore);
-        Encoding.ASCII.GetBytes(packet.Target, payload.AsSpan(offset, targetByteCount));
         payload[0] = (byte)usedBytes;
         return SubPacket.Create(Opcode, sourceActorId, payload);
     }
@@ -594,6 +659,66 @@ public sealed class SetActorPropertyPacketCodec : IPacketCodec<SetActorPropertyP
     private static bool IsTargetMarker(byte marker)
     {
         return marker >= 0x60;
+    }
+
+    /// <summary>
+    /// Decodes a target marker inside the used region. Mid-packet targets
+    /// cannot be validated against the remaining byte count, so candidates are
+    /// resolved in the reviewed order (array mode, final, continuation) and a
+    /// candidate is accepted when its implied length fits the used region and
+    /// the bytes decode to a plausible ASCII target path. This mirrors the
+    /// grammar validated against reviewed bounded trace evidence.
+    /// </summary>
+    private static (string Target, bool IsArrayMode, bool HasMore) DecodeTargetMarker(
+        ReadOnlySpan<byte> payload,
+        int offset,
+        int endOffset)
+    {
+        byte marker = payload[offset];
+        (byte MarkerBase, bool IsArrayMode, bool HasMore)[] candidates =
+        [
+            ((byte)0xA4, true, false),
+            ((byte)0x82, false, false),
+            ((byte)0x60, false, true),
+        ];
+
+        foreach ((byte markerBase, bool isArrayMode, bool hasMore) in candidates)
+        {
+            int targetByteCount = marker - markerBase;
+            if (targetByteCount <= 0 || offset + 1 + targetByteCount > endOffset)
+                continue;
+
+            string candidate = Encoding.ASCII.GetString(payload.Slice(offset + 1, targetByteCount));
+            if (!IsPlausibleTarget(candidate))
+                continue;
+
+            return (candidate, isArrayMode, hasMore);
+        }
+
+        throw new InvalidDataException("Actor property target marker had an invalid target length.");
+    }
+
+    /// <summary>
+    /// Same reviewed target shape as TARGET_PATTERN in
+    /// reviewed bounded trace evidence: starts with '/', an ASCII
+    /// letter, or '_', then only [A-Za-z0-9_./\[\]-].
+    /// </summary>
+    private static bool IsPlausibleTarget(string target)
+    {
+        if (target.Length == 0)
+            return false;
+
+        char first = target[0];
+        if (first != '/' && !char.IsAsciiLetter(first) && first != '_')
+            return false;
+
+        foreach (char c in target)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c is not ('_' or '.' or '/' or '[' or ']' or '-'))
+                return false;
+        }
+
+        return true;
     }
 }
 

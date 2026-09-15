@@ -52,6 +52,8 @@ public sealed class UmbraRenderBridge
     private readonly UmbraRuntime runtime;
     private int renderThreadId;
     private int deviceGeneration;
+    private int viewportWidth;
+    private int viewportHeight;
     private int publishedPluginUpdateCount = -1;
     private long frameCount;
 
@@ -65,6 +67,10 @@ public sealed class UmbraRenderBridge
     public int DeviceGeneration => Volatile.Read(ref deviceGeneration);
 
     public long FrameCount => Interlocked.Read(ref frameCount);
+
+    public int ViewportWidth => Volatile.Read(ref viewportWidth);
+
+    public int ViewportHeight => Volatile.Read(ref viewportHeight);
 
     internal int Process(in UmbraNativeRenderEvent renderEvent)
     {
@@ -128,13 +134,15 @@ public sealed class UmbraRenderBridge
         PublishPluginUpdateCount();
         ulong frameNumber = renderEvent.FrameNumber;
         Interlocked.Exchange(ref frameCount, renderEvent.FrameNumber);
+        Volatile.Write(ref viewportWidth, (int)Math.Min(renderEvent.ViewportWidth, int.MaxValue));
+        Volatile.Write(ref viewportHeight, (int)Math.Min(renderEvent.ViewportHeight, int.MaxValue));
 
         UmbraDrawContext context = new(
             runtime,
             frameNumber,
             delta,
-            (int)Math.Min(renderEvent.ViewportWidth, int.MaxValue),
-            (int)Math.Min(renderEvent.ViewportHeight, int.MaxValue),
+            ViewportWidth,
+            ViewportHeight,
             DeviceGeneration,
             knownThread);
 
@@ -314,6 +322,56 @@ internal sealed class UmbraDrawContext(
         bool changed = UmbraNativeUi.Toggle(label, ref nativeValue);
         value = nativeValue != 0;
         return changed;
+    }
+
+    public bool InputInt(string label, ref int value, int step = 1)
+    {
+        EnsureWindow();
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        return UmbraNativeUi.InputInt(label, ref value, Math.Max(1, step));
+    }
+
+    public bool SliderInt(string label, ref int value, int minimum, int maximum)
+    {
+        EnsureWindow();
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(minimum, maximum);
+        value = Math.Clamp(value, minimum, maximum);
+        return UmbraNativeUi.SliderInt(label, ref value, minimum, maximum);
+    }
+
+    public bool SliderFloat(string label, ref float value, float minimum, float maximum)
+    {
+        EnsureWindow();
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        if (!float.IsFinite(minimum) || !float.IsFinite(maximum) || minimum >= maximum)
+            throw new ArgumentOutOfRangeException(nameof(maximum));
+        value = Math.Clamp(float.IsFinite(value) ? value : minimum, minimum, maximum);
+        return UmbraNativeUi.SliderFloat(label, ref value, minimum, maximum);
+    }
+
+    public bool Combo(string label, ref int selectedIndex, IReadOnlyList<string> items)
+    {
+        EnsureWindow();
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        ArgumentNullException.ThrowIfNull(items);
+        if (items.Count is < 1 or > 256 || items.Any(string.IsNullOrWhiteSpace))
+            throw new ArgumentException("Umbra combo boxes require 1 to 256 non-empty items.", nameof(items));
+        selectedIndex = Math.Clamp(selectedIndex, 0, items.Count - 1);
+        return UmbraNativeUi.Combo(label, ref selectedIndex, items);
+    }
+
+    public bool CollapsingHeader(string label, bool defaultOpen = false)
+    {
+        EnsureWindow();
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        return UmbraNativeUi.CollapsingHeader(label, defaultOpen);
+    }
+
+    public void ProgressBar(float fraction, string overlay = "")
+    {
+        EnsureWindow();
+        UmbraNativeUi.ProgressBar(Math.Clamp(float.IsFinite(fraction) ? fraction : 0.0f, 0.0f, 1.0f), overlay);
     }
 
     public void SameLine()

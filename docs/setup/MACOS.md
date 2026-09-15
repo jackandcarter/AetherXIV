@@ -12,8 +12,6 @@ You need:
 - the [.NET 10 ASP.NET Core Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)
   for the server processes;
 - a user-owned Final Fantasy XIV 1.23b client;
-- internet access so **Install Runtime** can retrieve the pinned macOS Wine
-  package;
 - [Rosetta 2](https://support.apple.com/en-us/102527), which macOS offers to
   install during Launcher validation when it is absent.
 
@@ -54,16 +52,17 @@ database password; see the [database guide](../DATABASE_SETUP_AND_MIGRATION.md).
 3. On **Client**, browse to `ffxivboot.exe` for an unpatched client or
    `ffxivgame.exe` for a patched client.
 4. Select **Validate Client**. The client must report the supported 1.23b state.
-5. On **Runtime**, select **Install Runtime** if Wine is not detected. The
-   Launcher downloads and verifies its pinned macOS package, installs it into
-   Launcher storage, and validates it. Apple silicon requires Rosetta. If it is
-   absent, complete Apple's installation prompt; the Launcher waits and then
-   continues automatically.
+5. On **Runtime**, confirm that **Runtime source** reports the bundled
+   AetherXIV Compatibility Runtime, then select **Validate Runtime**. The
+   Launcher verifies the runtime receipt, helper, isolated prefix, and enabled
+   Umbra state. Apple silicon requires Rosetta. If it is absent, complete
+   Apple's installation prompt; the Launcher waits and then continues
+   automatically.
 6. On **Umbra**, enable the framework if desired.
 7. Return to **Home**, enter the account details, and select **Log In & Play**.
 
-The first runtime or FFXIV Settings operation may take several seconds while
-the Wine prefix is checked or prepared. GStreamer is optional; the Launcher
+The first validation or FFXIV Settings operation may take several seconds while
+the managed compatibility prefix is checked or prepared. GStreamer is optional; the Launcher
 warns when it is absent because some movies or media may not play, but it does
 not install the upstream unsigned package automatically.
 
@@ -84,8 +83,9 @@ a canonical repair when the installed database is older or incomplete.
 
 - If Core cannot find the database package, restore the original release-folder
   layout.
-- If a runtime is not listed, choose **Scan Runtimes** or configure it as a
-  custom runtime only if you understand its Wine command and prefix.
+- If **Runtime source** is not the bundled AetherXIV Compatibility Runtime or
+  validation reports an integrity failure, restore the complete matching
+  release folder. The Launcher has no runtime scan or custom-runtime setting.
 - If the client cannot access files, confirm macOS has granted the application
   access to the client and runtime folders.
 - Use the Launcher **Launch Log** and Core **Logs** tabs before filing a report.

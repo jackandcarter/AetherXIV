@@ -6,7 +6,7 @@ namespace AetherXIV.Core.Map.packets.send.actor.battle
 {
     /// <summary>
     /// Retail 0x0195 per-enemy enmity/nameplate indicator.
-    /// Confirmed against ffxiv_traces/combat_skills.pcapng.
+    /// Confirmed against reviewed-local-validation.
     /// </summary>
     class SetEnmityIndicatorPacket
     {

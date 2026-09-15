@@ -1,7 +1,5 @@
 ﻿using AetherXIV.Core.Common;
 using System;
-using System.IO;
-
 using System.Collections.Generic;
 
 namespace AetherXIV.Core.Map.packets.send.actor.battle
@@ -13,115 +11,59 @@ namespace AetherXIV.Core.Map.packets.send.actor.battle
         
         public static SubPacket BuildPacket(uint sourceActorId, uint animationId, ushort commandId, CommandResult[] actionList, ref int listOffset)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
+            if (actionList == null)
+                throw new ArgumentNullException(nameof(actionList));
 
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    int max;
-                    if (actionList.Length - listOffset <= 10)
-                        max = actionList.Length - listOffset;
-                    else
-                        max = 10;
-
-                    binWriter.Write((UInt32)sourceActorId);
-                    binWriter.Write((UInt32)animationId);
-
-                    //Missing... last value is float, string in here as well?
-
-                    binWriter.Seek(0x20, SeekOrigin.Begin);
-                    binWriter.Write((UInt32)max); //Num actions
-                    binWriter.Write((UInt16)commandId);
-                    binWriter.Write((UInt16)0x810); //?
-
-                    //binWriter.Seek(0x20, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                        binWriter.Write((UInt32)actionList[listOffset + i].targetId);
-
-                    binWriter.Seek(0x50, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                        binWriter.Write((UInt16)actionList[listOffset + i].amount);
-
-                    binWriter.Seek(0x64, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                        binWriter.Write((UInt16)actionList[listOffset + i].worldMasterTextId);
-
-                    binWriter.Seek(0x78, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                        binWriter.Write((UInt32)actionList[listOffset + i].effectId);
-
-                    binWriter.Seek(0xA0, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                        binWriter.Write((Byte)actionList[listOffset + i].param);
-
-                    binWriter.Seek(0xAA, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                        binWriter.Write((Byte)actionList[listOffset + i].hitNum);
-
-                    listOffset += max;
-                }
-            }
-
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return BuildPacket(sourceActorId, animationId, commandId, (IReadOnlyList<CommandResult>)actionList, ref listOffset);
         }
 
         public static SubPacket BuildPacket(uint sourceActorId, uint animationId, ushort commandId, List<CommandResult> actionList, ref int listOffset)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
+            if (actionList == null)
+                throw new ArgumentNullException(nameof(actionList));
 
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    int max;
-                    if (actionList.Count - listOffset <= 10)
-                        max = actionList.Count - listOffset;
-                    else
-                        max = 10;
-
-                    binWriter.Write((UInt32)sourceActorId);
-                    binWriter.Write((UInt32)animationId);
-
-                    //Missing... last value is float, string in here as well?
-
-                    binWriter.Seek(0x20, SeekOrigin.Begin);
-                    binWriter.Write((UInt32)max); //Num actions
-                    binWriter.Write((UInt16)commandId);
-                    binWriter.Write((UInt16)0x810); //?
-
-                    //binWriter.Seek(0x20, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                        binWriter.Write((UInt32)actionList[listOffset + i].targetId);
-
-                    binWriter.Seek(0x50, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                        binWriter.Write((UInt16)actionList[listOffset + i].amount);
-
-                    binWriter.Seek(0x64, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                        binWriter.Write((UInt16)actionList[listOffset + i].worldMasterTextId);
-
-                    binWriter.Seek(0x78, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                    {
-                        binWriter.Write((UInt32)actionList[listOffset + i].effectId);
-                    }
-
-                    binWriter.Seek(0xA0, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                        binWriter.Write((Byte)actionList[listOffset + i].param);
-
-                    binWriter.Seek(0xAA, SeekOrigin.Begin);
-                    for (int i = 0; i < max; i++)
-                        binWriter.Write((Byte) actionList[listOffset + i].hitNum);
-
-                    listOffset += max;
-                }
-            }
-
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return BuildPacket(sourceActorId, animationId, commandId, (IReadOnlyList<CommandResult>)actionList, ref listOffset);
         }
 
+        private static SubPacket BuildPacket(
+            uint sourceActorId,
+            uint animationId,
+            ushort commandId,
+            IReadOnlyList<CommandResult> actionList,
+            ref int listOffset)
+        {
+            if (listOffset < 0 || listOffset > actionList.Count)
+                throw new ArgumentOutOfRangeException(nameof(listOffset));
+
+            int actionCount = Math.Min(
+                AetherXIV.Protocol.CommandResultX10PacketCodec.MaxActions,
+                actionList.Count - listOffset);
+            List<AetherXIV.Protocol.CommandResultAction> actions =
+                new List<AetherXIV.Protocol.CommandResultAction>(actionCount);
+
+            for (int index = 0; index < actionCount; index++)
+            {
+                CommandResult action = actionList[listOffset + index];
+                actions.Add(new AetherXIV.Protocol.CommandResultAction(
+                    action.targetId,
+                    action.amount,
+                    action.worldMasterTextId,
+                    action.effectId,
+                    action.param,
+                    action.hitNum));
+            }
+
+            SubPacket packet = ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.CommandResultX10PacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.CommandResultX10Packet(
+                    sourceActorId,
+                    animationId,
+                    commandId,
+                    0x0810,
+                    actions));
+            listOffset += actionCount;
+            return packet;
+        }
     }
 }

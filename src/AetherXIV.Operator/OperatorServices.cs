@@ -86,7 +86,7 @@ public static class AetherXivServiceCatalog
             new AetherXivServiceDefinition(
                 AetherXivManagedService.Map,
                 "Map",
-                "AetherXIV 2.0 Map server for zones, actors, Lua events, directors, battle, and map packets.",
+                "AetherXIV 2.1 Map server for zones, actors, Lua events, directors, battle, and map packets.",
                 Path.Combine("src", "AetherXIV.Core.Map", "AetherXIV.Core.Map.csproj"),
                 Path.Combine("servers", "map", HostExecutableName("AetherXIV.Core.Map")),
                 normalized.Map.Bind,
@@ -96,7 +96,7 @@ public static class AetherXivServiceCatalog
             new AetherXivServiceDefinition(
                 AetherXivManagedService.World,
                 "World",
-                "AetherXIV 2.0 World server for sessions, groups, chat, and Map-server coordination.",
+                "AetherXIV 2.1 World server for sessions, groups, chat, and Map-server coordination.",
                 Path.Combine("src", "AetherXIV.Core.World", "AetherXIV.Core.World.csproj"),
                 Path.Combine("servers", "world", HostExecutableName("AetherXIV.Core.World")),
                 normalized.World.Bind,
@@ -106,7 +106,7 @@ public static class AetherXivServiceCatalog
             new AetherXivServiceDefinition(
                 AetherXivManagedService.Lobby,
                 "Lobby",
-                "AetherXIV 2.0 Lobby server for authentication, character lifecycle, list, and selection.",
+                "AetherXIV 2.1 Lobby server for authentication, character lifecycle, list, and selection.",
                 Path.Combine("src", "AetherXIV.Core.Lobby", "AetherXIV.Core.Lobby.csproj"),
                 Path.Combine("servers", "lobby", HostExecutableName("AetherXIV.Core.Lobby")),
                 normalized.Lobby.Bind,

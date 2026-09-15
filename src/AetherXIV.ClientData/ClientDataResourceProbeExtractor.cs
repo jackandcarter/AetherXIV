@@ -21,16 +21,28 @@ namespace AetherXIV.ClientData;
 public static class ClientDataResourceProbeExtractor
 {
     private const int ProbeByteCount = 2048;
+    private const int StructuredResourceProbeByteCount = 16 * 1024 * 1024;
 
     public static async Task<ClientDataResourceProbe?> ExtractAsync(
         string filePath,
         long fileSizeBytes,
         CancellationToken cancellationToken = default)
     {
-        byte[] buffer = new byte[ProbeByteCount];
+        byte[] initial = new byte[Math.Min(ProbeByteCount, checked((int)Math.Min(fileSizeBytes, ProbeByteCount)))];
         await using FileStream stream = File.OpenRead(filePath);
-        int bytesRead = await stream.ReadAsync(buffer, cancellationToken);
+        int initialBytesRead = await stream.ReadAsync(initial, cancellationToken);
+        if (initialBytesRead != initial.Length)
+            Array.Resize(ref initial, initialBytesRead);
 
+        bool structured = initial.AsSpan().StartsWith("MapL"u8)
+            || initial.AsSpan().StartsWith("#fileSet"u8);
+        if (!structured)
+            return Create(initial, fileSizeBytes);
+
+        int readLength = (int)Math.Min(fileSizeBytes, StructuredResourceProbeByteCount);
+        stream.Position = 0;
+        byte[] buffer = new byte[readLength];
+        int bytesRead = await stream.ReadAsync(buffer, cancellationToken);
         if (bytesRead != buffer.Length)
             Array.Resize(ref buffer, bytesRead);
 
@@ -45,6 +57,39 @@ public static class ClientDataResourceProbeExtractor
         string magic0 = ReadAscii(bytes, 0);
         string? magic4 = bytes.Length >= 8 ? ReadAscii(bytes, 4) : null;
 
+        if (bytes.StartsWith("MapLayoutResourceData"u8))
+        {
+            ClientMapLayoutProbe mapLayout = ClientMapLayoutResourceParser.Parse(bytes);
+            return new(
+                ClientDataResourceFamily.MapLayout,
+                "MapLayoutResourceData",
+                null,
+                null,
+                null,
+                null,
+                0,
+                null,
+                [],
+                null,
+                mapLayout);
+        }
+
+        if (bytes.StartsWith("#fileSet"u8))
+        {
+            ClientFileSetDocument fileSet = ClientFileSetParser.Parse(bytes);
+            return new(
+                ClientDataResourceFamily.FileSet,
+                "#fileSet",
+                null,
+                null,
+                null,
+                null,
+                0,
+                null,
+                [],
+                fileSet,
+                null);
+        }
         if (magic0 == "SEDB" && magic4 == "SSCF" && bytes.Length >= 20)
             return SedbSscfResourceParser.Parse(bytes, fileSizeBytes);
 

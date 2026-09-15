@@ -27,16 +27,9 @@ internal static class UmbraRepositoryRegistry
 
     public static IReadOnlyList<UmbraRepositorySource> Load(
         string cacheDirectory,
-        IEnumerable<UmbraRepositorySource> configuredSources,
         UmbraRuntimeLog log)
     {
-        UmbraRepositorySource[] configured = UmbraRepositorySource.Normalize(configuredSources).ToArray();
-        List<UmbraRepositorySource> sources = configured
-            .Where(source => string.Equals(
-                source.Source,
-                UmbraRepositorySource.Supported,
-                StringComparison.OrdinalIgnoreCase))
-            .ToList();
+        List<UmbraRepositorySource> sources = [];
         string path = GetPath(cacheDirectory);
         if (File.Exists(path))
         {
@@ -56,14 +49,6 @@ internal static class UmbraRepositoryRegistry
                 log.Warning($"umbra_repository_registry_load_failed error={ex.Message}");
             }
         }
-        else
-        {
-            sources.AddRange(configured.Where(source => string.Equals(
-                source.Source,
-                UmbraRepositorySource.Custom,
-                StringComparison.OrdinalIgnoreCase)));
-        }
-
         return UmbraRepositorySource.Normalize(sources);
     }
 

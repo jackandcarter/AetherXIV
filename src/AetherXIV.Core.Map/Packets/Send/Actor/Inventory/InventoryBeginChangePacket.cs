@@ -9,12 +9,10 @@ namespace AetherXIV.Core.Map.packets.send.actor.inventory
 
         public static SubPacket BuildPacket(uint playerActorID, bool clearItemPackage = false)
         {
-            byte[] data = new byte[8];
-
-            if (clearItemPackage)
-                data[0] = 2;
-
-            return new SubPacket(OPCODE, playerActorID, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.InventoryBeginChangePacketCodec(),
+                playerActorID,
+                new AetherXIV.Protocol.InventoryBeginChangePacket(clearItemPackage));
         }
     }
 }

@@ -66,10 +66,21 @@ function onEventStarted(player, actor, triggerName, isTeleport)
 				aetheryteChoice = callClientFunction(player, "delegateCommand", actor, "eventAetheryte", regionChoice, 2, 2, 2, 4, 4, 4);
 				
 				if (aetheryteChoice == nil) then break end
-				
-				player:PlayAnimation(0x4000FFA);
-				player:SendGameMessage(worldMaster, 34101, 0x20, 2, teleportMenuToAetheryte[regionChoice][aetheryteChoice], 100, 100);	
-				confirmChoice = callClientFunction(player, "delegateCommand", actor, "eventConfirm", false, false, 1, 138824, false);				
+
+				-- Server-authoritative attunement gate (Garlemald #46 round 5):
+				-- the client's region menu lists every aetheryte regardless of
+				-- attunement, so an untouched destination must be refused here.
+				-- Attunement is granted on first touch (AetheryteParent.lua /
+				-- AetheryteChild.lua onEventStarted → UnlockAetheryteNode,
+				-- persisted in characters_aetherytes). No retail 1.x sheet id
+				-- for the "You are not attuned" line is mapped, so send the
+				-- plain-text refusal and loop back to the aetheryte list.
+				if (player:HasAetheryteNodeUnlocked(teleportMenuToAetheryte[regionChoice][aetheryteChoice]) == false) then
+					player:SendMessage(0x20, "", "You are not attuned to that aetheryte.");
+				else
+					player:PlayAnimation(0x4000FFA);
+					player:SendGameMessage(worldMaster, 34101, 0x20, 2, teleportMenuToAetheryte[regionChoice][aetheryteChoice], 100, 100);	
+					confirmChoice = callClientFunction(player, "delegateCommand", actor, "eventConfirm", false, false, 1, 138824, false);
 				if (confirmChoice == 1) then
 					player:PlayAnimation(0x4000FFB);
 					player:SendGameMessage(worldMaster, 34105, 0x20);			
@@ -81,10 +92,10 @@ function onEventStarted(player, actor, triggerName, isTeleport)
 						GetWorldManager():DoZoneChange(player, destination[1], nil, 0, 2, randoPos.x, destination[3], randoPos.y, rotation);
 					end
 				end
-				player:endEvent();
-				return;
+					player:endEvent();
+					return;
+				end
 			end
-			
 		end
 	else
 		player:PlayAnimation(0x4000FFA);

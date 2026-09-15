@@ -27,6 +27,7 @@ namespace AetherXIV.Core.Map
         static int Main(string[] args)
         {
             Environment.CurrentDirectory = AppContext.BaseDirectory;
+            AetherXivRuntimePaths.ConfigureLogDirectory("map");
             // set up logging
             Log = LogManager.GetCurrentClassLogger();
 #if DEBUG
@@ -38,8 +39,11 @@ namespace AetherXIV.Core.Map
             DevDiagnostics.Configure("Map", args);
 
             Log.Info("==================================");
-            Log.Info("AetherXIV Core v2.0: Map Server");
-            Log.Info("Version: 2.0 (build 21991)");
+            Log.Info("AetherXIV Core v2.1: Map Server");
+            Log.Info(
+                "Version: {0} (build {1})",
+                global::AetherXIV.Core.AetherXivBuildInfo.ProductVersion,
+                global::AetherXIV.Core.AetherXivBuildInfo.BuildNumber);
             Log.Info("==================================");
 
             try

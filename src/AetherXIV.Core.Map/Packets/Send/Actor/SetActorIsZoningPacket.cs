@@ -9,9 +9,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
 
         public static SubPacket BuildPacket(uint sourceActorId, bool isDimmed)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-            data[0] = (byte)(isDimmed ? 1 : 0);
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetActorIsZoningPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetActorIsZoningPacket(isDimmed));
         }
     }
 }

@@ -147,22 +147,23 @@ SPAWN_CHOCOBO_RENTAL = 0x14;
 SPAWN_CUTTER_SANDS = 0x17;
 SPAWN_NIGHTMARE = 0x18;
 
+-- EVENTS
+ETYPE_COMMAND = 0;
+ETYPE_TALK = 1;
+ETYPE_PUSH = 2;
+ETYPE_EMOTE = 3;
+ETYPE_NOTICE = 5;
+
 --UTILS
 
 function kickEventContinue(player, actor, trigger, ...)
 	player:KickEvent(actor, trigger, ...);
-	return coroutine.yield("_WAIT_EVENT", player, actor.actorId, trigger, 5);
+	return coroutine.yield("_WAIT_EVENT", player);
 end
 
 function callClientFunction(player, functionName, ...)
 	player:RunEventFunction(functionName, ...);	
-	return coroutine.yield(
-		"_WAIT_EVENT",
-		player,
-		player.currentEventOwner,
-		player.currentEventName,
-		player.currentEventType
-	);
+	return coroutine.yield("_WAIT_EVENT", player);	
 end
 
 function wait(seconds)

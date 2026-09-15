@@ -58,7 +58,7 @@ public sealed class EventStartPacketCodec : IPacketCodec<EventStartPacket>
             throw new ArgumentException($"Expected opcode {Opcode} but received {packet.Header.Opcode}.", nameof(packet));
 
         ReadOnlySpan<byte> payload = packet.Payload.Span;
-        Require(payload, FixedHeaderSize + 1);
+        Require(payload, FixedHeaderSize + MaximumEventNameBytes);
 
         uint triggerActorId = PacketBinary.ReadUInt32LittleEndian(payload);
         uint ownerActorId = PacketBinary.ReadUInt32LittleEndian(payload[4..]);
@@ -84,13 +84,69 @@ public sealed class EventStartPacketCodec : IPacketCodec<EventStartPacket>
             };
         }
 
-        int terminator = eventPayload.IndexOf((byte)0);
-        if (terminator < 0 || terminator > MaximumEventNameBytes)
+        ReadOnlySpan<byte> eventNameField = eventPayload[..MaximumEventNameBytes];
+        int terminator = eventNameField.IndexOf((byte)0);
+        if (terminator < 0)
             throw new InvalidDataException("Event start name is missing its bounded null terminator.");
 
-        string eventName = Encoding.ASCII.GetString(eventPayload[..terminator]);
-        ReadOnlySpan<byte> parameterPayload = eventPayload[(terminator + 1)..];
-        IReadOnlyList<LuaParameter> parameters = DecodeKnownLuaParametersOrEmpty(parameterPayload);
+        string eventName = Encoding.ASCII.GetString(eventNameField[..terminator]);
+
+        // Retail uses both layouts, and command events are always fixed.
+        // Compact events (ordinary actor/combat events such as a tight
+        // talkDefault) write the name, its null terminator, and then the
+        // typed list contiguously, so the list's 0x0F terminator lands at or
+        // before the fixed 0x20-byte boundary. Command events such as
+        // RequestQuestJournalCommand instead retain a legacy FIXED 0x20-byte
+        // name field whose unused bytes are arbitrary client memory, with the
+        // typed list starting only at the boundary. That padding can
+        // coincidentally parse as a valid typed Lua list (observed live: a
+        // mangled questId that made GetQuest miss and dropped the qtdata
+        // reply entirely), so decode-success alone must never select the
+        // compact form — command event padding is never a parameter list.
+        // For non-command events, a compact list must also FIT inside the
+        // name window; anything that runs past the boundary is fixed layout.
+        ReadOnlySpan<byte> compactParameterPayload = eventPayload[(terminator + 1)..];
+        ReadOnlySpan<byte> fixedParameterPayload = payload[
+            (FixedHeaderSize + MaximumEventNameBytes)..];
+        ReadOnlySpan<byte> parameterPayload;
+        IReadOnlyList<LuaParameter> parameters;
+        if (eventName.StartsWith("command", StringComparison.Ordinal))
+        {
+            parameters = DecodeFixedOrEmpty(fixedParameterPayload);
+            parameterPayload = fixedParameterPayload;
+        }
+        else
+        {
+            int compactTerminatorOffset;
+            try
+            {
+                parameters = LuaParameterCodec.Decode(
+                    compactParameterPayload,
+                    out compactTerminatorOffset);
+                // 0x0F must sit at or before the fixed boundary: payload position
+                // FixedHeaderSize + terminator + 1 + offset <= FixedHeaderSize +
+                // MaximumEventNameBytes.
+                if (terminator + 1 + compactTerminatorOffset <= MaximumEventNameBytes)
+                {
+                    parameterPayload = compactParameterPayload;
+                }
+                else
+                {
+                    parameters = DecodeFixedOrEmpty(fixedParameterPayload);
+                    parameterPayload = fixedParameterPayload;
+                }
+            }
+            catch (NotSupportedException)
+            {
+                parameters = DecodeFixedOrEmpty(fixedParameterPayload);
+                parameterPayload = fixedParameterPayload;
+            }
+            catch (InvalidDataException)
+            {
+                parameters = DecodeFixedOrEmpty(fixedParameterPayload);
+                parameterPayload = fixedParameterPayload;
+            }
+        }
 
         return new EventStartPacket(triggerActorId, ownerActorId, serverCodes, unknown, eventType, eventName, parameters)
         {
@@ -106,12 +162,13 @@ public sealed class EventStartPacketCodec : IPacketCodec<EventStartPacket>
         PacketBinary.WriteUInt32LittleEndian(payload.AsSpan(8), packet.ServerCodes);
         PacketBinary.WriteUInt32LittleEndian(payload.AsSpan(12), packet.Unknown);
         payload[16] = packet.EventType;
-        int eventNameLength = Encoding.ASCII.GetByteCount(packet.EventName);
-        if (eventNameLength > MaximumEventNameBytes)
-            throw new InvalidDataException($"Event start name exceeds {MaximumEventNameBytes} bytes.");
-
-        Encoding.ASCII.GetBytes(packet.EventName, payload.AsSpan(FixedHeaderSize, eventNameLength));
-        int parameterOffset = FixedHeaderSize + eventNameLength + 1;
+        // Retail 1.23b clients always send a fixed 0x20-byte name field whose
+        // unused bytes are arbitrary client memory, with the typed parameter
+        // list starting at the fixed boundary (verified across the retail
+        // corpus; the variable junk between the name terminator and the list
+        // is client buffer reuse and is never reproduced).
+        WriteFixedString(payload.AsSpan(FixedHeaderSize), MaximumEventNameBytes, packet.EventName);
+        int parameterOffset = FixedHeaderSize + MaximumEventNameBytes;
         byte[] parameterPayload = EncodeParameterPayload(packet.Parameters, packet.RawParameterPayload);
         if (parameterPayload.Length > payload.Length - parameterOffset)
             throw new InvalidDataException("Event start parameter payload exceeds the packet boundary.");
@@ -149,21 +206,43 @@ public sealed class EventStartPacketCodec : IPacketCodec<EventStartPacket>
 
     internal static IReadOnlyList<LuaParameter> DecodeKnownLuaParametersOrEmpty(ReadOnlySpan<byte> payload)
     {
+        return TryDecodeKnownLuaParameters(payload, out IReadOnlyList<LuaParameter> parameters)
+            ? parameters
+            : [];
+    }
+
+    private static IReadOnlyList<LuaParameter> DecodeFixedOrEmpty(
+        ReadOnlySpan<byte> fixedParameterPayload)
+    {
+        return TryDecodeKnownLuaParameters(fixedParameterPayload, out IReadOnlyList<LuaParameter> parameters)
+            ? parameters
+            : [];
+    }
+
+    private static bool TryDecodeKnownLuaParameters(
+        ReadOnlySpan<byte> payload,
+        out IReadOnlyList<LuaParameter> parameters)
+    {
+        parameters = [];
+        if (payload.IndexOf((byte)0x0F) < 0)
+            return false;
+
         try
         {
-            return LuaParameterCodec.Decode(payload);
+            parameters = LuaParameterCodec.Decode(payload);
+            return true;
         }
         catch (NotSupportedException)
         {
-            return [];
+            return false;
         }
         catch (InvalidDataException)
         {
-            return [];
+            return false;
         }
     }
 
-    internal static byte[] EncodeParameterPayload(
+    public static byte[] EncodeParameterPayload(
         IReadOnlyList<LuaParameter> parameters,
         ReadOnlyMemory<byte> rawParameterPayload)
     {
@@ -183,7 +262,6 @@ public readonly record struct EventUpdatePacket(
 {
     public ReadOnlyMemory<byte> RawParameterPayload { get; init; }
 }
-
 public sealed class EventUpdatePacketCodec : IPacketCodec<EventUpdatePacket>
 {
     public const int PayloadSize = 0x78 - 0x20;
@@ -280,11 +358,29 @@ public readonly record struct RunEventFunctionPacket(
     byte EventType,
     string EventName,
     string FunctionName,
-    IReadOnlyList<LuaParameter> Parameters);
+    IReadOnlyList<LuaParameter> Parameters)
+{
+    public ReadOnlyMemory<byte> TrailingBytes { get; init; }
+}
 
 public sealed class RunEventFunctionPacketCodec : IPacketCodec<RunEventFunctionPacket>
 {
+    // Every observed retail 1.23b RunEventFunction packet uses the compact
+    // 0xB0 envelope. Larger legacy buffers are an implementation detail, not
+    // part of the wire contract, and can make the client dispatch against an
+    // invalid event-function object.
     public const int PayloadSize = 0xB0 - 0x20;
+
+    public const int ParameterOffset = 0x49;
+
+    /// <summary>
+    /// Retail closes every RunEventFunction payload with a 7-byte trailing
+    /// field at payload offsets 137..143: a float32 (little-endian, observed
+    /// 3.0-3.5, movement-state-like) followed by three zero bytes. Its
+    /// semantics are not yet identified, so decode preserves the observed
+    /// bytes and the server currently emits zeros.
+    /// </summary>
+    public const int TrailingByteCount = 7;
 
     public PacketOpcode Opcode => PacketOpcode.RunEventFunction;
 
@@ -305,7 +401,12 @@ public sealed class RunEventFunctionPacketCodec : IPacketCodec<RunEventFunctionP
             payload[8],
             EventStartPacketCodec.ReadFixedString(payload[9..], 0x20),
             EventStartPacketCodec.ReadFixedString(payload[0x29..], 0x20),
-            LuaParameterCodec.Decode(payload[0x49..]));
+            LuaParameterCodec.Decode(payload[0x49..]))
+        {
+            TrailingBytes = payload.Length >= PayloadSize
+                ? payload[^TrailingByteCount..].ToArray()
+                : Array.Empty<byte>(),
+        };
     }
 
     public SubPacket Encode(uint sourceActorId, RunEventFunctionPacket packet)
@@ -317,12 +418,14 @@ public sealed class RunEventFunctionPacketCodec : IPacketCodec<RunEventFunctionP
         EventStartPacketCodec.WriteFixedString(payload.AsSpan(9), 0x20, packet.EventName);
         EventStartPacketCodec.WriteFixedString(payload.AsSpan(0x29), 0x20, packet.FunctionName);
         byte[] encodedParameters = LuaParameterCodec.Encode(packet.Parameters);
-        if (encodedParameters.Length > payload.Length - 0x49)
+        if (encodedParameters.Length > PayloadSize - ParameterOffset - TrailingByteCount)
             throw new ArgumentException(
                 $"Run event function parameters exceed the 0x{PayloadSize + 0x20:X} packet contract.",
                 nameof(packet));
 
-        encodedParameters.CopyTo(payload.AsSpan(0x49));
+        encodedParameters.CopyTo(payload.AsSpan(ParameterOffset));
+        if (packet.TrailingBytes.Length == TrailingByteCount)
+            packet.TrailingBytes.Span.CopyTo(payload.AsSpan(PayloadSize - TrailingByteCount));
         return SubPacket.Create(Opcode, sourceActorId, payload);
     }
 }
@@ -330,11 +433,25 @@ public sealed class RunEventFunctionPacketCodec : IPacketCodec<RunEventFunctionP
 public readonly record struct EndEventPacket(
     uint SourcePlayerActorId,
     byte EventType,
-    string EventName);
+    string EventName)
+{
+    public ReadOnlyMemory<byte> TrailingBytes { get; init; }
+}
 
 public sealed class EndEventPacketCodec : IPacketCodec<EndEventPacket>
 {
     public const int PayloadSize = 0x50 - 0x20;
+
+    /// <summary>
+    /// Retail closes every EndEvent payload with a 7-byte trailing field at
+    /// payload offsets 41..47: the constant prefix F2 D4 09 followed by a
+    /// session-scoped u32 (client-clock-like). Its semantics are not yet
+    /// identified, so decode preserves the observed bytes and the server
+    /// currently emits zeros.
+    /// </summary>
+    public const int TrailingFieldOffset = 0x29;
+
+    public const int TrailingByteCount = 7;
 
     public PacketOpcode Opcode => PacketOpcode.EndEvent;
 
@@ -352,7 +469,12 @@ public sealed class EndEventPacketCodec : IPacketCodec<EndEventPacket>
         return new EndEventPacket(
             PacketBinary.ReadUInt32LittleEndian(payload),
             payload[8],
-            EventStartPacketCodec.ReadFixedString(payload[9..], 0x20));
+            EventStartPacketCodec.ReadFixedString(payload[9..], 0x20))
+        {
+            TrailingBytes = payload.Length >= TrailingFieldOffset + TrailingByteCount
+                ? payload.Slice(TrailingFieldOffset, TrailingByteCount).ToArray()
+                : Array.Empty<byte>(),
+        };
     }
 
     public SubPacket Encode(uint sourceActorId, EndEventPacket packet)
@@ -362,6 +484,8 @@ public sealed class EndEventPacketCodec : IPacketCodec<EndEventPacket>
         PacketBinary.WriteUInt32LittleEndian(payload.AsSpan(4), 0);
         payload[8] = packet.EventType;
         EventStartPacketCodec.WriteFixedString(payload.AsSpan(9), 0x20, packet.EventName);
+        if (packet.TrailingBytes.Length == TrailingByteCount)
+            packet.TrailingBytes.Span.CopyTo(payload.AsSpan(TrailingFieldOffset, TrailingByteCount));
         return SubPacket.Create(Opcode, sourceActorId, payload);
     }
 }

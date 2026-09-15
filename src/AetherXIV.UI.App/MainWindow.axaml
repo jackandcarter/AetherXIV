@@ -98,7 +98,7 @@
           <TextBlock Text="AetherXIV Core" FontSize="24" FontWeight="SemiBold" />
           <TextBlock x:Name="HeaderStatusText" Text="Services stopped" Foreground="{StaticResource MutedTextBrush}" />
           <TextBlock x:Name="ProductVersionText"
-                     Text="v2.0"
+                     Text="v2.1"
                      Cursor="Hand"
                      PointerPressed="ProductVersionText_PointerPressed"
                      ToolTip.Tip="Click to show the build number"
@@ -331,7 +331,7 @@
               <ComboBoxItem>Basic</ComboBoxItem>
               <ComboBoxItem>Verbose</ComboBoxItem>
             </ComboBox>
-            <CheckBox x:Name="NetworkTraceBox" Grid.Row="6" Grid.Column="2" Content="Network" />
+            <CheckBox x:Name="NetworkTraceBox" Grid.Row="6" Grid.Column="2" Content="Network + wire packets" ToolTip.Tip="Records bounded client/server packet previews in the server diagnostics JSONL files." />
             <CheckBox x:Name="ServerTraceBox" Grid.Row="6" Grid.Column="3" Content="Server" />
 
             <TextBlock Grid.Row="7" Text="Database host" VerticalAlignment="Center" />
@@ -403,7 +403,7 @@
             <StackPanel Spacing="5">
               <TextBlock Text="AetherXIV Core" FontSize="30" FontWeight="SemiBold" />
               <TextBlock x:Name="AboutVersionText"
-                         Text="Version 2.0"
+                         Text="Version 2.1"
                          FontSize="16"
                          Foreground="{StaticResource MutedTextBrush}" />
             </StackPanel>

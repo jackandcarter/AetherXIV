@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using System.Linq;
 using AetherXIV.Core.Map.dataobjects;
 
 using AetherXIV.Core.Common;
@@ -32,6 +33,7 @@ namespace AetherXIV.Core.Map
         private static WorldManager mWorldManager;
         private static Dictionary<uint, ItemData> mGamedataItems;
         private static Dictionary<uint, GuildleveData> mGamedataGuildleves;
+        private static Dictionary<uint, QuestGameData> mGamedataQuests;
         private static StaticActors mStaticActors;
 
         private PacketProcessor mProcessor;        
@@ -50,6 +52,8 @@ namespace AetherXIV.Core.Map
             Program.Log.Info("Loaded {0} items.", mGamedataItems.Count);
             mGamedataGuildleves = Database.GetGuildleveGamedata();
             Program.Log.Info("Loaded {0} guildleves.", mGamedataGuildleves.Count);
+            mGamedataQuests = Database.GetQuestGamedata();
+            Program.Log.Info("Loaded {0} quests.", mGamedataQuests.Count);
 
             mWorldManager = new WorldManager(this);
             mWorldManager.LoadZoneList();
@@ -482,6 +486,37 @@ namespace AetherXIV.Core.Map
                 return mGamedataGuildleves[id];
             else
                 return null;
+        }
+
+        public static QuestGameData GetQuestGamedata(uint id)
+        {
+            return mGamedataQuests != null && mGamedataQuests.TryGetValue(id, out QuestGameData quest)
+                ? quest
+                : null;
+        }
+
+        public static QuestGameData[] GetQuestGamedataByMaxLevel(int level, bool all = false)
+        {
+            if (mGamedataQuests == null)
+                return Array.Empty<QuestGameData>();
+
+            return mGamedataQuests.Values
+                .Where(quest => quest.MinLevel > 0 && (all ? quest.MinLevel <= level : quest.MinLevel == level))
+                .ToArray();
+        }
+
+        public static QuestGameData[] GetQuestGamedataByPrerequisite(uint questId)
+        {
+            return mGamedataQuests == null
+                ? Array.Empty<QuestGameData>()
+                : mGamedataQuests.Values.Where(quest => quest.PrerequisiteQuest == questId).ToArray();
+        }
+
+        public static QuestGameData[] GetQuestGamedataAllPrerequisite()
+        {
+            return mGamedataQuests == null
+                ? Array.Empty<QuestGameData>()
+                : mGamedataQuests.Values.Where(quest => quest.PrerequisiteQuest != 0).ToArray();
         }
 
     }

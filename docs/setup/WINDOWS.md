@@ -45,7 +45,9 @@ needed for your server. A local-only setup does not require public exposure.
 4. Validate the client and configure FFXIV settings if required.
 5. Leave the launch helper on **Automatic** unless troubleshooting requires a
    specific x86 or x64 helper.
-6. Enable or update Umbra on the **Umbra** tab if desired.
+6. Enable Umbra on the **Umbra** tab if desired. The remote framework update
+   service is unavailable until a signed service endpoint is deployed; the
+   bundled verified framework remains usable without it.
 7. Log in from **Home**.
 
 The **Runtime** tab reports native Windows launch behavior; no Wine prefix is

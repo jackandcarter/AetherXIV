@@ -5,20 +5,24 @@ function init()
 end
 
 function onEventStarted(player, director, eventType, eventName)
-	if (player:HasQuest(110006) == true) then
+	-- The destination notice is only a carrier. The owning quest controls the
+	-- client function and the matching EndEvent, exactly as the legacy quest
+	-- scripts expect.
+	if (player:HasQuest(110002) == true) then
+		local quest = player:GetQuest(110002);
+		if (quest ~= nil) then
+			quest:OnNotice(player);
+			return;
+		end
+	elseif (player:HasQuest(110006) == true) then
 		local quest = player:GetQuest(110006);
-		if (quest ~= nil and quest:GetSequence() == 5) then
-			-- processEventTu_001 owns a response-bearing tutorial transaction.
-			-- Keep the director notice alive until the client returns its
-			-- EventUpdate; ending it here clears the client-side event owner
-			-- while the Confirm window is still docking.
-			callClientFunction(player, "delegateEvent", player, quest, "processEventTu_001");
-			player:EndEvent();
+		if (quest ~= nil) then
+			quest:OnNotice(player);
 			return;
 		end
 	end
 
-	-- A stale kick has no tutorial transaction to launch.
+	-- A stale kick has no quest transaction to resume.
 	player:EndEvent();
 end
 

@@ -66,8 +66,9 @@ namespace AetherXIV.Core.Map.actors.chara.ai
         None = 0,
         AutoAttack = 1,
         WeaponSkill = 2,
-        Ability =3,
-        Spell = 4
+        Ability = 3,
+        Spell = 4,
+        MobSkill = 5
     }
 
     public enum KnockbackType : ushort

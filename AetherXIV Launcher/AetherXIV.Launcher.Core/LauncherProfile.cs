@@ -24,12 +24,14 @@ public sealed record LauncherProfile(
     WineRuntimeProfile RuntimeProfile,
     RuntimeSelectionMode RuntimeMode = RuntimeSelectionMode.AutomaticManaged,
     ClientLaunchHelperMode LaunchHelperMode = ClientLaunchHelperMode.Automatic,
-    ClientGraphicsTarget GraphicsTarget = ClientGraphicsTarget.OpenGLCompatibility,
+    ClientGraphicsTarget GraphicsTarget = ClientGraphicsTarget.WineDefault,
     string SavedUsername = "",
     bool RememberUsername = false,
     UmbraSettings? Umbra = null)
 {
     public const string DemiDevUnitLauncherServiceUrl = "https://launcher.dev.demidevunit.com/launcher";
+    public const string DemiDevUnitUmbraServiceUrl = "https://launcher.dev.demidevunit.com/umbra/v1";
+    public static bool DemiDevUnitUmbraServicesEnabled => false;
 
     public static LauncherProfile LocalDefault() => new(
         "",
@@ -47,7 +49,7 @@ public sealed record LauncherProfile(
             ? RuntimeSelectionMode.AutomaticManaged
             : RuntimeSelectionMode.CustomRuntime,
         ClientLaunchHelperMode.Automatic,
-        ClientGraphicsTarget.OpenGLCompatibility,
+        ClientGraphicsTarget.WineDefault,
         "",
         false,
         UmbraSettings.Default);

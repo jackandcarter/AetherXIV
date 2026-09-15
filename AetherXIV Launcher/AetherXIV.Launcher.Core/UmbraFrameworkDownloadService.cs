@@ -34,15 +34,14 @@ public static class UmbraFrameworkDownloadService
         IProgress<UmbraFrameworkDownloadProgress>? progress = null,
         CancellationToken cancellationToken = default,
         string? frameworksRoot = null,
-        string? cacheRoot = null)
+        string? cacheRoot = null,
+        long channelSequence = 0,
+        string signingKeyId = "")
     {
         ArgumentNullException.ThrowIfNull(artifact);
         ArgumentNullException.ThrowIfNull(httpClient);
 
-        if (!string.Equals(artifact.ArchiveFormat, "zip", StringComparison.OrdinalIgnoreCase))
-            throw new NotSupportedException($"Umbra framework archive format is not supported: {artifact.ArchiveFormat}");
-        if (!artifact.UsesAetherEntrypoints)
-            throw new NotSupportedException("Legacy Umbra framework entrypoints are not supported by this launcher build.");
+        artifact.ValidateOfficial();
 
         string frameworkRoot = Path.GetFullPath(frameworksRoot ?? UmbraInstallStore.FrameworksRoot);
         string downloadRoot = Path.GetFullPath(cacheRoot ?? UmbraInstallStore.FrameworkCacheRoot);
@@ -54,30 +53,84 @@ public static class UmbraFrameworkDownloadService
         ValidateArchive(artifact, archivePath);
 
         string installRoot = UmbraInstallStore.FrameworkInstallRootFor(artifact, frameworkRoot);
-        if (Directory.Exists(installRoot))
-            Directory.Delete(installRoot, true);
+        string stagingRoot = $"{installRoot}.staging-{Guid.NewGuid():N}";
+        UmbraFrameworkInstall install;
+        try
+        {
+            Directory.CreateDirectory(stagingRoot);
+            ExtractZip(archivePath, stagingRoot);
+            ValidateExtractedFiles(artifact, stagingRoot);
 
-        Directory.CreateDirectory(installRoot);
-        ExtractZip(archivePath, installRoot);
+            string stagedBootstrapPath = ResolveInstalledPath(stagingRoot, artifact.BootstrapRelativePath);
+            string stagedFrameworkPath = ResolveInstalledPath(stagingRoot, artifact.FrameworkRelativePath);
+            if (!File.Exists(stagedBootstrapPath))
+                throw new FileNotFoundException(
+                    "Umbra bootstrap DLL was not found after extraction.",
+                    stagedBootstrapPath);
+            if (!File.Exists(stagedFrameworkPath))
+                throw new FileNotFoundException(
+                    "Umbra managed framework entrypoint was not found after extraction.",
+                    stagedFrameworkPath);
 
-        string bootstrapPath = ResolveInstalledPath(installRoot, artifact.BootstrapRelativePath);
-        string frameworkPath = ResolveInstalledPath(installRoot, artifact.FrameworkRelativePath);
-        if (!File.Exists(bootstrapPath))
-            throw new FileNotFoundException("Umbra bootstrap DLL was not found after extraction.", bootstrapPath);
-        if (!File.Exists(frameworkPath))
-            throw new FileNotFoundException("Umbra managed framework entrypoint was not found after extraction.", frameworkPath);
+            if (Directory.Exists(installRoot))
+            {
+                UmbraFrameworkInstall? existing = UmbraInstallStore.TryLoadVerified(installRoot);
+                if (existing is not null
+                    && string.Equals(existing.ArchiveSha256, artifact.Sha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    UmbraFrameworkInstall refreshed = existing with
+                    {
+                        ChannelSequence = Math.Max(existing.ChannelSequence, channelSequence),
+                        SigningKeyId = channelSequence >= existing.ChannelSequence
+                            && !string.IsNullOrWhiteSpace(signingKeyId)
+                                ? signingKeyId
+                                : existing.SigningKeyId
+                    };
+                    if (refreshed != existing)
+                    {
+                        UmbraInstallStore.Save(refreshed);
+                        refreshed.ValidateIntegrity();
+                    }
 
-        UmbraFrameworkInstall install = new(
-            artifact.Name,
-            artifact.Version,
-            artifact.ApiVersion,
-            artifact.PlatformRid,
-            installRoot,
-            bootstrapPath,
-            frameworkPath,
-            artifact.SupportedGameSha256,
-            DateTimeOffset.UtcNow);
-        UmbraInstallStore.Save(install);
+                    Directory.Delete(stagingRoot, true);
+                    return new UmbraFrameworkDownloadResult(refreshed, new[]
+                    {
+                        $"Umbra framework already installed: {refreshed.Name} {refreshed.Version}"
+                    });
+                }
+
+                string quarantine = UmbraInstallStore.CreateFrameworkQuarantinePath(installRoot);
+                Directory.Move(installRoot, quarantine);
+            }
+
+            Directory.Move(stagingRoot, installRoot);
+            string bootstrapPath = ResolveInstalledPath(installRoot, artifact.BootstrapRelativePath);
+            string frameworkPath = ResolveInstalledPath(installRoot, artifact.FrameworkRelativePath);
+            install = new UmbraFrameworkInstall(
+                artifact.Name,
+                artifact.Version,
+                artifact.ApiVersion,
+                artifact.PlatformRid,
+                installRoot,
+                bootstrapPath,
+                frameworkPath,
+                artifact.SupportedGameSha256,
+                DateTimeOffset.UtcNow)
+            {
+                ArchiveSha256 = artifact.Sha256,
+                Files = artifact.VerifiedFiles,
+                ChannelSequence = channelSequence,
+                SigningKeyId = signingKeyId
+            };
+            UmbraInstallStore.Save(install);
+            install.ValidateIntegrity();
+        }
+        catch
+        {
+            if (Directory.Exists(stagingRoot))
+                Directory.Delete(stagingRoot, true);
+            throw;
+        }
 
         progress?.Report(new UmbraFrameworkDownloadProgress(
             $"Umbra framework installed: {artifact.Name} {artifact.Version}",
@@ -88,9 +141,37 @@ public static class UmbraFrameworkDownloadService
         return new UmbraFrameworkDownloadResult(install, new[]
         {
             $"Installed Umbra framework {artifact.Name} {artifact.Version}",
-            $"Umbra bootstrap: {bootstrapPath}",
-            $"Umbra framework: {frameworkPath}"
+            $"Umbra bootstrap: {install.BootstrapPath}",
+            $"Umbra framework: {install.FrameworkPath}"
         });
+    }
+
+    private static void ValidateExtractedFiles(UmbraFrameworkArtifact artifact, string installRoot)
+    {
+        Dictionary<string, UmbraFrameworkFile> expected = artifact.VerifiedFiles.ToDictionary(
+            file => file.Path.Replace('\\', '/'),
+            StringComparer.OrdinalIgnoreCase);
+        string root = Path.GetFullPath(installRoot);
+        foreach (string path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            string relative = Path.GetRelativePath(root, path).Replace('\\', '/');
+            if (!expected.Remove(relative, out UmbraFrameworkFile? file))
+                throw new InvalidDataException($"Umbra framework archive contains an unsigned file: {relative}");
+
+            FileInfo info = new(path);
+            if (info.Length != file.SizeBytes)
+                throw new InvalidDataException($"Umbra framework file size mismatch: {relative}");
+
+            string actual;
+            using (FileStream stream = File.OpenRead(path))
+                actual = Convert.ToHexString(SHA256.HashData(stream));
+            if (!string.Equals(actual, file.Sha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"Umbra framework file hash mismatch: {relative}");
+        }
+
+        if (expected.Count > 0)
+            throw new InvalidDataException(
+                $"Umbra framework archive is missing signed files: {string.Join(", ", expected.Keys)}");
     }
 
     private static async Task DownloadArchiveAsync(

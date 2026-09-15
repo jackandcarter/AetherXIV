@@ -61,6 +61,12 @@ public static class UmbraPluginInstaller
             throw new InvalidDataException($"Umbra plugin package exceeds the {MaximumPackageBytes} byte limit.");
 
         string archivePath = Path.Combine(cacheDirectory, $"{SanitizePathSegment(entry.Id)}-{entry.Version}.zip");
+        if (entry.BuiltIn)
+        {
+            CopyBundledArchive(entry, archivePath);
+            return archivePath;
+        }
+
         string temporaryArchivePath = archivePath + $".{Guid.NewGuid():N}.download";
         try
         {
@@ -89,6 +95,27 @@ public static class UmbraPluginInstaller
             if (File.Exists(temporaryArchivePath))
                 File.Delete(temporaryArchivePath);
         }
+    }
+
+    /// <summary>
+    /// Copies a built-in plugin package from the bundled repository directory
+    /// (resolved from the entry's repository URL) into the package cache, then
+    /// verifies its size and SHA256. The package is the same zip the official
+    /// update service will eventually serve, so verification is identical.
+    /// </summary>
+    private static void CopyBundledArchive(UmbraStoreEntry entry, string archivePath)
+    {
+        string repositoryDirectory = Path.GetDirectoryName(Path.GetFullPath(entry.RepositoryUrl))
+            ?? throw new InvalidDataException($"Umbra built-in entry has no repository directory: {entry.Id}");
+        string repositoryRoot = Path.GetFullPath(repositoryDirectory);
+        string sourcePath = Path.GetFullPath(Path.Combine(repositoryRoot, entry.DownloadUrl));
+        if (!sourcePath.StartsWith(repositoryRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException($"Umbra built-in package path escapes the repository: {entry.DownloadUrl}");
+        if (!File.Exists(sourcePath))
+            throw new FileNotFoundException("Umbra built-in plugin package was not found.", sourcePath);
+
+        File.Copy(sourcePath, archivePath, overwrite: true);
+        ValidateArchive(entry, archivePath);
     }
 
     public static UmbraPluginInstallResult InstallVerifiedArchive(
@@ -125,6 +152,7 @@ public static class UmbraPluginInstaller
                 ?? throw new InvalidDataException("Umbra plugin package must contain umbra-plugin.json or plugin.json at its root.");
             UmbraPluginManifest stagedManifest = UmbraPluginManifest.Load(stagedManifestPath);
             ValidateManifestMatchesEntry(entry, stagedManifest, stagingDirectory);
+            UmbraManagedPluginValidator.ValidatePackage(stagingDirectory, stagedManifest);
             stagedManifest = stagedManifest with
             {
                 InstalledFromUrl = entry.RepositoryUrl,

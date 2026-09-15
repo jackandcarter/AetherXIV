@@ -524,4 +524,3 @@ function onEventStarted(player, npc, triggerName)
     player:EndEvent();
 end
 
-

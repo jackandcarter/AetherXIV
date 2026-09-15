@@ -57,12 +57,15 @@ internal static class ClientProcessLauncher
             Environment.SetEnvironmentVariable("AETHER_UMBRA_HELPER_LOG", options.LogPath);
         }
 
+        TryStartDiscordBridge(options, log);
+
         log?.Invoke("create_process_start=true");
         Stopwatch launchStopwatch = Stopwatch.StartNew();
         StringBuilder mutableCommandLine = new(commandLine, 1024);
         NativeMethods.ProcessCreationFlags creationFlags =
             NativeMethods.ProcessCreationFlags.CREATE_SUSPENDED
             | NativeMethods.ProcessCreationFlags.NORMAL_PRIORITY_CLASS;
+        log?.Invoke("game_priority_class=normal");
         bool success;
         NativeMethods.PROCESS_INFORMATION processInfo;
         if (useLegacyNativePath)
@@ -191,6 +194,71 @@ internal static class ClientProcessLauncher
             if (processInfo.hProcess != IntPtr.Zero)
                 NativeMethods.CloseHandle(processInfo.hProcess);
         }
+    }
+
+    /*
+     * Starts the Wine Discord IPC bridge (AetherXIV.DiscordBridge.exe) when the
+     * native launcher passed the host's Discord socket directory. The bridge
+     * serves \\.\pipe\discord-ipc-0 inside this prefix and relays bytes to
+     * Discord's Unix socket, which is how the in-game Umbra Discord Rich
+     * Presence plugin reaches Discord while the client runs under Wine.
+     *
+     * The bridge detaches itself and marks itself as a Wine system process, so
+     * it keeps running after this helper exits and lives as long as the prefix.
+     * A failure here is not fatal: the plugin retries its pipe connection and
+     * simply logs the failed connect without a bridge.
+     */
+    private static void TryStartDiscordBridge(LaunchOptions options, Action<string>? log)
+    {
+        string? socketDirectory = Environment.GetEnvironmentVariable(
+            DiscordBridgeHost.DiscordIpcDirectoryEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(socketDirectory))
+        {
+            log?.Invoke("discord_bridge_skipped=ipc_dir_unset");
+            return;
+        }
+
+        string bridgePath = Path.Combine(
+            AppContext.BaseDirectory,
+            DiscordBridgeHost.BridgeExecutableFileName);
+        if (!File.Exists(bridgePath))
+        {
+            log?.Invoke($"discord_bridge_skipped=bridge_missing path={bridgePath}");
+            return;
+        }
+
+        NativeMethods.STARTUPINFO startupInfo = new()
+        {
+            cb = (uint)System.Runtime.InteropServices.Marshal.SizeOf<NativeMethods.STARTUPINFO>()
+        };
+        string commandLine = CommandLineArguments.Quote(bridgePath);
+        log?.Invoke($"discord_bridge_start=true path={bridgePath}");
+        log?.Invoke($"discord_bridge_ipc_dir={socketDirectory}");
+        // The bridge is a Win32 console binary (its --probe mode and log lines
+        // write to stdout for CI and diagnostics), so without CREATE_NO_WINDOW
+        // Windows and Wine would give it a console window on every launch. The
+        // launcher already runs its Wine helper with CreateNoWindow=true; this
+        // keeps the bridge consistent and headless.
+        if (!NativeMethods.CreateProcessW(
+                bridgePath,
+                new StringBuilder(commandLine, 512),
+                IntPtr.Zero,
+                IntPtr.Zero,
+                false,
+                NativeMethods.ProcessCreationFlags.NORMAL_PRIORITY_CLASS
+                    | NativeMethods.ProcessCreationFlags.CREATE_NO_WINDOW,
+                IntPtr.Zero,
+                options.WorkingDirectory,
+                ref startupInfo,
+                out NativeMethods.PROCESS_INFORMATION processInfo))
+        {
+            log?.Invoke($"discord_bridge_start_failed={new Win32Exception().Message}");
+            return;
+        }
+
+        log?.Invoke($"discord_bridge_started_pid={processInfo.dwProcessId}");
+        NativeMethods.CloseHandle(processInfo.hThread);
+        NativeMethods.CloseHandle(processInfo.hProcess);
     }
 
     internal static string BuildLegacyNativeCommandLine(string gamePath, GameLaunchToken token) =>

@@ -55,27 +55,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
 
         public SubPacket BuildPacket(uint sourceActorId)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    binWriter.Write((uint)modelID);
-                    for (int i = 0; i < appearanceIDs.Length; i++)
-                    {
-                        binWriter.Write((uint)i);
-                        binWriter.Write((uint)appearanceIDs[i]);
-                    }
-                    
-                    binWriter.Seek(0x100, SeekOrigin.Begin);
-                    binWriter.Write(appearanceIDs.Length);
-                }
-
-            }
-
-            SubPacket packet = new SubPacket(OPCODE, sourceActorId, data);
-            return packet;
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetActorAppearancePacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetActorAppearancePacket(modelID, appearanceIDs));
         }       
 
     }

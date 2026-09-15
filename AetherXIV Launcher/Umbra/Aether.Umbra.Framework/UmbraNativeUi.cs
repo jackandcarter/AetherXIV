@@ -67,6 +67,34 @@ internal static class UmbraNativeUi
     internal static bool Toggle(string label, ref int value) =>
         ToggleNative(label, ref value) != 0;
 
+    internal static bool InputInt(string label, ref int value, int step) =>
+        InputIntNative(label, ref value, step) != 0;
+
+    internal static bool SliderInt(string label, ref int value, int minimum, int maximum) =>
+        SliderIntNative(label, ref value, minimum, maximum) != 0;
+
+    internal static bool SliderFloat(string label, ref float value, float minimum, float maximum) =>
+        SliderFloatNative(label, ref value, minimum, maximum) != 0;
+
+    internal static bool Combo(string label, ref int selectedIndex, IReadOnlyList<string> items)
+    {
+        using MemoryStream buffer = new();
+        foreach (string item in items)
+        {
+            byte[] encoded = Encoding.UTF8.GetBytes(item);
+            buffer.Write(encoded);
+            buffer.WriteByte(0);
+        }
+        buffer.WriteByte(0);
+        return ComboNative(label, ref selectedIndex, buffer.ToArray()) != 0;
+    }
+
+    internal static bool CollapsingHeader(string label, bool defaultOpen) =>
+        CollapsingHeaderNative(label, defaultOpen ? 1 : 0) != 0;
+
+    internal static void ProgressBar(float fraction, string overlay) =>
+        ProgressBarNative(fraction, overlay ?? "");
+
     internal static void SameLine() => SameLineNative();
 
     internal static void Separator() => SeparatorNative();
@@ -108,6 +136,9 @@ internal static class UmbraNativeUi
         SetPluginUpdateCountNative(Math.Max(0, updateCount));
 
     internal static void DrawSettingsContent() => DrawSettingsContentNative();
+
+    internal static void SetManagedDevBridgeOwnership(bool managedOwnsBridge) =>
+        SetManagedDevBridgeOwnershipNative(managedOwnsBridge ? 1 : 0);
 
     [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiBeginWindow", CallingConvention = CallingConvention.StdCall)]
     private static extern int BeginWindowNative(
@@ -158,6 +189,42 @@ internal static class UmbraNativeUi
     private static extern int ToggleNative(
         [MarshalAs(UnmanagedType.LPUTF8Str)] string label,
         ref int value);
+
+    [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiInputInt", CallingConvention = CallingConvention.StdCall)]
+    private static extern int InputIntNative(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string label,
+        ref int value,
+        int step);
+
+    [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiSliderInt", CallingConvention = CallingConvention.StdCall)]
+    private static extern int SliderIntNative(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string label,
+        ref int value,
+        int minimum,
+        int maximum);
+
+    [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiSliderFloat", CallingConvention = CallingConvention.StdCall)]
+    private static extern int SliderFloatNative(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string label,
+        ref float value,
+        float minimum,
+        float maximum);
+
+    [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiCombo", CallingConvention = CallingConvention.StdCall)]
+    private static extern int ComboNative(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string label,
+        ref int selectedIndex,
+        [In] byte[] items);
+
+    [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiCollapsingHeader", CallingConvention = CallingConvention.StdCall)]
+    private static extern int CollapsingHeaderNative(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string label,
+        int defaultOpen);
+
+    [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiProgressBar", CallingConvention = CallingConvention.StdCall)]
+    private static extern void ProgressBarNative(
+        float fraction,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string overlay);
 
     [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiSameLine", CallingConvention = CallingConvention.StdCall)]
     private static extern void SameLineNative();
@@ -216,4 +283,7 @@ internal static class UmbraNativeUi
 
     [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiDrawSettingsContent", CallingConvention = CallingConvention.StdCall)]
     private static extern void DrawSettingsContentNative();
+
+    [DllImport(BootstrapLibrary, EntryPoint = "UmbraDevBridgeSetManagedOwnership", CallingConvention = CallingConvention.StdCall)]
+    private static extern void SetManagedDevBridgeOwnershipNative(int managedOwnsBridge);
 }

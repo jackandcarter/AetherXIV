@@ -355,6 +355,30 @@ namespace AetherXIV.Core.Map
             return luaParams;
         }
 
+        /// <summary>
+        /// Builds the argument vector used by RunEventFunction. Retail 1.23b
+        /// delegateEvent calls retain a seven-value stack frame even when the
+        /// delegated client function has no optional arguments; the unused
+        /// positions are explicit nil values before the list terminator.
+        /// </summary>
+        public static List<LuaParam> CreateRunEventFunctionParamList(
+            string functionName,
+            params object[] list)
+        {
+            List<LuaParam> luaParams = CreateLuaParamList(list);
+
+            if (String.Equals(
+                functionName,
+                "delegateEvent",
+                StringComparison.Ordinal))
+            {
+                while (luaParams.Count < 7)
+                    luaParams.Add(new LuaParam(0x5, null));
+            }
+
+            return luaParams;
+        }
+
         private static void AddToList(DynValue d, List<LuaParam> luaParams)
         {
             if (d.Type == DataType.Number)

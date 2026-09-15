@@ -410,9 +410,15 @@ namespace AetherXIV.Core.Map.actors.chara.ai
 
         public void InternalMobSkill(Character target, uint mobSkillId)
         {
+            if (owner is Player && ((Player)owner).GetMountState() != 0)
+                return;
             if (CanChangeState())
             {
-
+                var command = Server.GetWorldManager().GetBattleCommand((ushort)mobSkillId);
+                if (command != null)
+                {
+                    ChangeState(new WeaponSkillState(owner, target, (ushort)mobSkillId));
+                }
             }
         }
 

@@ -23,7 +23,7 @@ namespace AetherXIV.Core.Map.actors.director
 
         public bool UsesTraceRestoredContent
         {
-            get { return guildleveId == 12487 && zone.actorId == 162; }
+            get { return guildleveId == 12487 && zone.GetTerritoryId() == 162; }
         }
 
         public GuildleveDirector(uint id, Area zone, string directorPath, uint guildleveId, byte selectedDifficulty, Player guildleveOwner, params object[] args)
@@ -86,7 +86,7 @@ namespace AetherXIV.Core.Map.actors.director
             DevDiagnostics.Trace(
                 "guildleve.content.loaded",
                 "guildleveId", guildleveId,
-                "zone", zone.actorId,
+                "zone", zone.GetTerritoryId(),
                 "director", String.Format("0x{0:X}", actorId),
                 "groupType", contentGroup == null ? 0 : contentGroup.GetTypeId(),
                 "memberCount", contentGroup == null ? 0 : contentGroup.GetMemberCount(),
@@ -116,7 +116,7 @@ namespace AetherXIV.Core.Map.actors.director
                 DevDiagnostics.Trace(
                     "guildleve.content.spawnFailed",
                     "guildleveId", guildleveId,
-                    "zone", zone.actorId,
+                    "zone", zone.GetTerritoryId(),
                     "classId", classId,
                     "uniqueId", uniqueId);
                 return;

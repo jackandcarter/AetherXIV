@@ -13,27 +13,82 @@ namespace AetherXIV.Core.Map.actors.area
         private new uint privateAreaType;
 
         public PrivateArea(Zone parent, uint id, string classPath, string privateAreaName, uint privateAreaType, ushort bgmDay, ushort bgmNight, ushort bgmBattle)
-            : base(id, parent.zoneName, parent.regionId, classPath, bgmDay, bgmNight, bgmBattle, parent.isIsolated, parent.isInn, parent.canRideChocobo, parent.canStealth, true)
+            : base(
+                parent.GetTerritoryId(),
+                NativeActorId.ComposeNonPlayer(parent.GetTerritoryId(), 1),
+                parent.GetTerritoryId(),
+                false,
+                parent.zoneName,
+                parent.regionId,
+                classPath,
+                bgmDay,
+                bgmNight,
+                bgmBattle,
+                parent.isIsolated,
+                parent.isInn,
+                parent.canRideChocobo,
+                parent.canStealth,
+                true)
         {
             this.parentZone = parent;
             this.zoneName = parent.zoneName;
             this.privateAreaName = privateAreaName;
             this.privateAreaType = privateAreaType;
+            this.actorName = string.Format(
+                "_areaMaster@{0:X3}{1:X2}",
+                parent.GetTerritoryId(),
+                privateAreaType);
         }
 
-        public string GetPrivateAreaName()
+        public override string GetPrivateAreaName()
         {
             return privateAreaName;
         }
 
-        public uint GetPrivateAreaType()
+        public override uint GetPrivateAreaType()
         {
             return privateAreaType;
+        }
+
+        public override bool IsPublic()
+        {
+            return false;
         }
 
         public Zone GetParentZone()
         {
             return parentZone;
+        }
+
+        internal uint ReserveStaticActorNumber(SpawnLocation spawn)
+        {
+            uint actorNumber = parentZone.ReservePrivateStaticActorNumber(
+                spawn.spawnId,
+                privateAreaName,
+                privateAreaType,
+                spawn.uniqueId);
+            return ReserveCompatibilityActorSlot(
+                actorNumber,
+                System.String.Format(
+                    "private-static:{0}:{1}",
+                    spawn.spawnId,
+                    spawn.uniqueId));
+        }
+
+        internal uint AllocateTransientActorNumber(string uniqueId)
+        {
+            uint actorNumber = parentZone.AllocatePrivateTransientActorNumber(
+                privateAreaName,
+                privateAreaType,
+                uniqueId);
+            return ReserveCompatibilityActorSlot(
+                actorNumber,
+                "private-transient");
+        }
+
+        internal void ReleaseTransientActorNumberFromParent(uint actorNumber)
+        {
+            parentZone.ReleasePrivateTransientActorNumber(actorNumber);
         }
 
         public override SubPacket CreateScriptBindPacket()
@@ -45,8 +100,18 @@ namespace AetherXIV.Core.Map.actors.area
             string realClassName = className.Substring(className.LastIndexOf("/") + 1);
 
             lParams = LuaUtils.CreateLuaParamList(classPath, false, true, zoneName, privateAreaName, privateAreaType, canRideChocobo ? (byte)1 : (byte)0, canStealth, isInn, false, false, false, false, false, false);
-            ActorInstantiatePacket.BuildPacket(actorId, actorName, realClassName, lParams).DebugPrintSubPacket();
-            return ActorInstantiatePacket.BuildPacket(actorId, actorName, realClassName, lParams);
+            ActorInstantiatePacket.BuildPacket(
+                actorId,
+                actorName,
+                realClassName,
+                lParams,
+                GetActorInstantiationAreaKey()).DebugPrintSubPacket();
+            return ActorInstantiatePacket.BuildPacket(
+                actorId,
+                actorName,
+                realClassName,
+                lParams,
+                GetActorInstantiationAreaKey());
         }
 
 

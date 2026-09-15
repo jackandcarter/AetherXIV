@@ -4,6 +4,7 @@ require("quest")
 
 ENABLE_GL_TUTORIAL = false;
 
+SEQ_000 = 0;
 SEQ_005 = 5;
 SEQ_010 = 10;
 SEQ_012 = 12;
@@ -25,6 +26,14 @@ SEQ_100 = 100;
 SEQ_105 = 105;
 
 MIOUNNE = 1000230;
+VKOROLON = 1000458;
+WISPILY_WHISKERED_WOODWORKER = 1000562;
+AMIABLE_ADVENTURER = 1001057;
+MOROSE_MERCHANT = 1001058;
+NARROW_EYED_ADVENTURER = 1001059;
+WELL_BUNDLED_ADVENTURER = 1001060;
+BEAMING_ADVENTURER = 1001062;
+UNCONCERNED_PASSERBY = 1001648;
 HEREWARD = 1000231;
 SOILEINE = 1700030;
 CONJURERS_BRIDGE = 1099046;
@@ -120,10 +129,34 @@ function isObjectivesComplete(player, quest)
 	return false;
 end
 
+function onStart(player, quest)
+	quest:StartSequence(SEQ_000);
+	callClientFunction(player, "delegateEvent", player, quest, "processEvent100");
+	player:EndEvent();
+	GetWorldManager():DoZoneChange(player, 155, "PrivateAreaMasterPast", 2, 15,
+		67.034, 4, -1205.6497, -1.074);
+end
+
+function onNotice(player, quest, target)
+	if (quest:GetSequence() == SEQ_005) then
+		-- Open the linkpearl tutorial widget from the notice coroutine via
+		-- the coroutine-capable client-function path (the direct
+		-- RunEventFunction call bypasses the event waiter that owns the
+		-- response transaction), then close the notice session. The widget
+		-- lives beyond the event; the later NPC-linkshell click owns
+		-- tutorial completion.
+		callClientFunction(player, "delegateEvent", player, quest, "processEventTu_001");
+		player:EndEvent();
+		quest:UpdateENPCs();
+	end
+end
+
 function onStateChange(player, quest, sequence)
-	-- Phase 5 still exits the confirmed Canopy private-area handler. Quest
-	-- ownership begins after Bentbranch so it cannot steal that exit event.
-	if (sequence == SEQ_010 or sequence == SEQ_012) then
+	-- Phase 5 is the post-Bentbranch return at the Canopy Roost. Miounne
+	-- remains the quest ENPC while the separate Linkpearl tutorial is shown.
+	if (sequence == SEQ_005) then
+		quest:SetENpc(MIOUNNE);
+	elseif (sequence == SEQ_010 or sequence == SEQ_012) then
 		quest:SetENpc(MIOUNNE, QFLAG_TALK);
 	elseif (sequence == SEQ_015) then
 		local data = quest:GetData();

@@ -22,6 +22,7 @@ namespace AetherXIV.Core.Lobby
         static int Main(string[] args)
         {
             Environment.CurrentDirectory = AppContext.BaseDirectory;
+            AetherXivRuntimePaths.ConfigureLogDirectory("lobby");
             // set up logging
             Log = LogManager.GetCurrentClassLogger();
 #if DEBUG
@@ -33,7 +34,10 @@ namespace AetherXIV.Core.Lobby
 
             Log.Info("==================================");
             Log.Info("AetherXIV Core v2.0: Lobby Server");
-            Log.Info("Version: 2.0 (build 21991)");
+            Log.Info(
+                "Version: {0} (build {1})",
+                global::AetherXIV.Core.AetherXivBuildInfo.ProductVersion,
+                global::AetherXIV.Core.AetherXivBuildInfo.BuildNumber);
             Log.Info("==================================");
 
             try

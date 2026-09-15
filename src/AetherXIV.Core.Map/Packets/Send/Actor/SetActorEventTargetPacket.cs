@@ -17,9 +17,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
 
         public static SubPacket BuildPacket(uint sourceActorId, uint targetActorId)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-            Buffer.BlockCopy(BitConverter.GetBytes(targetActorId), 0, data, 0, sizeof(uint));
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetActorEventTargetPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetActorEventTargetPacket(targetActorId));
         }
     }
 }

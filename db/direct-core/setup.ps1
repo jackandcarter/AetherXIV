@@ -93,6 +93,13 @@ function Get-LineEndingChecksums([string]$Path) {
     }
     finally { $sha.Dispose() }
 }
+function Test-AcceptedHistoricMigrationChecksum([string]$Name, [string]$Checksum) {
+    # 000036 was briefly packaged with Limsa's area at id 16 before the
+    # immutable 000037 repair was added. Accept only that exact revision so
+    # it can advance in place; all other migration checksums remain strict.
+    return $Name -eq "20260913_000036_limsa_mini_aetherytes_and_man0l1_escort.sql" `
+        -and $Checksum.ToLowerInvariant() -eq "239bc2af9020040049c86e3ac9797ac93d5a2c65048abaa8e3f2216051e67762"
+}
 function Connection-Args([string]$User, [string]$Password) {
     $result = @("-h", $dbHost, "-P", $dbPort, "-u", $User)
     if ($Password) { $result += "-p$Password" }
@@ -230,21 +237,25 @@ function Export-PlayerData([string]$Path, [string[]]$Tables) {
 function Test-Database {
     $schema = Sql-Literal $dbName
     $required = @("users", "sessions", "servers", "characters", "characters_appearance",
-        "characters_quest_scenario", "characters_quest_completed", "characters_hotbar", "server_sessions",
+        "characters_quest_scenario", "characters_quest_completed", "characters_hotbar", "characters_snpc", "gamedata_quests", "server_sessions",
         "server_zones", "server_zones_privateareas", "server_battlenpc_spawn_locations", "server_battlenpc_groups", "server_battlenpc_pools",
-        "server_battle_commands", "server_player_base_stats", "characters_class_attributes", "server_battlenpc_spawn_audit_pins",
+        "server_battle_commands", "server_battlenpc_skill_list", "server_battlenpc_spell_list", "server_battlenpc_mob_skill_list",
+        "server_player_base_stats", "characters_class_attributes", "server_battlenpc_spawn_audit_pins",
         "server_spawn_locations", "gamedata_actor_class", "gamedata_actor_appearance", "server_items_modifiers",
         "characters_inventory", "characters_chocobo", "server_npc_spawn_evidence", "server_npc_spawn_evidence_catalog",
         "aether_database_compatibility",
-        "launcher_config", "launcher_config_plugin_catalogs", "launcher_status", "launcher_news", "launcher_patch_files",
-        "launcher_presentation", "launcher_reel_text", "launcher_runtime_artifacts", "launcher_umbra_framework_artifacts",
-        "launcher_umbra_plugin_repositories", "launcher_umbra_plugins", "launcher_umbra_plugin_blocks")
+        "launcher_config", "launcher_status", "launcher_news", "launcher_patch_files",
+        "launcher_presentation", "launcher_reel_text", "launcher_runtime_artifacts")
     $missing = @()
     foreach ($table in $required) {
         $count = Invoke-Query $appArgs "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$schema' AND table_name='$table'"
         if ($count -ne "1") { $missing += $table }
     }
     if ($missing.Count) { throw "Database schema is incomplete: $($missing -join ', ')" }
+    $orphanedPrivateAreaSpawns = Invoke-Query $appArgs "SELECT COUNT(*) FROM server_spawn_locations s LEFT JOIN server_zones_privateareas p ON p.parentZoneId=s.zoneId AND p.privateAreaName=s.privateAreaName AND p.privateAreaType=s.privateAreaLevel WHERE s.privateAreaName<>'' AND p.id IS NULL" $dbName
+    if ($orphanedPrivateAreaSpawns -ne "0") {
+        throw "Private-area spawn contract mismatch: $orphanedPrivateAreaSpawns static actor spawn(s) target an undeclared area instance."
+    }
     $obsoleteTables = Invoke-Query $appArgs "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('server_battlenpc_appearance_audit','server_battlenpc_restoration_evidence','client_decoded_display_name_stage','client_decoded_actor_graphic_stage','client_decoded_actor_class_stage','client_decode_import_batches')" $dbName
     if ($obsoleteTables -ne "0") { throw "Database still contains $obsoleteTables obsolete development tables." }
     $zones = Invoke-Query $appArgs "SELECT COUNT(*) FROM server_zones" $dbName
@@ -254,6 +265,10 @@ function Test-Database {
     $classJobColumns = Invoke-Query $appArgs "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='characters' AND column_name='currentJob'" $dbName
     if ([int]$zones -eq 0 -or [int]$commands -eq 0 -or [int]$stats -eq 0 -or $launcherColumns -ne "3" -or $classJobColumns -ne "1") {
         throw "Database seed/launcher verification failed."
+    }
+    $launcherNewsContract = Invoke-Query $appArgs "SELECT CONCAT((SELECT COUNT(*) FROM launcher_news WHERE title IN ('Echo Gate service installed','AetherXIV 2.0 local stack','AetherXIV 2.1 local stack')),':',(SELECT COUNT(*) FROM launcher_news WHERE title='AetherXIV 2.1 Update' AND summary='Update Complete' AND SHA2(body,256)='51cdaec9c643661e054e6bb47793f91a8c14720ef4ce2c02b616176ea61f012c' AND published_at='2026-09-15 01:28:39' AND is_active=1 AND sort_order=0 AND title_color='#8FC9FF' AND summary_color='#FFD37A' AND body_color='#D2A8FF' AND created_at='2026-09-14 20:37:20'))" $dbName
+    if ($launcherNewsContract -ne "0:1") {
+        throw "Launcher news contract mismatch: $launcherNewsContract"
     }
     $npcServiceContract = Invoke-Query $appArgs "SELECT CONCAT(COUNT(*),':',COALESCE(MAX(version),''),':',COALESCE(MAX(contentHashSha256),''),':',COALESCE(MAX(recordCount),0)) FROM server_npc_spawn_evidence_catalog WHERE catalogId='zone-service-npcs-1.23b'" $dbName
     if ($npcServiceContract -ne "1:2026.07.19.1:f40276dea0ce6739b40d0dca3dc44f665ee525646851592a9439d5013f97b8de:23") {
@@ -271,17 +286,25 @@ function Test-Database {
     if ($gridaniaMan0g1GuildContract -ne "1:8:12") {
         throw "Gridania Man0g1 guild contract mismatch: $gridaniaMan0g1GuildContract"
     }
+    $limsaMusketeersEchoContract = Invoke-Query $appArgs "SELECT CONCAT((SELECT COUNT(*) FROM server_zones_privateareas WHERE id=17 AND parentZoneId=230 AND privateAreaName='PrivateAreaMasterPast' AND privateAreaType=3 AND dayMusic=40),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE id BETWEEN 1060 AND 1070 AND zoneId=230 AND privateAreaName='PrivateAreaMasterPast' AND privateAreaLevel=3))" $dbName
+    if ($limsaMusketeersEchoContract -ne "1:11") {
+        throw "Limsa Man0l1 Musketeers echo contract mismatch: $limsaMusketeersEchoContract"
+    }
+    $nativeActorSlotContract = Invoke-Query $appArgs "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='server_spawn_locations' AND column_name='nativeActorSlot'),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE zoneId=155 AND privateAreaName='' AND privateAreaLevel=0 AND nativeActorSlot IS NOT NULL),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE zoneId=206 AND privateAreaName='' AND privateAreaLevel=0 AND nativeActorSlot IS NOT NULL),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE zoneId=244 AND privateAreaName='' AND privateAreaLevel=0 AND nativeActorSlot IS NOT NULL),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE id=587 AND nativeActorSlot=8),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE id IN (589,590) AND nativeActorSlot IN (53,54)),':',(SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='server_spawn_locations' AND index_name='uq_server_spawn_native_slot'))" $dbName
+    if ($nativeActorSlotContract -ne "1:46:103:5:1:2:4") {
+        throw "Native actor-slot contract mismatch: $nativeActorSlotContract"
+    }
     $contract = Invoke-Query $appArgs "SELECT CONCAT(schema_generation,':',schema_version,':',compatibility_id,':',baseline_id) FROM aether_database_compatibility WHERE compatibility_key='direct-core' LIMIT 1" $dbName
-    if ($contract -ne "2:1:aetherxiv-direct-core-v2:20260716_000001_ffxiv_server_v2_baseline") {
+    if ($contract -ne "2:2:aetherxiv-direct-core-v2:20260716_000001_ffxiv_server_v2_baseline") {
         throw "Database compatibility mismatch: $contract"
     }
-    Write-Host "AetherXIV 2.0 database verified: $dbName (zones=$zones commands=$commands baseStats=$stats)"
+    Write-Host "AetherXIV 2.1 database verified: $dbName (zones=$zones commands=$commands baseStats=$stats)"
 }
 
 function Test-CurrentV2Contract {
     $compatibilityTable = Invoke-Query $adminArgs "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$dbLiteral' AND table_name='aether_database_compatibility'"
     if ($compatibilityTable -ne "1") { return $false }
-    $contract = Invoke-Query $adminArgs "SELECT COUNT(*) FROM aether_database_compatibility WHERE compatibility_key='direct-core' AND schema_generation=2 AND schema_version=1 AND compatibility_id='aetherxiv-direct-core-v2' AND baseline_id='20260716_000001_ffxiv_server_v2_baseline'" $dbName
+    $contract = Invoke-Query $adminArgs "SELECT COUNT(*) FROM aether_database_compatibility WHERE compatibility_key='direct-core' AND schema_generation=2 AND schema_version=2 AND compatibility_id='aetherxiv-direct-core-v2' AND baseline_id='20260716_000001_ffxiv_server_v2_baseline'" $dbName
     return $contract -eq "1"
 }
 
@@ -297,6 +320,9 @@ $passLiteral = Sql-Literal $appPass
 $exists = Invoke-Query $adminArgs "SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='$dbLiteral'"
 $script:LastBackupPath = ""
 $script:OriginalBackupPath = if ($env:AETHERXIV_ORIGINAL_BACKUP_PATH) { $env:AETHERXIV_ORIGINAL_BACKUP_PATH } else { "" }
+$script:PlayerDataToRestore = ""
+$script:PlayerUsersBefore = "0"
+$script:PlayerCharactersBefore = "0"
 $baselineImported = $false
 
 if (-not $MigrateOnly -and -not $Drop -and -not $CleanMigrate -and $exists -eq "1" -and -not (Test-CurrentV2Contract)) {
@@ -353,27 +379,12 @@ else {
         }
 
         if ($canRestorePlayers) {
-            try {
-                Invoke-SqlFile $playerData $dbName
-                $usersAfter = Invoke-Query $adminArgs "SELECT COUNT(*) FROM users" $dbName
-                $charactersAfter = Invoke-Query $adminArgs "SELECT COUNT(*) FROM characters" $dbName
-                if ($usersBefore -ne $usersAfter -or $charactersBefore -ne $charactersAfter) {
-                    throw "Player migration count mismatch."
-                }
-                Write-Host "Migrated $usersAfter accounts and $charactersAfter characters into the AetherXIV 2 baseline. Player-data copy: $playerData"
-            }
-            catch {
-                Write-Warning "Player data was incompatible with the canonical schema; keeping the fresh database. The full backup and player-data copy are retained."
-                try {
-                    [void](Invoke-Query $adminArgs "DROP DATABASE IF EXISTS ``$dbId``; CREATE DATABASE ``$dbId`` CHARACTER SET utf8 COLLATE utf8_general_ci")
-                    Invoke-SqlFile $baseline $dbName
-                }
-                catch {
-                    Write-Warning "Fresh database recovery failed; restoring the untouched full backup."
-                    Restore-OriginalDatabase
-                    throw
-                }
-            }
+            # Player dumps can contain columns introduced by ordered migrations
+            # (for example characters.currentJob). Do not import them into the
+            # baseline: defer restore until the schema ledger is fully applied.
+            $script:PlayerDataToRestore = $playerData
+            $script:PlayerUsersBefore = $usersBefore
+            $script:PlayerCharactersBefore = $charactersBefore
         }
         $baselineImported = $true
         Write-Host "Canonical AetherXIV 2 database installed. Full backup: $script:LastBackupPath"
@@ -439,7 +450,8 @@ try {
         $hash = (Get-FileHash -Algorithm SHA256 $migration.FullName).Hash.ToLowerInvariant()
         $recorded = Invoke-Query $adminArgs "SELECT checksum_sha256 FROM aether_schema_migrations WHERE migration_name='$($migration.Name)' LIMIT 1" $dbName
         if ($recorded) {
-            if (@(Get-LineEndingChecksums $migration.FullName) -notcontains $recorded.ToLowerInvariant()) {
+            if (@(Get-LineEndingChecksums $migration.FullName) -notcontains $recorded.ToLowerInvariant() `
+                -and -not (Test-AcceptedHistoricMigrationChecksum $migration.Name $recorded)) {
                 throw "Migration checksum mismatch: $($migration.Name)"
             }
             continue
@@ -447,6 +459,23 @@ try {
         Write-Host "Applying $($migration.Name)"
         Invoke-SqlFile $migration.FullName $dbName
         [void](Invoke-Query $adminArgs "INSERT INTO aether_schema_migrations (migration_name,checksum_sha256) VALUES ('$($migration.Name)','$hash')" $dbName)
+    }
+
+    if ($script:PlayerDataToRestore) {
+        try {
+            Invoke-SqlFile $script:PlayerDataToRestore $dbName
+            $usersAfter = Invoke-Query $adminArgs "SELECT COUNT(*) FROM users" $dbName
+            $charactersAfter = Invoke-Query $adminArgs "SELECT COUNT(*) FROM characters" $dbName
+            if ($script:PlayerUsersBefore -ne $usersAfter -or $script:PlayerCharactersBefore -ne $charactersAfter) {
+                throw "Player migration count mismatch."
+            }
+            Write-Host "Migrated $usersAfter accounts and $charactersAfter characters into the migrated AetherXIV 2 schema. Player-data copy: $script:PlayerDataToRestore"
+        }
+        catch {
+            Write-Warning "Player data was incompatible with the migrated canonical schema; restoring the untouched full backup. The full backup and player-data copy are retained."
+            Restore-OriginalDatabase
+            throw
+        }
     }
 
     Test-Database

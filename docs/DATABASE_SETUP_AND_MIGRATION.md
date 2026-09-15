@@ -54,7 +54,7 @@ Setup handles each state explicitly:
 | Existing state | Action |
 |---|---|
 | Database absent | Create the database and restricted application account, then install and verify AetherXIV 2 |
-| Empty database or pre-2.0 database | Keep a full backup, recreate the canonical database, and try to restore compatible account/character data |
+| Empty or legacy database | Keep a full backup, recreate the canonical database, and try to restore compatible account/character data |
 | Valid AetherXIV 2 database | Check the migration ledger, apply missing migrations, and verify required tables, columns, and seeds |
 | Damaged or incomplete AetherXIV 2 database | Keep a full backup, rebuild the canonical schema, and try to restore compatible account/character data |
 
@@ -86,6 +86,28 @@ Run normal setup or apply pending migrations:
 The shell script accepts configuration through `AETHERXIV_DB_*` environment
 variables. Run either script with its help option before using destructive or
 clean-migration modes.
+
+### Resetting an account's characters for a clean test pass
+
+The `Database` folder also includes `reset-account-characters.sh` and
+`reset-account-characters.ps1`. They use the same soft-delete transition as
+the Lobby (`characters.state = 1`), preserve character-owned rows for recovery,
+and refuse to operate while an affected character has a live session.
+
+First inspect the scope:
+
+```bash
+./reset-account-characters.sh --account-id 123
+```
+
+After logging every affected character out, apply explicitly:
+
+```bash
+./reset-account-characters.sh --account-id 123 --apply --yes
+```
+
+On Windows, use `./reset-account-characters.ps1 -AccountId 123` and append
+`-Apply -Yes` only after reviewing the dry run.
 
 ## Backups and clean migration
 
@@ -120,7 +142,7 @@ migration by adding a new migration with a later name.
   verify the configured application password.
 - **Checksum mismatch:** restore the original release database package; do not
   bypass the check.
-- **Pre-2.0 or damaged database:** use Core's backed-up canonical repair. Review the
+- **Legacy or damaged database:** use Core's backed-up canonical repair. Review the
   retained backup if automatic player-data restoration was not possible.
 - **Port already in use:** determine whether another MariaDB instance owns port
   `3306`, then change the configured port consistently if required.

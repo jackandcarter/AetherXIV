@@ -25,9 +25,9 @@
     <Title>AetherXIV Core</Title>
     <Product>AetherXIV Core</Product>
     <ApplicationTitle>AetherXIV Core</ApplicationTitle>
-    <Version>2.0.0</Version>
-    <AssemblyVersion>2.0.0.0</AssemblyVersion>
-    <FileVersion>2.0.0.0</FileVersion>
+    <Version>2.1.0</Version>
+    <AssemblyVersion>2.1.0.0</AssemblyVersion>
+    <FileVersion>2.1.0.0</FileVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <UseAppHost>true</UseAppHost>

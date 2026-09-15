@@ -116,6 +116,7 @@ public sealed class UmbraThirdPartyPluginHost : IDisposable
         }
 
         string assemblyPath = ResolveEntryAssembly(manifest);
+        UmbraManagedPluginValidator.ValidateEntryAssembly(assemblyPath);
         UmbraPluginLoadContext loadContext = new(assemblyPath);
         LoadedPlugin candidate = new(manifest, loadContext)
         {

@@ -8,6 +8,8 @@ namespace AetherXIV.Core.Map.Actors
     {
         private readonly Quest quest;
 
+        public bool Dirty { get; private set; }
+
         public QuestData(Quest quest)
         {
             this.quest = quest;
@@ -15,10 +17,38 @@ namespace AetherXIV.Core.Map.Actors
 
         public uint GetFlags() => quest.GetQuestFlags();
         public bool GetFlag(int bitIndex) => quest.GetQuestFlag(bitIndex);
-        public void SetFlag(int bitIndex) => quest.SetQuestFlag(bitIndex, true);
-        public void ClearFlag(int bitIndex) => quest.SetQuestFlag(bitIndex, false);
+        public void SetFlag(int bitIndex)
+        {
+            quest.SetQuestFlag(bitIndex, true);
+            Dirty = true;
+        }
+
+        public void ClearFlag(int bitIndex)
+        {
+            quest.SetQuestFlag(bitIndex, false);
+            Dirty = true;
+        }
+
         public uint GetCounter(int counterIndex) => quest.GetCounter(counterIndex);
-        public void SetCounter(int counterIndex, uint value) => quest.SetCounter(counterIndex, value);
+
+        public void SetCounter(int counterIndex, uint value)
+        {
+            quest.SetCounter(counterIndex, value);
+            Dirty = true;
+        }
+
+        public void SetTimeNow()
+        {
+            quest.SetQuestData("time", AetherXIV.Core.Common.Utils.UnixTimeStampUTC());
+            quest.SaveData();
+            Dirty = true;
+        }
+
+        public uint GetTime()
+        {
+            object value = quest.GetQuestData("time");
+            return value == null ? 0u : System.Convert.ToUInt32(value);
+        }
 
         public uint IncCounter(int counterIndex)
         {
@@ -38,6 +68,11 @@ namespace AetherXIV.Core.Map.Actors
         {
             quest.ClearQuestData();
             quest.ClearQuestFlags();
+        }
+
+        public void ClearDirty()
+        {
+            Dirty = false;
         }
     }
 }

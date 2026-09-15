@@ -1,4 +1,4 @@
-# Optional AetherXIV 2.0 Docker server
+# Optional AetherXIV 2.1 Docker server
 
 Docker is an optional headless server deployment intended primarily for a Linux
 VPS or container host. It is not the supported desktop build, server-management,
@@ -144,10 +144,11 @@ docker compose logs --follow server
 ```
 
 On startup, the new image classifies the database using the same package as the
-native Core UI. It creates a missing database, rebuilds an empty or pre-2.0
-database after a full backup, applies missing migrations to a valid 2.0
-database, and backs up/rebuilds a damaged 2.0 schema. Compatible account and
-character rows are restored on a best-effort, count-verified basis.
+native Core UI. It creates a missing database, rebuilds an empty or legacy
+database after a full backup, applies missing migrations only when the installed
+ledger and checksums are compatible with the 2.1 package, and backs up/rebuilds
+a damaged schema. Compatible account and character rows are restored on a
+best-effort, count-verified basis.
 
 ## Building one image for both CPU architectures
 
@@ -157,12 +158,12 @@ Release maintainers can publish a multi-platform manifest with Buildx:
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   --file Dockerfile.server \
-  --tag ghcr.io/OWNER/aetherxiv-server:2.0 \
+  --tag ghcr.io/OWNER/aetherxiv-server:2.1.22042 \
   --push \
   .
 ```
 
-Consumers can then replace `aetherxiv/server:2.0` in `compose.yaml` with the
+Consumers can then replace `aetherxiv/server:2.1.22042` in `compose.yaml` with the
 published image and omit the `build` section if they should never build from
 source.
 

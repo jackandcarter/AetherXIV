@@ -6,8 +6,8 @@ function onEventStarted(player, npc, triggerName)
 	
 	if (triggerName == "talkDefault") then		
 		if (man0g0Quest:GetQuestFlag(MAN0G0_FLAG_MINITUT_DONE1) == false) then
-			callClientFunction(player, "delegateEvent", player, man0g0Quest, "processEvent000_3", nil, nil, nil);
-			man0g0Quest:SetQuestFlag(MAN0G0_FLAG_MINITUT_DONE1, true);				
+		callClientFunction(player, "delegateEvent", player, man0g0Quest, "processEvent000_3", nil, nil, nil);
+		man0g0Quest:SetQuestFlag(MAN0G0_FLAG_MINITUT_DONE1, true);				
 			man0g0Quest:SaveData();			
 			npc:SetQuestGraphic(player, 0x0);
 			player:GetDirector("OpeningDirector"):onTalkEvent(player, npc);	

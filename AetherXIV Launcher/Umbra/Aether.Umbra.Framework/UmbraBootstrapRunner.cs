@@ -31,8 +31,6 @@ public static class UmbraBootstrapRunner
             log.Info($"umbra_dev_bridge_dir={options.DevBridgeDirectory}");
             log.Info($"umbra_dev_bridge_control={options.DevBridgeControlPath}");
             log.Info($"umbra_safe_mode={options.SafeMode}");
-            log.Info($"umbra_repository_urls={string.Join(";", options.RepositoryUrls)}");
-            log.Info($"umbra_repository_source_count={options.RepositorySources.Count}");
             log.Info("umbra_host_mode=in_process");
             log.Info("umbra_dx9_hook_installed=false");
             log.Info("umbra_imgui_backend_ready=false");

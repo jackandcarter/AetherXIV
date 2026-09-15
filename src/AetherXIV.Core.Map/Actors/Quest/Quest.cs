@@ -1,37 +1,61 @@
 ﻿using AetherXIV.Core.Common;
 using AetherXIV.Core.Map.lua;
+using AetherXIV.Core.Map.packets.receive.events;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using AetherXIV.Core.Map.actors.chara.npc;
-using AetherXIV.Core.Map.packets.receive.events;
+using AetherXIV.Core.Map.actors.director;
 
 namespace AetherXIV.Core.Map.Actors
 {
     class Quest : Actor
     {
+        public const uint SEQ_NOT_STARTED = 65535;
+        public const uint SEQ_COMPLETED = 65534;
+
         private Player owner;
         private uint currentPhase = 0;
         private uint questFlags = 0;
         private Dictionary<string, Object> questData = new Dictionary<string, object>();
-        private readonly Dictionary<uint, QuestENpc> activeENpcs = new Dictionary<uint, QuestENpc>();
-        private Dictionary<uint, QuestENpc> previousENpcs = new Dictionary<uint, QuestENpc>();
+        private QuestState questState;
         private QuestData scriptData;
-        private bool stateInitialized;
-        private bool forceAreaPresentationRefresh;
+        private bool hasData;
+        private bool isUpdating;
 
         public Quest(uint actorID, string name)
             : base(actorID)
         {
             actorName = name;
             scriptData = new QuestData(this);
+            questState = new QuestState(null, this);
         }
 
-        public Quest(Player owner, uint actorID, string name, string questDataJson, uint questFlags, uint currentPhase)
-            : base(actorID)
+        public Quest(Player owner, Quest staticQuest)
+            : base(staticQuest.actorId)
         {
             this.owner = owner;
-            actorName = name;            
+            actorName = staticQuest.actorName;
+            className = staticQuest.className;
+            classPath = staticQuest.classPath;
+            currentPhase = SEQ_NOT_STARTED;
+            scriptData = new QuestData(this);
+            questState = new QuestState(owner, this);
+            hasData = false;
+            // Do not run onStateChange from construction. New quests are
+            // initialized by OnAccept -> StartSequence after publication;
+            // loaded quests are re-armed by the post-zone-in login path.
+            // Running the hook here is before the player's zone actor bundle
+            // exists and can call back into an incomplete Session.
+        }
+
+        public Quest(Player owner, Quest staticQuest, string questDataJson, uint questFlags, uint currentPhase)
+            : base(staticQuest.actorId)
+        {
+            this.owner = owner;
+            actorName = staticQuest.actorName;
+            className = staticQuest.className;
+            classPath = staticQuest.classPath;
             this.questFlags = questFlags;
 
             if (questDataJson != null)
@@ -44,6 +68,11 @@ namespace AetherXIV.Core.Map.Actors
 
             this.currentPhase = currentPhase;
             scriptData = new QuestData(this);
+            questState = new QuestState(owner, this);
+            hasData = true;
+            // Database hydration only restores the checkpoint. ENPC state is
+            // deliberately re-established after the login zone-in bundle,
+            // matching the Garlemald apply_quest_update_enpcs boundary.
         }
        
         public void SetQuestData(string dataName, object data)
@@ -126,7 +155,6 @@ namespace AetherXIV.Core.Map.Actors
                 "oldFlags", Hex(oldFlags),
                 "newFlags", Hex(questFlags));
 
-            DoCompletionCheck();
             SaveDataIfOwned();
         }
 
@@ -163,6 +191,15 @@ namespace AetherXIV.Core.Map.Actors
 
         public void StartSequence(uint sequence)
         {
+            SetSequence(sequence, true);
+            DoCompletionCheck();
+        }
+
+        private void SetSequence(uint sequence, bool sendJournalUpdate)
+        {
+            if (sequence == SEQ_NOT_STARTED)
+                return;
+
             uint oldPhase = currentPhase;
             currentPhase = sequence;
             DevDiagnostics.Trace(
@@ -172,10 +209,10 @@ namespace AetherXIV.Core.Map.Actors
                 "questId", GetQuestId(),
                 "oldPhase", oldPhase,
                 "newPhase", currentPhase);
-            owner.SendGameMessage(Server.GetWorldManager().GetActor(), 25116, 0x20, (object)GetQuestId());
+            if (sendJournalUpdate)
+                owner.SendGameMessage(Server.GetWorldManager().GetActor(), 25116, 0x20, (object)GetQuestId());
             SaveData();
-            RebuildENpcState();
-            DoCompletionCheck();
+            questState.UpdateState();
         }
 
         public void StartSequenceForNpcLs(uint sequence)
@@ -186,6 +223,22 @@ namespace AetherXIV.Core.Map.Actors
         public QuestData GetData()
         {
             return scriptData;
+        }
+
+        public bool HasData()
+        {
+            return hasData;
+        }
+
+        public bool IsInstance()
+        {
+            return owner != null;
+        }
+
+        public bool IsMainScenario()
+        {
+            uint questId = GetQuestId();
+            return questId >= 110001 && questId <= 110021;
         }
 
         internal uint GetCounter(int counterIndex)
@@ -227,16 +280,6 @@ namespace AetherXIV.Core.Map.Actors
             Database.SaveQuest(owner, this);
         }
 
-        public void DoCompletionCheck()
-        {
-            List<LuaParam> returned = LuaEngine.GetInstance().CallLuaFunctionForReturn(owner, this, "isObjectivesComplete", true);
-            if (returned != null && returned.Count >= 1 && returned[0].typeID == 3)
-            {
-                owner.SendDataPacket("attention", Server.GetWorldManager().GetActor(), "", 25225, (object)GetQuestId());
-                owner.SendGameMessage(Server.GetWorldManager().GetActor(), 25225, 0x20, (object)GetQuestId());	
-            }
-        }
-
         public void DoAbandon()
         {
             LuaEngine.GetInstance().CallLuaFunctionForReturn(owner, this, "onAbandonQuest", true);
@@ -251,46 +294,98 @@ namespace AetherXIV.Core.Map.Actors
             bool isEmoteEnabled = false,
             bool isSpawned = false)
         {
-            QuestENpc enpc = new QuestENpc(actorClassId, questFlagType, isTalkEnabled,
-                isPushEnabled, isEmoteEnabled, isSpawned);
-
-            QuestENpc previous;
-            previousENpcs.TryGetValue(actorClassId, out previous);
-            previousENpcs.Remove(actorClassId);
-            activeENpcs[actorClassId] = enpc;
-
-            if (QuestENpc.ShouldBroadcast(previous, enpc, forceAreaPresentationRefresh))
-                BroadcastENpc(enpc, false);
+            questState.AddENpc(
+                actorClassId,
+                questFlagType,
+                isTalkEnabled,
+                isPushEnabled,
+                isEmoteEnabled,
+                isSpawned);
         }
 
-        public void UpdateENPCs(bool forceForAreaChange = false)
+        public void UpdateENPCs()
         {
-            RebuildENpcState(forceForAreaChange);
+            if (!hasData || !scriptData.Dirty)
+                return;
+
+            questState.UpdateState();
+            scriptData.ClearDirty();
         }
 
         public bool HasENpc(uint actorClassId)
         {
-            EnsureENpcState();
-            return activeENpcs.ContainsKey(actorClassId);
+            return questState.HasENpc(actorClassId);
         }
 
         public QuestENpc GetENpc(uint actorClassId)
         {
-            EnsureENpcState();
-            QuestENpc enpc;
-            activeENpcs.TryGetValue(actorClassId, out enpc);
-            return enpc;
+            return questState.GetENpc(actorClassId);
         }
 
+        public QuestState GetQuestState()
+        {
+            return questState;
+        }
+
+        public bool IsQuestENPC(Player caller, Npc npc)
+        {
+            return npc != null && questState.HasENpc(npc.GetActorClassId());
+        }
+
+        public bool IsQuestENPCByScript(Player caller, Npc npc)
+        {
+            List<LuaParam> returned = LuaEngine.GetInstance().CallLuaFunctionForReturn(
+                caller ?? owner,
+                this,
+                "IsQuestENPC",
+                true,
+                npc,
+                this);
+            return returned != null
+                && returned.Count != 0
+                && returned[0].typeID == 3
+                && Convert.ToBoolean(returned[0].value);
+        }
+
+        internal void DeleteENpcState()
+        {
+            questState.DeleteState();
+        }
+
+        /// <summary>
+        /// Legacy Meteor ENPC-membership routing: fires the quest's Lua hook
+        /// (onTalk/onPush/onEmote) only when the NPC is registered as this
+        /// quest's ENPC and the matching event type is enabled. Called from
+        /// Player.StartEvent before the generic Lua dispatch, so quest-owned
+        /// NPCs never fall through to the base NPC script's default routing.
+        /// </summary>
         internal bool TryHandleNpcEvent(Player player, Npc npc, EventStartPacket start)
         {
-            EnsureENpcState();
-
-            QuestENpc enpc;
-            if (!activeENpcs.TryGetValue(npc.GetActorClassId(), out enpc))
+            QuestENpc enpc = questState.GetENpc(npc.GetActorClassId());
+            if (enpc == null)
                 return false;
 
-            string hook;
+            DevDiagnostics.Trace(
+                "quest.event.route.candidate",
+                "player", player == null ? "" : player.customDisplayName,
+                "quest", actorName,
+                "questId", GetQuestId(),
+                "sequence", currentPhase,
+                "npcClassId", npc.GetActorClassId(),
+                "npcActor", String.Format("0x{0:X}", npc.actorId),
+                "npcUniqueId", npc.GetUniqueId(),
+                "npcAreaKind", npc.zone == null ? "" : npc.zone.GetType().Name,
+                "npcPrivateArea", npc.zone == null ? "" : npc.zone.GetPrivateAreaName(),
+                "npcPrivateAreaType", npc.zone == null ? 0 : npc.zone.GetPrivateAreaType(),
+                "registered", true,
+                "talk", enpc.IsTalkEnabled,
+                "push", enpc.IsPushEnabled,
+                "emote", enpc.IsEmoteEnabled,
+                "questFlag", enpc.QuestFlagType,
+                "eventName", start.eventName,
+                "eventType", start.eventType);
+
+            string hook = null;
             switch (start.eventType)
             {
                 case 1 when enpc.IsTalkEnabled:
@@ -315,83 +410,13 @@ namespace AetherXIV.Core.Map.Actors
                 "npcClassId", npc.GetActorClassId(),
                 "npcActor", String.Format("0x{0:X}", npc.actorId),
                 "hook", hook);
-            LuaEngine.GetInstance().CallLuaFunction(player ?? owner, this, hook, false, npc);
+            LuaEngine.GetInstance().CallLuaFunction(
+                player ?? owner,
+                this,
+                hook,
+                false,
+                npc);
             return true;
-        }
-
-        internal void EnsureENpcState()
-        {
-            if (!stateInitialized)
-                RebuildENpcState();
-        }
-
-        private void RebuildENpcState(bool forceForAreaChange = false)
-        {
-            previousENpcs = new Dictionary<uint, QuestENpc>(activeENpcs);
-            activeENpcs.Clear();
-            stateInitialized = true;
-
-            forceAreaPresentationRefresh = forceForAreaChange;
-            DevDiagnostics.Trace(
-                "quest.enpc.refresh",
-                "player", PlayerName(),
-                "quest", actorName,
-                "questId", GetQuestId(),
-                "phase", currentPhase,
-                "forceForAreaChange", forceForAreaChange,
-                "zone", owner == null ? 0 : owner.zoneId,
-                "privateArea", owner == null ? "" : owner.privateArea ?? "",
-                "privateAreaType", owner == null ? 0 : owner.privateAreaType);
-
-            try
-            {
-                LuaEngine.GetInstance().CallLuaFunction(owner, this, "onStateChange", true, currentPhase);
-            }
-            finally
-            {
-                forceAreaPresentationRefresh = false;
-            }
-
-            foreach (QuestENpc stale in previousENpcs.Values)
-                BroadcastENpc(stale, true);
-            previousENpcs.Clear();
-        }
-
-        private void BroadcastENpc(QuestENpc enpc, bool clear)
-        {
-            if (owner == null || owner.zone == null)
-                return;
-
-            foreach (Npc npc in owner.zone.GetAllActors<Npc>())
-            {
-                if (npc.GetActorClassId() != enpc.ActorClassId)
-                    continue;
-
-                if (npc.eventConditions != null)
-                {
-                    if (npc.eventConditions.talkEventConditions != null)
-                        foreach (var condition in npc.eventConditions.talkEventConditions)
-                            owner.SetEventStatus(npc, condition.conditionName, !clear && enpc.IsTalkEnabled, 1);
-
-                    if (npc.eventConditions.pushWithCircleEventConditions != null)
-                        foreach (var condition in npc.eventConditions.pushWithCircleEventConditions)
-                            owner.SetEventStatus(npc, condition.conditionName, !clear && enpc.IsPushEnabled, 2);
-
-                    if (npc.eventConditions.pushWithFanEventConditions != null)
-                        foreach (var condition in npc.eventConditions.pushWithFanEventConditions)
-                            owner.SetEventStatus(npc, condition.conditionName, !clear && enpc.IsPushEnabled, 2);
-
-                    if (npc.eventConditions.pushWithBoxEventConditions != null)
-                        foreach (var condition in npc.eventConditions.pushWithBoxEventConditions)
-                            owner.SetEventStatus(npc, condition.conditionName, !clear && enpc.IsPushEnabled, 2);
-
-                    if (npc.eventConditions.emoteEventConditions != null)
-                        foreach (var condition in npc.eventConditions.emoteEventConditions)
-                            owner.SetEventStatus(npc, condition.conditionName, !clear && enpc.IsEmoteEnabled, 3);
-                }
-
-                npc.SetQuestGraphic(owner, clear ? 0 : enpc.QuestFlagType);
-            }
         }
 
         private void SaveDataIfOwned()
@@ -400,14 +425,181 @@ namespace AetherXIV.Core.Map.Actors
                 SaveData();
         }
 
-        public void OnNotice(Player player)
+        public void DoCompletionCheck()
         {
-            LuaEngine.GetInstance().CallLuaFunctionForReturn(player ?? owner, this, "onNotice", true);
+            List<LuaParam> returned = LuaEngine.GetInstance().CallLuaFunctionForReturn(owner, this, "isObjectivesComplete", true);
+            if (returned != null && returned.Count >= 1 && returned[0].typeID == 3)
+            {
+                owner.SendDataPacket("attention", Server.GetWorldManager().GetActor(), "", 25225, (object)GetQuestId());
+                owner.SendGameMessage(Server.GetWorldManager().GetActor(), 25225, 0x20, (object)GetQuestId());
+            }
         }
 
-        public void OnNpcLs(Player player, uint from, uint messageStep)
+        public void OnNotice(Player player)
         {
-            LuaEngine.GetInstance().CallLuaFunction(player ?? owner, this, "onNpcLS", false, from, messageStep);
+            Player noticePlayer = player ?? owner;
+            Director noticeDirector = noticePlayer == null
+                ? null
+                : noticePlayer.GetDirector(noticePlayer.currentEventOwner);
+            DevDiagnostics.Trace(
+                "quest.notice",
+                "player", noticePlayer == null ? "" : noticePlayer.customDisplayName,
+                "quest", actorName,
+                "questId", GetQuestId(),
+                "sequence", currentPhase,
+                "zone", noticePlayer == null ? 0 : noticePlayer.GetZoneID(),
+                "privateArea", noticePlayer == null ? "" : noticePlayer.privateArea,
+                "privateAreaType", noticePlayer == null ? 0 : noticePlayer.privateAreaType,
+                "eventOwner", noticePlayer == null ? "0x0" : String.Format("0x{0:X}", noticePlayer.currentEventOwner),
+                "eventOwnerName", noticeDirector == null ? "" : noticeDirector.GetName(),
+                "eventOwnerPath", noticeDirector == null ? "" : noticeDirector.GetScriptPath(),
+                "eventOwnerResolved", noticeDirector != null,
+                "eventName", noticePlayer == null ? "" : noticePlayer.currentEventName,
+                "eventType", noticePlayer == null ? 0 : noticePlayer.currentEventType,
+                "pendingNpcLsFrom", GetNpcLsFrom(),
+                "pendingNpcLsStep", GetNpcLsMessageStep(),
+                "pendingNpcLs", GetNpcLsFrom() != 0,
+                "questHasMiounneEnpc", HasENpc(1000230),
+                "questHasVkorolonEnpc", HasENpc(1000458),
+                "action", "dispatch");
+
+            // onNotice may yield through callClientFunction. Use the same
+            // coroutine-capable callback path as talk/push/event handlers;
+            // the return-value path invokes Script.Call directly and cannot
+            // park on _WAIT_EVENT.
+            LuaEngine.GetInstance().CallLuaFunction(
+                noticePlayer,
+                this,
+                "onNotice",
+                true);
+
+            DevDiagnostics.Trace(
+                "quest.notice",
+                "player", noticePlayer == null ? "" : noticePlayer.customDisplayName,
+                "quest", actorName,
+                "questId", GetQuestId(),
+                "sequence", currentPhase,
+                "eventOwnerAfter", noticePlayer == null ? "0x0" : String.Format("0x{0:X}", noticePlayer.currentEventOwner),
+                "eventNameAfter", noticePlayer == null ? "" : noticePlayer.currentEventName,
+                "eventTypeAfter", noticePlayer == null ? 0 : noticePlayer.currentEventType,
+                "action", "complete");
+        }
+
+        public void OnKillBNpc(Player player, uint actorClassId)
+        {
+            LuaEngine.GetInstance().CallLuaFunction(player ?? owner, this, "onKillBNpc", true, actorClassId);
+        }
+
+        public object[] GetJournalInformation()
+        {
+            List<LuaParam> returned = LuaEngine.GetInstance().CallLuaFunctionForReturn(
+                owner,
+                this,
+                "getJournalInformation",
+                true);
+            return returned == null || returned.Count == 0
+                ? Array.Empty<object>()
+                : LuaUtils.CreateLuaParamObjectList(returned);
+        }
+
+        public object[] GetJournalMapMarkerList()
+        {
+            List<LuaParam> returned = LuaEngine.GetInstance().CallLuaFunctionForReturn(
+                owner,
+                this,
+                "getJournalMapMarkerList",
+                true);
+            return returned == null || returned.Count == 0
+                ? Array.Empty<object>()
+                : LuaUtils.CreateLuaParamObjectList(returned);
+        }
+
+        public void OnAccept()
+        {
+            OnAccept(false);
+        }
+
+        public void OnAccept(bool invokeStart)
+        {
+            hasData = true;
+
+            // Initial login quests are already positioned by the login flow.
+            // Replacement quests, however, own their first transition through
+            // onStart after the new instance has been published.
+            if (invokeStart)
+                LuaEngine.GetInstance().CallLuaFunction(owner, this, "onStart", true);
+
+            if (currentPhase == SEQ_NOT_STARTED)
+                StartSequence(0);
+        }
+
+        public void OnComplete()
+        {
+            LuaEngine.GetInstance().CallLuaFunctionForReturn(owner, this, "onFinish", true);
+            currentPhase = SEQ_COMPLETED;
+            hasData = false;
+            questState.UpdateState();
+        }
+
+        public void OnAbandon()
+        {
+            LuaEngine.GetInstance().CallLuaFunctionForReturn(owner, this, "onFinish", false);
+            currentPhase = SEQ_NOT_STARTED;
+            hasData = false;
+            questState.UpdateState();
+        }
+
+        public void SetTimeUpdate(bool value)
+        {
+            isUpdating = value;
+        }
+
+        public override void Update(DateTime tick)
+        {
+            if (isUpdating)
+            {
+                LuaEngine.GetInstance().CallLuaFunctionForReturn(
+                    owner,
+                    this,
+                    "onTimeUpdate",
+                    true,
+                    Utils.UnixTimeStampUTC(tick));
+            }
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is Quest quest && quest.actorId == actorId;
+        }
+
+        public override int GetHashCode()
+        {
+            return actorId.GetHashCode();
+        }
+
+        public void OnNpcLs(Player player)
+        {
+            DevDiagnostics.Trace(
+                "npcLinkshell.dispatch",
+                "player", player == null ? "" : player.customDisplayName,
+                "quest", actorName,
+                "questId", GetQuestId(),
+                "sequence", currentPhase,
+                "from", GetNpcLsFrom(),
+                "messageStep", GetNpcLsMessageStep(),
+                "hasPending", GetNpcLsFrom() != 0);
+            LuaEngine.GetInstance().CallLuaFunction(
+                player ?? owner,
+                this,
+                "onNpcLS",
+                false,
+                GetNpcLsFrom(),
+                GetNpcLsMessageStep());
+        }
+
+        public bool HasNpcLsMsgs(uint from)
+        {
+            return GetNpcLsFrom() == from;
         }
 
         public uint GetNpcLsFrom()
@@ -423,36 +615,107 @@ namespace AetherXIV.Core.Map.Actors
         public void NewNpcLsMsg(uint from)
         {
             if (!TryGetNpcLinkshellIndex(from, out uint npcLsId))
+            {
+                DevDiagnostics.Trace(
+                    "npcLinkshell.transition",
+                    "player", PlayerName(),
+                    "quest", actorName,
+                    "questId", GetQuestId(),
+                    "sequence", currentPhase,
+                    "operation", "new",
+                    "from", from,
+                    "valid", false,
+                    "reason", "outside-supported-range");
                 return;
+            }
 
+            uint previousFrom = GetNpcLsFrom();
+            uint previousStep = GetNpcLsMessageStep();
             SetQuestData("npcLsFrom", from);
             SetQuestData("npcLsMessageStep", 1u);
-            owner.SetNpcLS(npcLsId, Player.NPCLS_ALERT);
+            owner.SetNpcLs(npcLsId, Player.NPCLS_ALERT);
             owner.SendGameMessage(Server.GetWorldManager().GetActor(), 25119, 0x20, (object)from);
             SaveData();
+            DevDiagnostics.Trace(
+                "npcLinkshell.transition",
+                "player", PlayerName(),
+                "quest", actorName,
+                "questId", GetQuestId(),
+                "sequence", currentPhase,
+                "operation", "new",
+                "from", from,
+                "npcLsId", npcLsId,
+                "zeroBasedIndex", npcLsId - 1,
+                "previousFrom", previousFrom,
+                "previousStep", previousStep,
+                "newStep", GetNpcLsMessageStep(),
+                "state", "alert",
+                "ownership", owner.HasNpcLs(npcLsId));
         }
 
         public void ReadNpcLsMsg()
         {
             uint from = GetQuestDataUInt32("npcLsFrom");
             if (!TryGetNpcLinkshellIndex(from, out uint npcLsId))
+            {
+                DevDiagnostics.Trace(
+                    "npcLinkshell.transition",
+                    "player", PlayerName(),
+                    "quest", actorName,
+                    "questId", GetQuestId(),
+                    "sequence", currentPhase,
+                    "operation", "read",
+                    "from", from,
+                    "valid", false,
+                    "reason", "no-valid-pending-slot");
                 return;
+            }
 
             uint step = GetQuestDataUInt32("npcLsMessageStep");
             SetQuestData("npcLsMessageStep", step + 1u);
-            owner.SetNpcLS(npcLsId, Player.NPCLS_ACTIVE);
+            owner.SetNpcLs(npcLsId, Player.NPCLS_ACTIVE);
             SaveData();
+            DevDiagnostics.Trace(
+                "npcLinkshell.transition",
+                "player", PlayerName(),
+                "quest", actorName,
+                "questId", GetQuestId(),
+                "sequence", currentPhase,
+                "operation", "read",
+                "from", from,
+                "npcLsId", npcLsId,
+                "zeroBasedIndex", npcLsId - 1,
+                "previousStep", step,
+                "newStep", GetNpcLsMessageStep(),
+                "state", "active",
+                "ownership", owner.HasNpcLs(npcLsId));
         }
 
         public void EndOfNpcLsMsgs()
         {
             uint from = GetQuestDataUInt32("npcLsFrom");
-            if (TryGetNpcLinkshellIndex(from, out uint npcLsId))
-                owner.SetNpcLS(npcLsId, Player.NPCLS_INACTIVE);
+            uint step = GetNpcLsMessageStep();
+            bool valid = TryGetNpcLinkshellIndex(from, out uint npcLsId);
+            if (valid)
+                owner.SetNpcLs(npcLsId, Player.NPCLS_INACTIVE);
 
             SetQuestData("npcLsFrom", 0u);
             SetQuestData("npcLsMessageStep", 0u);
             SaveData();
+            DevDiagnostics.Trace(
+                "npcLinkshell.transition",
+                "player", PlayerName(),
+                "quest", actorName,
+                "questId", GetQuestId(),
+                "sequence", currentPhase,
+                "operation", "end",
+                "from", from,
+                "npcLsId", valid ? npcLsId : 0,
+                "zeroBasedIndex", valid ? npcLsId - 1 : 0,
+                "previousStep", step,
+                "newStep", 0,
+                "state", "inactive",
+                "valid", valid);
         }
 
         private uint GetQuestDataUInt32(string key)
@@ -473,15 +736,16 @@ namespace AetherXIV.Core.Map.Actors
 
         private static bool TryGetNpcLinkshellIndex(uint from, out uint npcLsId)
         {
-            // Quest scripts use one-based linkpearl identifiers while
-            // playerWork.npcLinkshellChat is a zero-based 64-entry array.
+            // Keep the script-facing one-based identifier until Player.SetNpcLs;
+            // that existing boundary performs the single conversion to the
+            // zero-based playerWork slot.
             if (from == 0 || from > 64)
             {
                 npcLsId = 0;
                 return false;
             }
 
-            npcLsId = from - 1;
+            npcLsId = from;
             return true;
         }
 

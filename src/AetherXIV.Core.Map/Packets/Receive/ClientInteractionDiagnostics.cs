@@ -3,6 +3,7 @@ using System.Text;
 
 using AetherXIV.Core.Common;
 using AetherXIV.Core.Map.Actors;
+using AetherXIV.Core.Map.actors.area;
 using AetherXIV.Core.Map.dataobjects;
 using AetherXIV.Core.Map.lua;
 using AetherXIV.Core.Map.packets.receive.events;
@@ -44,10 +45,32 @@ namespace AetherXIV.Core.Map.packets.receive
                 "invalidPacket", packet.invalidPacket);
         }
 
+        public static void TraceActorInstantiateAcknowledge(
+            Session session,
+            LockTargetPacket packet)
+        {
+            if (!DevDiagnostics.Enabled || packet == null)
+                return;
+
+            Actor targetActor = ResolveActor(session, packet.actorID);
+
+            DevDiagnostics.Trace(
+                "client.actorInstantiate.ack",
+                "player", PlayerName(session),
+                "actor", Hex(packet.actorID),
+                "actorName", ActorName(targetActor),
+                "unknown", Hex(packet.otherVal),
+                "actorResolved", targetActor != null,
+                "invalidPacket", packet.invalidPacket);
+        }
+
         public static void TraceEventStartOwnerMissing(Session session, EventStartPacket packet)
         {
             if (!DevDiagnostics.Enabled || packet == null)
                 return;
+
+            Player player = session == null ? null : session.GetActor();
+            Area area = player == null ? null : player.zone;
 
             DevDiagnostics.Trace(
                 "event.start.ownerMissing",
@@ -57,7 +80,66 @@ namespace AetherXIV.Core.Map.packets.receive
                 "serverCodes", Hex(packet.serverCodes),
                 "unknown", Hex(packet.unknown),
                 "eventName", packet.eventName,
-                "params", LuaUtils.DumpParams(packet.luaParams));
+                "params", LuaUtils.DumpParams(packet.luaParams),
+                "zoneId", player == null ? 0 : player.zoneId,
+                "zoneActor", area == null ? "" : Hex(area.actorId),
+                "zoneKind", area == null ? "(none)" : area.GetType().Name,
+                "privateArea", player == null ? "" : player.privateArea,
+                "privateAreaType", player == null ? 0 : player.privateAreaType,
+                "actorInventory", BuildActorInventory(area));
+        }
+
+        /// <summary>
+        /// Enumerates the player's current area actors plus every content
+        /// area owned by the root zone, so an EventStart owner-miss can be
+        /// traced against what FindActorInZone would actually have seen
+        /// (the openingstoper 0x45300C05 live in the battle content area).
+        /// </summary>
+        private static string BuildActorInventory(Area area)
+        {
+            if (area == null)
+                return "";
+
+            StringBuilder builder = new StringBuilder();
+            AppendActors(builder, area, "area:" + area.GetType().Name);
+
+            Zone root = area as Zone;
+            if (root == null && area is PrivateArea privateArea)
+                root = privateArea.GetParentZone();
+
+            if (root != null)
+            {
+                foreach (PrivateAreaContent content in root.GetContentAreaSnapshot())
+                {
+                    AppendActors(
+                        builder,
+                        content,
+                        "content:" + content.GetPrivateAreaName()
+                            + ":" + content.GetPrivateAreaType());
+                }
+            }
+
+            return builder.ToString();
+        }
+
+        private static void AppendActors(StringBuilder builder, Area area, string label)
+        {
+            foreach (Actor actor in area.GetAllActors())
+            {
+                if (builder.Length > 0)
+                    builder.Append(',');
+
+                string classId = actor is Npc npc
+                    ? npc.GetActorClassId().ToString()
+                    : "";
+                builder.Append(label)
+                    .Append('|')
+                    .Append(Hex(actor.actorId))
+                    .Append('|')
+                    .Append(actor.GetName())
+                    .Append('|')
+                    .Append(classId);
+            }
         }
 
         public static void TraceEventStartOwnerMissingClosed(Session session, EventStartPacket packet)

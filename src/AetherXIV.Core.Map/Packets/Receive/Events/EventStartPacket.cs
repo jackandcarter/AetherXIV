@@ -27,41 +27,32 @@ namespace AetherXIV.Core.Map.packets.receive.events
         
         public EventStartPacket(byte[] data)
         {
-            using (MemoryStream mem = new MemoryStream(data))
+            try
             {
-                using (BinaryReader binReader = new BinaryReader(mem))
+                AetherXIV.Protocol.EventStartPacket decoded =
+                    new AetherXIV.Protocol.EventStartPacketCodec().Decode(
+                        AetherXIV.Protocol.SubPacket.Create(
+                            AetherXIV.Protocol.PacketOpcode.EventStart,
+                            0,
+                            data));
+                triggerActorID = decoded.TriggerActorId;
+                ownerActorID = decoded.OwnerActorId;
+                serverCodes = decoded.ServerCodes;
+                unknown = decoded.Unknown;
+                eventType = decoded.EventType;
+                eventName = decoded.EventName;
+                luaParams = ProtocolPacketAdapter.DecodeLuaParameters(decoded.Parameters);
+                if (decoded.IsClientScriptError)
                 {
-                    try{
-                        triggerActorID = binReader.ReadUInt32();
-                        ownerActorID = binReader.ReadUInt32();
-                        serverCodes = binReader.ReadUInt32();
-                        unknown = binReader.ReadUInt32();
-                        eventType = binReader.ReadByte();
-                        /*
-                        //Lua Error Dump
-                        if (val1 == 0x39800010)
-                        {
-                            errorIndex = actorID;
-                            errorNum = scriptOwnerActorID;
-                            error = ASCIIEncoding.ASCII.GetString(binReader.ReadBytes(0x80)).Replace("\0", "");
-
-                            if (errorIndex == 0)
-                                Program.Log.Error("LUA ERROR:");                            
-
-                            return;
-                        }
-                        */
-                        eventName = Utils.ReadNullTermString(binReader);
-
-                        if (binReader.PeekChar() == 0x1)
-                            luaParams = new List<LuaParam>();
-                        else
-                            luaParams = LuaUtils.ReadLuaParams(binReader);
-                    }
-                    catch (Exception){
-                        invalidPacket = true;
-                    }
+                    errorIndex = decoded.ClientScriptErrorIndex;
+                    errorNum = decoded.ClientScriptErrorCount;
+                    error = decoded.ClientScriptErrorText;
                 }
+            }
+            catch (Exception)
+            {
+                invalidPacket = true;
+                luaParams = new List<LuaParam>();
             }
         }
     }

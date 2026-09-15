@@ -4,6 +4,16 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <PackageId>Aether.Umbra.PluginApi</PackageId>
+    <Description>Public API contracts for Aether Umbra 2.0 plugins.</Description>
+    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/jackandcarter/AetherXIV</RepositoryUrl>
+    <PackageTags>aetherxiv;umbra;plugin;api</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\..\..\docs\UMBRA_SDK.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
 
 </Project>

@@ -39,8 +39,12 @@ namespace AetherXIV.Core.Map.packets.send
 
         public static SubPacket BuildPacket(uint sourceActorId, ushort weatherId, ushort transitionTime)
         {
-            ulong combined = (ulong)(weatherId | (transitionTime << 16));
-            return new SubPacket(OPCODE, 0, BitConverter.GetBytes(combined));
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetWeatherPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetWeatherPacket(
+                    (AetherXIV.Protocol.WeatherId)weatherId,
+                    transitionTime));
         }
     }
 }

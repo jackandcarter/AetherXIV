@@ -1,4 +1,3 @@
-
 --Quest Flags
 MAN0L0_FLAG_STARTED_TALK_TUT = 0;
 

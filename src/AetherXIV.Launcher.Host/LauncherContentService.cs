@@ -38,13 +38,6 @@ public interface ILauncherContentRepository
         string platformRid,
         CancellationToken cancellationToken = default);
 
-    ValueTask<IReadOnlyList<UmbraFrameworkArtifact>> GetUmbraFrameworkArtifactsAsync(
-        string platformRid,
-        CancellationToken cancellationToken = default);
-
-    ValueTask<UmbraPluginCatalog?> GetUmbraPluginCatalogAsync(CancellationToken cancellationToken = default);
-
-    ValueTask<IReadOnlyList<UmbraPluginBlock>> GetUmbraPluginBlocksAsync(CancellationToken cancellationToken = default);
 }
 
 public sealed record LauncherStatusRecord(string State, string Message);
@@ -109,30 +102,6 @@ public sealed class LauncherContentService
         IReadOnlyList<RuntimeArtifact> artifacts = await repository.GetRuntimeArtifactsAsync(platform, cancellationToken)
             .ConfigureAwait(false);
         return new RuntimeCatalog(platform, artifacts);
-    }
-
-    public async ValueTask<UmbraFrameworkCatalog> GetUmbraFrameworkCatalogAsync(
-        string? platformRid,
-        CancellationToken cancellationToken = default)
-    {
-        string platform = NormalizePlatform(platformRid);
-        IReadOnlyList<UmbraFrameworkArtifact> artifacts = await repository.GetUmbraFrameworkArtifactsAsync(
-            platform,
-            cancellationToken).ConfigureAwait(false);
-        return new UmbraFrameworkCatalog(platform, artifacts);
-    }
-
-    public async ValueTask<UmbraPluginCatalog> GetUmbraPluginCatalogAsync(CancellationToken cancellationToken = default)
-    {
-        return await repository.GetUmbraPluginCatalogAsync(cancellationToken).ConfigureAwait(false)
-            ?? new UmbraPluginCatalog("AetherXIV Local", []);
-    }
-
-    public async ValueTask<UmbraPluginBlocklist> GetUmbraPluginBlocklistAsync(CancellationToken cancellationToken = default)
-    {
-        IReadOnlyList<UmbraPluginBlock> blocks = await repository.GetUmbraPluginBlocksAsync(cancellationToken)
-            .ConfigureAwait(false);
-        return new UmbraPluginBlocklist(blocks);
     }
 
     private static string NormalizePlatform(string? platformRid) => (platformRid ?? "").Trim();

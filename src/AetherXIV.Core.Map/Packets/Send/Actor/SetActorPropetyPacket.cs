@@ -23,6 +23,10 @@ namespace AetherXIV.Core.Map.packets.send.actor
 
         string currentTarget;
 
+        private bool isBitfield;
+        private ushort from;
+        private ushort to;
+
         private MemoryStream mem;
         private BinaryWriter binWriter;
 
@@ -32,6 +36,14 @@ namespace AetherXIV.Core.Map.packets.send.actor
             binWriter = new BinaryWriter(mem);
             binWriter.Seek(1, SeekOrigin.Begin);
             currentTarget = startingTarget;
+        }
+
+        public SetActorPropetyPacket(ushort from, ushort to, string startingTarget)
+            : this(startingTarget)
+        {
+            this.from = from;
+            this.to = to;
+            isBitfield = true;
         }
 
         public void CloseStreams()
@@ -76,6 +88,22 @@ namespace AetherXIV.Core.Map.packets.send.actor
             binWriter.Write((UInt32)value);
             runningByteTotal+=9;
 
+            return true;
+        }
+
+        public bool AddBitfield(uint id, byte[] bitfield)
+        {
+            if (bitfield == null
+                || runningByteTotal + 5 + bitfield.Length + 1
+                    + (1 + 5 + Encoding.ASCII.GetByteCount(currentTarget)) > MAXBYTES)
+            {
+                return false;
+            }
+
+            binWriter.Write((byte)bitfield.Length);
+            binWriter.Write(id);
+            binWriter.Write(bitfield);
+            runningByteTotal += (ushort)(5 + bitfield.Length);
             return true;
         }
 
@@ -187,10 +215,24 @@ namespace AetherXIV.Core.Map.packets.send.actor
         public void SetTarget(string target)
         {
             currentTarget = target;
+            isBitfield = false;
         }
 
         public void AddTarget()
         {
+            if (isBitfield)
+            {
+                binWriter.Write((byte)(isMore
+                    ? 0x60 + currentTarget.Length + 5
+                    : 0x82 + currentTarget.Length + 5));
+                binWriter.Write((byte)0x09);
+                binWriter.Write(from);
+                binWriter.Write(to);
+                binWriter.Write(Encoding.ASCII.GetBytes(currentTarget));
+                runningByteTotal += (ushort)(6 + Encoding.ASCII.GetByteCount(currentTarget));
+                return;
+            }
+
             if (isArrayMode)
                 binWriter.Write((byte)(0xA4 + currentTarget.Length));
             else

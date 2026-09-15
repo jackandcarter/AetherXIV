@@ -7,10 +7,10 @@ best-effort.
 ## Before you begin
 
 You need the complete `SteamOS` release, a user-owned Final Fantasy XIV 1.23b
-client, MariaDB, the .NET 10 ASP.NET Core Runtime, internet access for the
-Launcher-managed Wine download, and the Linux desktop libraries listed in the
-[dependency matrix](../BUILD_AND_RUNTIME_DEPENDENCIES.md). A separate Wine
-installation is not required.
+client, MariaDB, the .NET 10 ASP.NET Core Runtime, and the Linux desktop
+libraries listed in the [dependency matrix](../BUILD_AND_RUNTIME_DEPENDENCIES.md).
+The AetherXIV Compatibility Runtime is included with the release; a separate
+Wine installation is neither required nor selected by the Launcher.
 
 SteamOS has a read-only base image. System updates can replace packages or
 changes made outside persistent storage. Plan where MariaDB data, runtimes,
@@ -32,19 +32,22 @@ prefixes, and the AetherXIV release will live before configuring the server.
 2. Verify dependencies and complete database setup.
 3. Start the stack and wait for all services.
 4. Open **AetherXIV Launcher**, save **Localhost**, and locate the 1.23b client.
-5. Select **Install Runtime**. The portable Linux x64 package is verified and
-   installed in persistent Launcher application data, without modifying the
-   read-only SteamOS base image. Validation lists any missing host library;
-   install it in a persistent SteamOS/Arch environment and validate again.
+5. On **Runtime**, confirm that **Runtime source** reports the bundled
+   AetherXIV Compatibility Runtime, then select **Validate Runtime**. It checks
+   the shipped receipt, host libraries, managed prefix, and helpers without
+   modifying the read-only SteamOS base image. If validation names a missing
+   host library, install that library in a persistent SteamOS/Arch environment
+   and validate again.
 6. Enable Umbra if desired, then log in.
 
 Running the server and client together is convenient for development but may
 be resource intensive on a Steam Deck. A remote AetherXIV server can be selected
 from the Launcher's **Server** tab instead.
 
-If the persistent Wine executable is not available on the desktop session's
-`PATH`, choose **Custom Runtime** and enter its absolute executable path. Do not
-disable SteamOS read-only protection merely to make automatic detection work.
+Do not add a system Wine provider or disable SteamOS read-only protection to
+work around a validation failure. The Launcher deliberately has no custom
+runtime setting; restore the complete matching release if its bundled runtime
+is missing or fails integrity validation.
 
 ## After SteamOS updates
 

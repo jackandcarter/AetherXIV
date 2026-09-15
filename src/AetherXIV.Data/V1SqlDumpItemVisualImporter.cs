@@ -96,7 +96,7 @@ public sealed class V1SqlDumpItemVisualImporter
             EvidenceStatus.RepoConfirmed,
             "v1-sql",
             sourceRef,
-            "Imported into AetherXIV 2.0 item_visuals; original SQL table shape is not used at runtime.");
+            "Imported into AetherXIV 2.1 item_visuals; original SQL table shape is not used at runtime.");
     }
 
     private static uint ToUInt32(string? value)

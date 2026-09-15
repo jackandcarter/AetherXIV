@@ -330,32 +330,15 @@ public static class FfxivClientSettingsStore
             return true;
         }
 
-        if (profile.Kind == WineRuntimeKind.WhiskyBottle)
+        if (profile.Kind != WineRuntimeKind.WinePrefix)
         {
-            if (!WhiskyRuntimeEnvironment.TryCreateWineProfile(
-                    profile.Command,
-                    profile.BottleName ?? "",
-                    out WineRuntimeProfile whiskyWineProfile,
-                    out string whiskyError))
-            {
-                error = $"Whisky runtime resolution failed: {whiskyError}";
-                return false;
-            }
-
-            return TryResolveWineTarget(whiskyWineProfile, managedPrefixPath, out target, out error);
+            error = "AetherXIV requires its bundled Wine runtime and isolated managed prefix on this platform.";
+            return false;
         }
 
-        string? prefixPath = null;
-        if (profile.Kind == WineRuntimeKind.WinePrefix)
-        {
-            prefixPath = string.IsNullOrWhiteSpace(profile.PrefixPath)
-                ? managedPrefixPath
-                : profile.PrefixPath;
-        }
-        else if (profile.Environment.TryGetValue("WINEPREFIX", out string? environmentPrefix))
-        {
-            prefixPath = environmentPrefix;
-        }
+        string? prefixPath = string.IsNullOrWhiteSpace(profile.PrefixPath)
+            ? managedPrefixPath
+            : profile.PrefixPath;
 
         if (string.IsNullOrWhiteSpace(prefixPath))
         {

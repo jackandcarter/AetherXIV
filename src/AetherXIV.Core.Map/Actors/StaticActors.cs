@@ -73,14 +73,22 @@ namespace AetherXIV.Core.Map.Actors
                             string actorType = output.Split('/')[1];
                             string actorName = output.Substring(1 + output.LastIndexOf("/"));
 
+                            Actor actor = null;
                             if (actorType.Equals("Command"))
-                                mStaticActors.Add(id, new Command(id, actorName));
+                                actor = new Command(id, actorName);
                             else if (actorType.Equals("Quest"))
-                                mStaticActors.Add(id, new Quest(id, actorName));
+                                actor = new Quest(id, actorName);
                             //else if (actorType.Equals("Status"))
                             //mStaticActors.Add(id, new Status(id, actorName));
                             else if (actorType.Equals("Judge"))
-                                mStaticActors.Add(id, new Judge(id, actorName));
+                                actor = new Judge(id, actorName);
+
+                            if (actor != null)
+                            {
+                                actor.className = actorName;
+                                actor.classPath = output;
+                                mStaticActors.Add(id, actor);
+                            }
 
                         }
 

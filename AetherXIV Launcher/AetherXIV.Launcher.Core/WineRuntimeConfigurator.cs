@@ -14,6 +14,7 @@
  */
 
 using System.Diagnostics;
+using System.Text;
 
 namespace AetherXIV.Launcher.Core;
 
@@ -160,6 +161,30 @@ public static class WineRuntimeConfigurator
         });
     }
 
+    public static string BuildRegistryCommandScript(
+        IReadOnlyList<WineRegistrySetting> settings,
+        IReadOnlyList<string>? legacyDesktopValueNames = null)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+
+        StringBuilder script = new();
+        script.AppendLine("@echo off");
+        foreach (string valueName in legacyDesktopValueNames ?? Array.Empty<string>())
+        {
+            script.Append(BuildRegDeleteValueArguments(WineExplorerDesktopsKey, valueName));
+            script.AppendLine(" || exit /b 1");
+        }
+
+        foreach (WineRegistrySetting setting in settings)
+        {
+            script.Append(BuildRegAddArguments(setting));
+            script.AppendLine(" || exit /b 1");
+        }
+
+        script.AppendLine("exit /b 0");
+        return script.ToString().Replace("\n", "\r\n", StringComparison.Ordinal);
+    }
+
     public static async Task<WineRuntimeConfigurationResult> ConfigureAsync(
         WineRuntimeProfile profile,
         string managedPrefixPath,
@@ -178,22 +203,13 @@ public static class WineRuntimeConfigurator
                 RuntimeLaunchDiagnostics.CreateLogPath("runtime-config"));
         }
 
-        if (profile.Kind == WineRuntimeKind.WhiskyBottle)
+        if (profile.Kind != WineRuntimeKind.WinePrefix)
         {
-            if (!WhiskyRuntimeEnvironment.TryCreateWineProfile(
-                    profile.Command,
-                    profile.BottleName ?? "",
-                    out WineRuntimeProfile whiskyWineProfile,
-                    out string whiskyError))
-            {
-                return new WineRuntimeConfigurationResult(
-                    false,
-                    $"Whisky runtime resolution failed: {whiskyError}",
-                    $"Whisky:{profile.BottleName}",
-                    RuntimeLaunchDiagnostics.CreateLogPath("runtime-config"));
-            }
-
-            return await ConfigureAsync(whiskyWineProfile, managedPrefixPath, settings, cancellationToken);
+            return new WineRuntimeConfigurationResult(
+                false,
+                "AetherXIV requires its bundled Wine runtime and isolated managed prefix on this platform.",
+                profile.Name,
+                RuntimeLaunchDiagnostics.CreateLogPath("runtime-config"));
         }
 
         if (string.IsNullOrWhiteSpace(profile.Command))
@@ -249,17 +265,35 @@ public static class WineRuntimeConfigurator
                 cancellationToken);
         }
 
-        await RemoveLegacyDesktopSettingsAsync(
+        IReadOnlyList<string> legacyDesktopValueNames = await QueryLegacyDesktopSettingsAsync(
             profile.Command,
             environment,
             logPath,
             cancellationToken);
 
-        foreach (WineRegistrySetting setting in BuildRegistrySettings(settings, windowsDocumentsPath))
+        IReadOnlyList<WineRegistrySetting> registrySettings = BuildRegistrySettings(
+            settings,
+            windowsDocumentsPath);
+        string scriptFileName = $"runtime-config-{Guid.NewGuid():N}.cmd";
+        string scriptDirectory = Path.Combine(
+            normalizedPrefix!,
+            "drive_c",
+            "aetherxiv-runtime-config");
+        string scriptPath = Path.Combine(scriptDirectory, scriptFileName);
+        string windowsScriptPath = $@"C:\aetherxiv-runtime-config\{scriptFileName}";
+        Directory.CreateDirectory(scriptDirectory);
+        await File.WriteAllTextAsync(
+            scriptPath,
+            BuildRegistryCommandScript(registrySettings, legacyDesktopValueNames),
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            cancellationToken);
+        try
         {
             ProcessRunResult result = await RunAndLogAsync(
                 profile.Command,
-                BuildRegAddArguments(setting),
+                profile.BuildArguments(
+                    "cmd.exe",
+                    $"/d /s /c {windowsScriptPath}"),
                 environment,
                 logPath,
                 TimeSpan.FromSeconds(30),
@@ -276,6 +310,11 @@ public static class WineRuntimeConfigurator
                     runtimeTarget,
                     logPath);
             }
+        }
+        finally
+        {
+            if (File.Exists(scriptPath))
+                File.Delete(scriptPath);
         }
 
         return new WineRuntimeConfigurationResult(
@@ -318,31 +357,7 @@ public static class WineRuntimeConfigurator
             return true;
         }
 
-        if (profile.Kind == WineRuntimeKind.CrossOverBottle)
-        {
-            if (string.IsNullOrWhiteSpace(profile.BottleName))
-            {
-                error = "CrossOver bottle name is required.";
-                return false;
-            }
-
-            environment["CX_BOTTLE"] = profile.BottleName;
-            environment.Remove("WINEPREFIX");
-            runtimeTarget = $"CrossOver bottle {profile.BottleName}";
-            return true;
-        }
-
-        if (environment.TryGetValue("WINEPREFIX", out string? explicitPrefix)
-            && !string.IsNullOrWhiteSpace(explicitPrefix))
-        {
-            normalizedPrefix = Path.GetFullPath(explicitPrefix);
-            Directory.CreateDirectory(normalizedPrefix);
-            environment["WINEPREFIX"] = normalizedPrefix;
-            runtimeTarget = normalizedPrefix;
-            return true;
-        }
-
-        error = "Custom runtime has no explicit Wine prefix or bottle. Select Wine prefix mode or provide a runtime that exports WINEPREFIX.";
+        error = "AetherXIV requires its bundled Wine runtime and isolated managed prefix on this platform.";
         return false;
     }
 
@@ -370,7 +385,7 @@ public static class WineRuntimeConfigurator
             : RuntimeInstallStore.SanitizePathSegment(environmentUser);
     }
 
-    private static async Task RemoveLegacyDesktopSettingsAsync(
+    private static async Task<IReadOnlyList<string>> QueryLegacyDesktopSettingsAsync(
         string command,
         IReadOnlyDictionary<string, string> environment,
         string logPath,
@@ -384,27 +399,9 @@ public static class WineRuntimeConfigurator
             TimeSpan.FromSeconds(15),
             cancellationToken);
 
-        if (queryResult.ExitCode != 0)
-            return;
-
-        foreach (string valueName in ParseLegacyDesktopValueNames(queryResult.Output))
-        {
-            ProcessRunResult deleteResult = await RunAndLogAsync(
-                command,
-                BuildRegDeleteValueArguments(WineExplorerDesktopsKey, valueName),
-                environment,
-                logPath,
-                TimeSpan.FromSeconds(15),
-                cancellationToken);
-
-            if (deleteResult.ExitCode != 0)
-            {
-                await File.AppendAllTextAsync(
-                    logPath,
-                    $"legacy_desktop_cleanup_failed={valueName}{Environment.NewLine}",
-                    cancellationToken);
-            }
-        }
+        return queryResult.ExitCode == 0
+            ? ParseLegacyDesktopValueNames(queryResult.Output)
+            : Array.Empty<string>();
     }
 
     public static IReadOnlyList<string> ParseLegacyDesktopValueNames(string registryQueryOutput)

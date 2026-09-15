@@ -11,7 +11,7 @@ WHERE `id`=1090264;
 
 UPDATE `server_npc_spawn_evidence`
 SET `evidenceSource`='official-trigger-packet-and-reviewed-1x-zone-layout',
-    `evidenceReference`='ffxiv_traces/moving_around_gridania.pcapng frame:93 carries actor-class 1090264 trigger 0xCFA/0x141/in/dtwi; The-Primal-Launcher@49169ae25b034ed65bcec9e4abdc68a6fb229f52:PrimalLauncher/Resources/xml/zones/xE9/npc.xml assigns class 1090264 to the Hall exit',
+    `evidenceReference`='reviewed-local-validation frame:93 carries actor-class 1090264 trigger 0xCFA/0x141/in/dtwi; The-Primal-Launcher@49169ae25b034ed65bcec9e4abdc68a6fb229f52:PrimalLauncher/Resources/xml/zones/xE9/npc.xml assigns class 1090264 to the Hall exit',
     `confidenceStatus`='TraceConfirmed'
 WHERE `evidenceId`='company-office-exit-immortal-flames';
 

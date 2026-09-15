@@ -227,7 +227,8 @@ public sealed class MariaDbActorSpawnRepository : IActorSpawnRepository
 SELECT sas.spawn_id, sas.actor_class_id, sas.unique_id, sas.zone_id, sas.private_area_name,
        sas.private_area_level, sas.position_x, sas.position_y, sas.position_z, sas.rotation,
        sas.actor_state, sas.animation_id, sas.custom_display_name, sas.map_object_layout_id,
-       sas.map_object_instance_id, p.evidence_status, p.source_type, p.source_ref, p.notes
+       sas.map_object_instance_id, sas.native_actor_slot,
+       p.evidence_status, p.source_type, p.source_ref, p.notes
 FROM static_actor_spawns sas
 JOIN provenance_refs p ON p.provenance_id = sas.provenance_id
 WHERE sas.zone_id = @zone_id
@@ -255,7 +256,8 @@ ORDER BY sas.spawn_id;
                 reader.IsDBNull(reader.GetOrdinal("custom_display_name")) ? null : reader.GetString("custom_display_name"),
                 ReadProvenance(reader),
                 reader.IsDBNull(reader.GetOrdinal("map_object_layout_id")) ? null : reader.GetUInt32("map_object_layout_id"),
-                reader.IsDBNull(reader.GetOrdinal("map_object_instance_id")) ? null : reader.GetUInt32("map_object_instance_id")));
+                reader.IsDBNull(reader.GetOrdinal("map_object_instance_id")) ? null : reader.GetUInt32("map_object_instance_id"),
+                reader.IsDBNull(reader.GetOrdinal("native_actor_slot")) ? null : reader.GetUInt32("native_actor_slot")));
         }
 
         return rows;

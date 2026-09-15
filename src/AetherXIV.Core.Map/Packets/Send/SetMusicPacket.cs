@@ -18,8 +18,10 @@ namespace AetherXIV.Core.Map.packets.send
 
         public static SubPacket BuildPacket(uint sourceActorId, ushort musicID, ushort musicTrackMode)
         {
-            ulong combined = (ulong)(musicID | (musicTrackMode << 16));
-            return new SubPacket(OPCODE, 0, BitConverter.GetBytes(combined));
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetMusicPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.SetMusicPacket(musicID, musicTrackMode));
         }
     }
 }

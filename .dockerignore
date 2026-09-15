@@ -3,6 +3,8 @@
 .vs
 .secrets
 .local-backups
+.local-evidence
+.freebuff
 bin
 **/bin
 **/obj
@@ -14,6 +16,9 @@ assets
 AetherXIV Launcher
 Legacy Meteor:Aether
 ffxiv_traces
+Complete Audit
+backtrace.txt
+db/character-backup-*.sql
 *.user
 *.suo
 *.pdb

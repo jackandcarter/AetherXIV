@@ -2,6 +2,7 @@ using AetherXIV.Core.Common;
 
 using System;
 using AetherXIV.Core.Map.dataobjects;
+using AetherXIV.Core.Map.packets;
 using AetherXIV.Core.Map.packets.receive;
 using AetherXIV.Core.Map.packets.send;
 using AetherXIV.Core.Map.packets.send.login;
@@ -16,6 +17,7 @@ using AetherXIV.Core.Map.packets.receive.events;
 using AetherXIV.Core.Map.packets.send.events;
 using AetherXIV.Core.Map.lua;
 using AetherXIV.Core.Map.Actors;
+using AetherXIV.Core.Map.actors.area;
 using AetherXIV.Core.Map.actors.chara;
 using AetherXIV.Core.Map.actors.chara.ai.state;
 using AetherXIV.Core.Map.packets.WorldPackets.Send;
@@ -34,7 +36,8 @@ namespace AetherXIV.Core.Map
         }     
 
         public void ProcessPacket(ZoneConnection client, SubPacket subpacket)
-        {                          
+        {
+            DevDiagnostics.TraceWireSubPacket("Map", "client-to-map", subpacket);
                 Session session = mServer.GetSession(subpacket.header.sourceId);
 
                 if (session == null && subpacket.gameMessage.opcode != 0x1000)
@@ -181,14 +184,25 @@ namespace AetherXIV.Core.Map
                                 "reason", "ping payload is truncated");
                         }
                         break;
-                    //Unknown
+                    //Map login handshake response. The client echoes this during the
+                    //login zone bootstrap once it accepts the server's 0x0002
+                    //handshake; the actor id at payload offset 0x08 is its world/zone
+                    //actor handle and is 0 until the bootstrap resolves it. This is a
+                    //known opcode (not an unknown game message) — answer with the
+                    //_0x2Packet acknowledgement so the bootstrap proceeds.
                     case 0x0002:
-
-                        PacketDiagnostics.LogUnknownGameMessage("Map", "map opcode 0x0002", subpacket);
-                        subpacket.DebugPrintSubPacket();
+                        uint handshakeActorId;
+                        bool handshakeValid = ProtocolPacketAdapter.TryDecodeMapLoginHandshake(
+                            subpacket,
+                            out handshakeActorId);
+                        DevDiagnostics.Trace(
+                            "client.login.handshake",
+                            "session", session.id,
+                            "player", session.GetActor().customDisplayName,
+                            "actorId", String.Format("0x{0:X8}", handshakeActorId),
+                            "invalidPacket", !handshakeValid);
                         session.QueuePacket(_0x2Packet.BuildPacket(session.id));
                         client.FlushQueuedSendPackets();
-
                         break;
                     //Chat Received
                     case 0x0003:
@@ -221,6 +235,13 @@ namespace AetherXIV.Core.Map
                         LuaEngine.GetInstance().CallLuaFunction(session.GetActor(), session.GetActor(), "onBeginLogin", true);                    
                         Server.GetWorldManager().DoZoneIn(session.GetActor(), true, loginSpawnType);
                         LuaEngine.GetInstance().CallLuaFunction(session.GetActor(), session.GetActor(), "onLogin", true);
+                        // Re-arm quest ENPCs now that the login zone-in bundle
+                        // has spawned the zone's actors (Garlemald
+                        // handle_language_code tail). A relog loads the quest
+                        // at its saved sequence WITHOUT a StartSequence, so
+                        // onStateChange never re-runs and the ENPC flags
+                        // (talk/push enables + head markers) stay un-armed.
+                        session.GetActor().ReestablishQuestENpcs("login");
                         session.languageCode = langCode.languageCode;
                         DevDiagnostics.Trace(
                             "client.login.ready.done",
@@ -252,21 +273,13 @@ namespace AetherXIV.Core.Map
                             zoneInCompletePacket.unknown))
                         {
                             Player readyPlayer = session.GetActor();
-                            if (Server.GetWorldManager()
-                                .IsLocalZoneBootstrapPending(readyPlayer))
-                            {
-                                DevDiagnostics.Trace(
-                                    "client.zoneInComplete.ignoredEarly",
-                                    "session", session.id,
-                                    "player", readyPlayer.customDisplayName,
-                                    "reason",
-                                        "destination actor bootstrap is still pending");
-                            }
-                            else
-                            {
-                                readyPlayer.RefreshQuestENpcs();
-                                readyPlayer.ReleaseDeferredContentKickEvent();
-                            }
+                            // The current stack owns the complete transition
+                            // lifecycle in Player.CompleteZoneChange(). Do not
+                            // restore the removed pending-bootstrap/legacy
+                            // refresh helpers here; that would create a second
+                            // completion and ENPC publication path.
+                            readyPlayer.CompleteZoneChange();
+                            readyPlayer.ReleaseDeferredContentKickEvent();
                         }
                         break;
                     //Update Position
@@ -304,14 +317,6 @@ namespace AetherXIV.Core.Map
 
                         session.UpdatePlayerActorPosition(posUpdate.x, posUpdate.y, posUpdate.z, posUpdate.rot, posUpdate.moveState);
                         positionPlayer.SendInstanceUpdate();
-
-                        // A destination-position echo can arrive while the
-                        // retail-paced actor bootstrap is still locked. It is
-                        // not a completed transition until the keep-list has
-                        // been committed and updates are unlocked.
-                        if (positionPlayer.IsInZoneChange()
-                            && !session.isUpdatesLocked)
-                            positionPlayer.CompleteZoneChange();
 
                         break;
                     //Set Target 
@@ -372,40 +377,46 @@ namespace AetherXIV.Core.Map
 
                         session.GetActor().BroadcastPacket(SetActorTargetAnimatedPacket.BuildPacket(session.id, setTarget.actorID), true);
                         break;
-                    //Lock Target
+                    // Client 0x00CC is shared by the short actor-instantiate
+                    // acknowledgement and combat lock state. Do not turn an
+                    // NPC lifecycle acknowledgement into battle targeting.
                     case 0x00CC:
                         LockTargetPacket lockTarget = new LockTargetPacket(subpacket.data);
+                        if (lockTarget.IsActorInstantiateAcknowledge)
+                        {
+                            ClientInteractionDiagnostics.TraceActorInstantiateAcknowledge(
+                                session,
+                                lockTarget);
+                            break;
+                        }
+
                         ClientInteractionDiagnostics.TraceLockTarget(session, lockTarget);
-                        session.GetActor().currentLockedTarget = lockTarget.actorID;
+                        session.GetActor().currentLockedTarget =
+                            lockTarget.IsClearLock
+                                ? Actor.INVALID_ACTORID
+                                : lockTarget.actorID;
                         break;
                     //Start Event
                     case 0x012D:
                         subpacket.DebugPrintSubPacket();
                         EventStartPacket eventStart = new EventStartPacket(subpacket.data);
 
-                        // NPC-linkshell reads are quest events, even though the
-                        // client addresses the system command actor. Route the
-                        // command directly to the pending quest's onNpcLS hook;
-                        // the generic command script is not the owner of that
-                        // message chain.
-                        if (eventStart.ownerActorID == 0xA0F05E95)
-                        {
-                            session.GetActor().StartNpcLinkshellEvent(eventStart);
-                            break;
-                        }
-
-                        /*
                         if (eventStart.error != null)
                         {
-                            player.errorMessage += eventStart.error;
+                            var scriptErrorPlayer = session.GetActor();
+
+                            DevDiagnostics.Trace(
+                                "client.scriptError",
+                                "player", scriptErrorPlayer.GetName(),
+                                "errorIndex", eventStart.errorIndex,
+                                "errorNum", eventStart.errorNum,
+                                "errorText", eventStart.error);
 
                             if (eventStart.errorIndex == eventStart.errorNum - 1)
-                                Program.Log.Error("\n"+player.errorMessage);
-
+                                Program.Log.Error("\n" + eventStart.error);
 
                             break;
                         }
-                        */
 
                         Actor ownerActor = Server.GetStaticActors(eventStart.ownerActorID);
                         var eventPlayer = session.GetActor();
@@ -415,9 +426,28 @@ namespace AetherXIV.Core.Map
                             //Is it your retainer?
                             if (eventPlayer.currentSpawnedRetainer != null && eventPlayer.currentSpawnedRetainer.actorId == eventStart.ownerActorID)
                                 ownerActor = eventPlayer.currentSpawnedRetainer;
-                            //Is it a instance actor?
+                            // Is it an instance actor? Search the player's local
+                            // area first, then walk up to the owning Zone and use
+                            // FindActorInZone, which covers the zone's public list
+                            // AND every private/content area it owns. A bare
+                            // FindActorInArea on the player's zone only sees one
+                            // list, so content actors (e.g. the battle
+                            // openingstoper 0x45300C05 firing caution/exit) and
+                            // sibling-area actors resolved to null and
+                            // force-closed. (Garlemald apply_0x12d resolves
+                            // through the full zone.)
                             if (ownerActor == null && eventPlayer.zone != null)
+                            {
                                 ownerActor = eventPlayer.zone.FindActorInArea(eventStart.ownerActorID);
+                                if (ownerActor == null)
+                                {
+                                    Zone rootZone = eventPlayer.zone as Zone;
+                                    if (rootZone == null && eventPlayer.zone is PrivateArea privateArea)
+                                        rootZone = privateArea.GetParentZone();
+                                    if (rootZone != null)
+                                        ownerActor = rootZone.FindActorInZone(eventStart.ownerActorID);
+                                }
+                            }
                             if (ownerActor == null)
                             {
                                 //Is it a Director?
@@ -487,18 +517,24 @@ namespace AetherXIV.Core.Map
                         break;
                     case 0x012F:
                         subpacket.DebugPrintSubPacket();
-                        ParameterDataRequestPacket paramRequest = new ParameterDataRequestPacket(subpacket.data);
-                        bool handledParameterRequest = !paramRequest.invalidPacket && paramRequest.paramName != null && paramRequest.paramName.Equals("charaWork/exp");
+                        WorkSyncRequestPacket workSyncRequest = new WorkSyncRequestPacket(subpacket.data);
+                        bool handledParameterRequest = !workSyncRequest.invalidPacket
+                            && workSyncRequest.actorID == session.GetActor().actorId
+                            && session.GetActor().OnWorkSyncRequest(
+                                workSyncRequest.propertyName,
+                                workSyncRequest.from,
+                                workSyncRequest.to);
                         DevDiagnostics.Trace(
                             "client.parameter.request",
                             "player", session.GetActor().customDisplayName,
                             "actor", String.Format("0x{0:X}", session.GetActor().actorId),
-                            "requestedActor", String.Format("0x{0:X}", paramRequest.actorID),
-                            "paramName", paramRequest.paramName,
-                            "invalidPacket", paramRequest.invalidPacket,
+                            "requestedActor", String.Format("0x{0:X}", workSyncRequest.actorID),
+                            "paramName", workSyncRequest.propertyName,
+                            "from", workSyncRequest.from,
+                            "to", workSyncRequest.to,
+                            "requestingBitfield", workSyncRequest.requestingBitfield,
+                            "invalidPacket", workSyncRequest.invalidPacket,
                             "handled", handledParameterRequest);
-                        if (handledParameterRequest)
-                            session.GetActor().SendCharaExpInfo();
                         break;
                     // Client list-object add/delete acknowledgement. This
                     // direction-specific 0x0130 is not RunEventFunction and

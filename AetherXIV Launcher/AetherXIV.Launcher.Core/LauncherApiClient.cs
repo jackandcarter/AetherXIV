@@ -51,27 +51,6 @@ public sealed class LauncherApiClient
         return GetAsync<LauncherPatchManifest>("patch-manifest", cancellationToken);
     }
 
-    public Task<RuntimeCatalog?> GetRuntimeCatalogAsync(string platformRid, CancellationToken cancellationToken = default)
-    {
-        return GetRuntimeCatalogAsync(platformRid, null, cancellationToken);
-    }
-
-    public Task<RuntimeCatalog?> GetRuntimeCatalogAsync(
-        string platformRid,
-        string? runtimeCatalogPath,
-        CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(platformRid))
-            throw new ArgumentException("Platform runtime identifier is required.", nameof(platformRid));
-
-        string encoded = Uri.EscapeDataString(platformRid);
-        string endpoint = string.IsNullOrWhiteSpace(runtimeCatalogPath)
-            ? "runtime-catalog"
-            : runtimeCatalogPath.TrimStart('/');
-        char separator = endpoint.Contains('?', StringComparison.Ordinal) ? '&' : '?';
-        return GetAsync<RuntimeCatalog>($"{endpoint}{separator}platform={encoded}", cancellationToken);
-    }
-
     public Task<UmbraFrameworkCatalog?> GetUmbraFrameworkCatalogAsync(
         string platformRid,
         CancellationToken cancellationToken = default)

@@ -63,4 +63,3 @@ function onEventStarted(player, npc, triggerName)
     callClientFunction(player, "finishTalkTurn");
     player:endEvent();
 end
-

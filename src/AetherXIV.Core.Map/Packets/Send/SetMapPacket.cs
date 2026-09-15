@@ -11,19 +11,10 @@ namespace AetherXIV.Core.Map.packets.send
 
         public static SubPacket BuildPacket(uint playerActorID, uint mapID, uint regionID)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    binWriter.Write((uint)mapID);
-                    binWriter.Write((uint)regionID);
-                    binWriter.Write((uint)0x28);
-                }
-            }
-
-            return new SubPacket(OPCODE, playerActorID, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.SetMapPacketCodec(),
+                playerActorID,
+                new AetherXIV.Protocol.SetMapPacket(mapID, regionID));
         }
     }
 }

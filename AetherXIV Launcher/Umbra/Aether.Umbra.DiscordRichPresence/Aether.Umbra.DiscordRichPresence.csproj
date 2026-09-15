@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <PackageReference Include="Aether.Umbra.PluginApi" 
+                      Version="2.0.0" 
+                      ExcludeAssets="runtime" 
+                      PrivateAssets="all" />
+    <PackageReference Include="DiscordRichPresence" Version="1.6.1.70" />
+    <None Include="umbra-plugin.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>Aether.Umbra.DiscordRichPresence</AssemblyName>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <Target Name="RemovePluginApiFromOutput" AfterTargets="CopyFilesToOutputDirectory">
+    <ItemGroup>
+      <PluginApiFiles Include="$(OutputPath)Aether.Umbra.PluginApi.*" />
+    </ItemGroup>
+    <Delete Files="@(PluginApiFiles)" />
+  </Target>
+
+</Project>

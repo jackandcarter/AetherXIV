@@ -20,10 +20,28 @@ public enum UmbraPluginManagerTab
     Installed,
     Supported,
     Available,
+    Repositories,
     Updates,
     Settings,
     Logs
 }
+
+public enum UmbraRepositoryHealth
+{
+    Checking,
+    Healthy,
+    Cached,
+    Failed
+}
+
+public sealed record UmbraRepositoryStatus(
+    string Url,
+    string? Name,
+    UmbraRepositoryHealth Health,
+    int TotalPluginCount,
+    int CompatiblePluginCount,
+    DateTimeOffset? LastChecked,
+    string? LastError);
 
 public sealed record UmbraPluginManagerState(
     bool IsOpen,
@@ -39,6 +57,9 @@ public sealed record UmbraPluginManagerState(
 
     public UmbraDeveloperPluginSettings DeveloperPlugins { get; init; } =
         UmbraDeveloperPluginSettings.Default;
+
+    public IReadOnlyList<UmbraRepositoryStatus> RepositoryStatuses { get; init; } =
+        Array.Empty<UmbraRepositoryStatus>();
 
     public static UmbraPluginManagerState Default => new(
         false,

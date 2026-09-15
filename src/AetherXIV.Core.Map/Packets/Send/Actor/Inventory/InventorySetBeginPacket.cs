@@ -12,19 +12,10 @@ namespace AetherXIV.Core.Map.packets.send.actor.inventory
 
         public static SubPacket BuildPacket(uint sourceActorId, ushort size, ushort code)
         {
-            byte[] data = new byte[8];
-
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    binWriter.Write((UInt32)sourceActorId);
-                    binWriter.Write((UInt16)size);
-                    binWriter.Write((UInt16)code);
-                }                
-            }
-
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.InventorySetBeginPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.InventorySetBeginPacket(size, code));
         }
 
     }

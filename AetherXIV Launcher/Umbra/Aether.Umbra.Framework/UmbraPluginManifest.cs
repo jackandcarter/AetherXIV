@@ -38,6 +38,15 @@ public sealed record UmbraPluginManifest(
     [JsonPropertyName("capabilities")]
     public IReadOnlyList<string> Capabilities { get; init; } = Array.Empty<string>();
 
+    [JsonPropertyName("target_framework")]
+    public string TargetFramework { get; init; } = "net10.0-windows";
+
+    [JsonPropertyName("architecture")]
+    public string Architecture { get; init; } = "x86";
+
+    [JsonPropertyName("language")]
+    public string Language { get; init; } = "CSharp";
+
     [JsonPropertyName("installed_from_url")]
     public string? InstalledFromUrl { get; init; }
 
@@ -82,6 +91,12 @@ public sealed record UmbraPluginManifest(
 
         if (EntryType is not null && string.IsNullOrWhiteSpace(EntryType))
             throw new InvalidDataException("Umbra plugin entry_type must be omitted or contain a type name.");
+        if (!string.Equals(TargetFramework, "net10.0-windows", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Umbra API 2.x plugins must target net10.0-windows.");
+        if (!string.Equals(Architecture, "x86", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Umbra API 2.x plugins must target x86.");
+        if (!string.Equals(Language, "CSharp", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidDataException("Umbra API 2.x plugin manifests must declare CSharp.");
     }
 
     internal void Save()

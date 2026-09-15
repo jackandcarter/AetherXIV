@@ -27,7 +27,11 @@ namespace AetherXIV.Core.Map.Actors
         protected int numXBlocks, numYBlocks;
         protected int halfWidth, halfHeight;
 
-        private Dictionary<uint, Director> currentDirectors = new Dictionary<uint, Director>();
+        // Legacy Meteor creates a logical director for every request. Native
+        // director slots are client-visible identities, not area-wide object
+        // singletons, so multiple players may own separate director instances
+        // that intentionally use the same stable actor id.
+        private List<Director> currentDirectors = new List<Director>();
         private Object directorLock = new Object();
 
         protected Director mWeatherDirector;
@@ -35,14 +39,32 @@ namespace AetherXIV.Core.Map.Actors
         protected List<SpawnLocation> mSpawnLocations = new List<SpawnLocation>();
         protected Dictionary<uint, Actor> mActorList = new Dictionary<uint, Actor>();
         protected List<Actor>[,] mActorBlock;
-        private const uint PrivateAreaActorNumberStart = 0x700;
-        private uint nextPublicAreaActorNumber = 1;
-        private uint nextPrivateAreaActorNumber = PrivateAreaActorNumberStart;
+        private const uint PublicTransientActorNumberStart = 0x40000;
+        private readonly uint territoryId;
+        private readonly uint actorNamespaceId;
+        private readonly bool usesAuthoritativeNativeSlots;
+        private readonly Dictionary<uint, string> reservedActorSlots = new Dictionary<uint, string>();
+        private readonly Dictionary<int, string> reservedObjectNameOrdinals = new Dictionary<int, string>();
+        private readonly Dictionary<uint, int> transientObjectNameOrdinals = new Dictionary<uint, int>();
+        private readonly Object actorIdentityLock = new Object();
+        private uint nextPublicAreaActorNumber;
+        private int nextPublicTransientObjectNameOrdinal = NativeActorId.MaximumObjectNameOrdinal;
 
-        public Area(uint id, string zoneName, ushort regionId, string classPath, ushort bgmDay, ushort bgmNight, ushort bgmBattle, bool isIsolated, bool isInn, bool canRideChocobo, bool canStealth, bool isInstanceRaid)
-            : base(id)
+        // Public Lua-facing area contract. The native-slot implementation
+        // remains the sole owner of the backing values.
+        public string ZoneName { get { return zoneName; } }
+        public uint ZoneId { get { return territoryId; } }
+        public ushort RegionId { get { return regionId; } }
+
+        protected Area(uint territoryId, uint areaMasterActorId, uint actorNamespaceId, bool usesAuthoritativeNativeSlots, string zoneName, ushort regionId, string classPath, ushort bgmDay, ushort bgmNight, ushort bgmBattle, bool isIsolated, bool isInn, bool canRideChocobo, bool canStealth, bool isInstanceRaid)
+            : base(areaMasterActorId)
         {
-
+            this.territoryId = territoryId;
+            this.actorNamespaceId = actorNamespaceId;
+            this.usesAuthoritativeNativeSlots = usesAuthoritativeNativeSlots;
+            nextPublicAreaActorNumber = usesAuthoritativeNativeSlots
+                ? PublicTransientActorNumberStart
+                : 1;
             this.zoneName = zoneName;
             this.regionId = regionId;
             this.canStealth = canStealth;
@@ -57,7 +79,7 @@ namespace AetherXIV.Core.Map.Actors
 
             this.displayNameId = 0;
             this.customDisplayName = "_areaMaster";
-            this.actorName = String.Format("_areaMaster@{0:X5}", id << 8);
+            this.actorName = String.Format("_areaMaster@{0:X5}", territoryId << 8);
 
             this.classPath = classPath;
             this.className = classPath.Substring(classPath.LastIndexOf("/") + 1);
@@ -75,23 +97,80 @@ namespace AetherXIV.Core.Map.Actors
                     mActorBlock[x, y] = new List<Actor>();
                 }
             }
+
+            // Slot 1 is the native area-master identity even when the
+            // territory's remaining static-NPC assignments have not yet
+            // been recovered. Reserve it in every namespace so compatibility
+            // allocation can never reuse the client's area-master actor.
+            ReserveNativeActorSlot(
+                NativeActorId.GetNativeSlot(areaMasterActorId),
+                "area-master");
+        }
+
+        public uint GetTerritoryId()
+        {
+            return territoryId;
+        }
+
+        public uint GetActorNamespaceId()
+        {
+            return actorNamespaceId;
+        }
+
+        public bool UsesAuthoritativeNativeSlots()
+        {
+            return usesAuthoritativeNativeSlots;
+        }
+
+        public uint GetActorNameZoneId()
+        {
+            return territoryId;
+        }
+
+        public virtual string GetPrivateAreaName()
+        {
+            return "";
+        }
+
+        public virtual uint GetPrivateAreaType()
+        {
+            return 0;
+        }
+
+        public virtual bool IsPublic()
+        {
+            return true;
+        }
+
+        public virtual bool IsPrivate()
+        {
+            return !IsPublic();
         }
 
         public override SubPacket CreateScriptBindPacket()
         {
             List<LuaParam> lParams;
             lParams = LuaUtils.CreateLuaParamList(classPath, false, true, zoneName, "/Area/Zone/ZoneDefault", -1, (byte)1, true, false, false, false, false, false, false, false);
-            return ActorInstantiatePacket.BuildPacket(actorId, actorName, "ZoneDefault", lParams);
+            return ActorInstantiatePacket.BuildPacket(
+                actorId,
+                actorName,
+                "ZoneDefault",
+                lParams,
+                GetActorInstantiationAreaKey());
         }
 
         public override List<SubPacket> GetSpawnPackets()
         {
             List<SubPacket> subpackets = new List<SubPacket>();
-            subpackets.Add(CreateAddActorPacket(0));            
+            subpackets.Add(CreateAddActorPacket(0));
             subpackets.Add(CreateSpeedPacket());
-            subpackets.Add(CreateSpawnPositonPacket(0x1));
+            subpackets.Add(CreateSpawnPositonPacket(0));
+            subpackets.Add(CreatePositionUpdatePacket());
             subpackets.Add(CreateNamePacket());
             subpackets.Add(CreateStatePacket());
+            subpackets.Add(SetActorSubStatePacket.BuildPacket(actorId, currentSubState));
+            subpackets.Add(SetActorStatusAllPacket.BuildPacket(actorId, new ushort[20]));
+            subpackets.Add(SetActorIconPacket.BuildPacket(actorId, 0));
             subpackets.Add(CreateIsZoneingPacket());
             subpackets.Add(CreateScriptBindPacket());
             return subpackets;
@@ -118,7 +197,12 @@ namespace AetherXIV.Core.Map.Actors
                         "incoming", actor.actorName,
                         "existing", existing == null ? null : existing.actorName,
                         "privateArea", this is PrivateArea);
-                    return;
+                    throw new InvalidOperationException(String.Format(
+                        "Actor 0x{0:X8} ({1}) is already published in area {2} by {3}.",
+                        actor.actorId,
+                        actor.actorName,
+                        zoneName,
+                        existing == null ? "(unknown)" : existing.actorName));
                 }
 
                 mActorList.Add(actor.actorId, actor);
@@ -242,9 +326,13 @@ namespace AetherXIV.Core.Map.Actors
 
             lock (mActorBlock)
             {
-                for (int gx = gridX - checkDistance; gx <= gridX + checkDistance; gx++)
+                int firstGridX = Math.Max(0, gridX - checkDistance);
+                int lastGridX = Math.Min(numXBlocks - 1, gridX + checkDistance);
+                int firstGridY = Math.Max(0, gridY - checkDistance);
+                int lastGridY = Math.Min(numYBlocks - 1, gridY + checkDistance);
+                for (int gx = firstGridX; gx <= lastGridX; gx++)
                 {
-                    for (int gy = gridY - checkDistance; gy <= gridY + checkDistance; gy++)
+                    for (int gy = firstGridY; gy <= lastGridY; gy++)
                     {
                         result.AddRange(mActorBlock[gx, gy].OfType<T>());
                     }
@@ -253,13 +341,7 @@ namespace AetherXIV.Core.Map.Actors
 
             //Remove players if isolation zone
             if (isIsolated)
-            {
-                for (int i = 0; i < result.Count; i++)
-                {
-                    if (result[i] is Player)
-                        result.RemoveAt(i);
-                }
-            }
+                result.RemoveAll(actor => actor is Player);
             return result;
         }
 
@@ -308,13 +390,7 @@ namespace AetherXIV.Core.Map.Actors
 
             //Remove players if isolation zone
             if (isIsolated)
-            {
-                for (int i = 0; i < result.Count; i++)
-                {
-                    if (result[i] is Player)
-                        result.RemoveAt(i);
-                }
-            }
+                result.RemoveAll(nearbyActor => nearbyActor is Player);
 
             return result;
         }
@@ -334,6 +410,27 @@ namespace AetherXIV.Core.Map.Actors
         public T FindActorInArea<T>(uint id) where T : Actor
         {
             return FindActorInArea(id) as T;
+        }
+
+        /// <summary>
+        /// Resolves the first NPC in this area whose actor class id matches
+        /// <paramref name="classId"/>. Quest ENPCs are registered by class
+        /// id, so a sequence flip that (re)enables a marker must bind the
+        /// live NPC instance that owns the class. (Garlemald
+        /// find_npc_by_class_id.)
+        /// </summary>
+        public Npc FindNpcByClassId(uint classId)
+        {
+            lock (mActorList)
+            {
+                foreach (Actor actor in mActorList.Values)
+                {
+                    if (actor is Npc npc && npc.GetActorClassId() == classId)
+                        return npc;
+                }
+            }
+
+            return null;
         }
 
         public Actor FindActorInZoneByUniqueID(string uniqueId)
@@ -620,15 +717,34 @@ namespace AetherXIV.Core.Map.Actors
                 if (actorClass == null)
                     return;
 
-                uint zoneId;
-
-                if (this is PrivateArea)
-                    zoneId = ((PrivateArea)this).GetParentZone().actorId;
+                uint actorNumber;
+                if (this is PrivateArea privateArea)
+                {
+                    actorNumber = privateArea.ReserveStaticActorNumber(location);
+                }
+                else if (location.nativeActorSlot.HasValue)
+                {
+                    actorNumber = ReserveNativeActorSlot(
+                        location.nativeActorSlot.Value,
+                        String.Format("static-spawn:{0}:{1}", location.spawnId, location.uniqueId));
+                }
                 else
-                    zoneId = actorId;
-
-                uint actorNumber = AllocateSpawnedActorNumber();
-                Npc npc = new Npc((int)actorNumber, actorClass, location.uniqueId, this, location.x, location.y, location.z, location.rot, location.state, location.animId, null);
+                {
+                    actorNumber = AllocateSpawnedActorNumber();
+                    if (!(this is PrivateArea))
+                    {
+                        int objectNameOrdinal = ResolveObjectNameOrdinal(actorNumber, false);
+                        DevDiagnostics.Trace(
+                            "area.actor.spawn.compatibilitySlot",
+                            "territory", territoryId,
+                            "spawnId", location.spawnId,
+                            "classId", location.classId,
+                            "uniqueId", location.uniqueId,
+                            "allocatedSlot", actorNumber,
+                            "objectNameOrdinal", objectNameOrdinal);
+                    }
+                }
+                Npc npc = new Npc((int)actorNumber, actorClass, location.uniqueId, this, location.x, location.y, location.z, location.rot, location.state, location.animId, null, location.nativeActorSlot.HasValue);
                 TracePrivateAreaSpawn(npc, actorNumber, location.classId, location.uniqueId, false);
 
 
@@ -649,13 +765,7 @@ namespace AetherXIV.Core.Map.Actors
                 if (actorClass == null)
                     return null;
 
-                uint zoneId;
-                if (this is PrivateArea)
-                    zoneId = ((PrivateArea)this).GetParentZone().actorId;
-                else
-                    zoneId = actorId;
-
-                uint actorNumber = AllocateSpawnedActorNumber();
+                uint actorNumber = AllocateSpawnedActorNumber(uniqueId);
                 Npc npc;
                 if (isMob)
                     npc = new BattleNpc((int)actorNumber, actorClass, uniqueId, this, x, y, z, rot, state, animId, null);
@@ -683,14 +793,7 @@ namespace AetherXIV.Core.Map.Actors
                 if (actorClass == null)
                     return null;
 
-                uint zoneId;
-
-                if (this is PrivateArea)
-                    zoneId = ((PrivateArea)this).GetParentZone().actorId;
-                else
-                    zoneId = actorId;
-
-                uint actorNumber = AllocateSpawnedActorNumber();
+                uint actorNumber = AllocateSpawnedActorNumber(uniqueId);
                 Npc npc = new Npc((int)actorNumber, actorClass, uniqueId, this, x, y, z, 0, regionId, layoutId);
                 TracePrivateAreaSpawn(npc, actorNumber, classId, uniqueId, false);
 
@@ -714,20 +817,221 @@ namespace AetherXIV.Core.Map.Actors
 
         public void DespawnActor(string uniqueId)
         {
-            RemoveActorFromZone(FindActorInZoneByUniqueID(uniqueId));
+            DespawnActor(FindActorInZoneByUniqueID(uniqueId));
         }
 
         public void DespawnActor(Actor actor)
         {
+            if (actor == null)
+                return;
+
             RemoveActorFromZone(actor);
+            ReleaseTransientActorNumber(actor.actorId);
         }
 
-        internal uint AllocateSpawnedActorNumber()
+        internal uint AllocateSpawnedActorNumber(string uniqueId = "scripted")
         {
-            if (this is PrivateArea)
-                return nextPrivateAreaActorNumber++;
+            if (this is PrivateArea privateArea)
+                return privateArea.AllocateTransientActorNumber(uniqueId);
 
-            return nextPublicAreaActorNumber++;
+            lock (actorIdentityLock)
+            {
+                uint candidate = nextPublicAreaActorNumber;
+                while (reservedActorSlots.ContainsKey(candidate))
+                    candidate++;
+
+                if (candidate > NativeActorId.MaximumSlot)
+                    throw new InvalidOperationException(String.Format(
+                        "Area {0} exhausted its transient actor namespace.",
+                        zoneName));
+
+                if (candidate >= nextPublicAreaActorNumber)
+                    nextPublicAreaActorNumber = candidate + 1;
+
+                if (usesAuthoritativeNativeSlots)
+                {
+                    while (nextPublicTransientObjectNameOrdinal >= 0
+                        && reservedObjectNameOrdinals.ContainsKey(nextPublicTransientObjectNameOrdinal))
+                    {
+                        nextPublicTransientObjectNameOrdinal--;
+                    }
+
+                    if (nextPublicTransientObjectNameOrdinal < 0)
+                    {
+                        throw new InvalidOperationException(String.Format(
+                            "Area {0} exhausted its two-character object-name namespace.",
+                            zoneName));
+                    }
+
+                    int objectNameOrdinal = nextPublicTransientObjectNameOrdinal--;
+                    transientObjectNameOrdinals.Add(candidate, objectNameOrdinal);
+                    reservedObjectNameOrdinals.Add(objectNameOrdinal, "transient");
+                }
+
+                reservedActorSlots.Add(candidate, "transient");
+                return candidate;
+            }
+        }
+
+        internal int ResolveObjectNameOrdinal(uint actorNumber, bool usesNativeSlot)
+        {
+            if (usesNativeSlot)
+                return NativeActorId.GetObjectNameOrdinal(actorNumber);
+
+            lock (actorIdentityLock)
+            {
+                if (transientObjectNameOrdinals.TryGetValue(actorNumber, out int objectNameOrdinal))
+                    return objectNameOrdinal;
+            }
+
+            if (usesAuthoritativeNativeSlots && !(this is PrivateArea))
+            {
+                throw new InvalidOperationException(String.Format(
+                    "Actor slot 0x{0:X} in authoritative territory {1} has no object-name allocation.",
+                    actorNumber,
+                    territoryId));
+            }
+
+            return checked((int)actorNumber);
+        }
+
+        internal void ReleaseTransientActorNumber(uint actorId)
+        {
+            if (NativeActorId.GetKind(actorId) != NativeActorId.NonPlayerKind
+                || NativeActorId.GetTerritoryId(actorId) != actorNamespaceId)
+            {
+                return;
+            }
+
+            uint actorSlot = NativeActorId.GetNativeSlot(actorId);
+            lock (actorIdentityLock)
+            {
+                if (!reservedActorSlots.TryGetValue(actorSlot, out string owner)
+                    || (!String.Equals(owner, "transient", StringComparison.Ordinal)
+                        && !String.Equals(owner, "private-transient", StringComparison.Ordinal)))
+                {
+                    return;
+                }
+
+                reservedActorSlots.Remove(actorSlot);
+                if (this is PrivateArea privateArea)
+                {
+                    privateArea.ReleaseTransientActorNumberFromParent(actorSlot);
+                    if (reservedObjectNameOrdinals.TryGetValue(
+                            checked((int)actorSlot),
+                            out string privateObjectNameOwner)
+                        && String.Equals(
+                            privateObjectNameOwner,
+                            "private-transient",
+                            StringComparison.Ordinal))
+                    {
+                        reservedObjectNameOrdinals.Remove(
+                            checked((int)actorSlot));
+                    }
+                }
+                if (transientObjectNameOrdinals.TryGetValue(actorSlot, out int objectNameOrdinal))
+                {
+                    transientObjectNameOrdinals.Remove(actorSlot);
+                    if (reservedObjectNameOrdinals.TryGetValue(objectNameOrdinal, out string objectNameOwner)
+                        && String.Equals(objectNameOwner, "transient", StringComparison.Ordinal))
+                    {
+                        reservedObjectNameOrdinals.Remove(objectNameOrdinal);
+                    }
+                }
+            }
+        }
+
+        internal uint ReserveNativeActorSlot(uint nativeSlot, string owner)
+        {
+            NativeActorId.ComposeNonPlayer(actorNamespaceId, nativeSlot);
+            lock (actorIdentityLock)
+            {
+                if (reservedActorSlots.TryGetValue(nativeSlot, out string existingOwner))
+                {
+                    throw new InvalidOperationException(String.Format(
+                        "Duplicate native actor slot 0x{0:X} in territory {1}: {2} conflicts with {3}.",
+                        nativeSlot,
+                        territoryId,
+                        owner,
+                        existingOwner));
+                }
+
+                int objectNameOrdinal = NativeActorId.GetObjectNameOrdinal(nativeSlot);
+                if (reservedObjectNameOrdinals.TryGetValue(objectNameOrdinal, out string existingObjectNameOwner))
+                {
+                    throw new InvalidOperationException(String.Format(
+                        "Native actor slot 0x{0:X} in territory {1} requires object-name ordinal {2}, but {3} already owns it.",
+                        nativeSlot,
+                        territoryId,
+                        objectNameOrdinal,
+                        existingObjectNameOwner));
+                }
+
+                reservedActorSlots.Add(nativeSlot, owner);
+                reservedObjectNameOrdinals.Add(objectNameOrdinal, owner);
+                return nativeSlot;
+            }
+        }
+
+        internal uint ReserveCompatibilityActorSlot(uint actorSlot, string owner)
+        {
+            NativeActorId.ComposeNonPlayer(actorNamespaceId, actorSlot);
+            if (actorSlot > PrivateAreaActorIdentityPolicy.MaximumActorNumber)
+            {
+                throw new InvalidOperationException(String.Format(
+                    "Compatibility actor slot 0x{0:X} in territory {1} cannot be represented by the client object-name token.",
+                    actorSlot,
+                    territoryId));
+            }
+
+            lock (actorIdentityLock)
+            {
+                if (reservedActorSlots.TryGetValue(
+                    actorSlot,
+                    out string existingOwner))
+                {
+                    throw new InvalidOperationException(String.Format(
+                        "Duplicate compatibility actor slot 0x{0:X} in territory {1}: {2} conflicts with {3}.",
+                        actorSlot,
+                        territoryId,
+                        owner,
+                        existingOwner));
+                }
+
+                int objectNameOrdinal = checked((int)actorSlot);
+                if (reservedObjectNameOrdinals.TryGetValue(
+                    objectNameOrdinal,
+                    out string existingObjectNameOwner))
+                {
+                    throw new InvalidOperationException(String.Format(
+                        "Compatibility actor slot 0x{0:X} in territory {1} conflicts with object-name owner {2}.",
+                        actorSlot,
+                        territoryId,
+                        existingObjectNameOwner));
+                }
+
+                reservedActorSlots.Add(actorSlot, owner);
+                reservedObjectNameOrdinals.Add(objectNameOrdinal, owner);
+                return actorSlot;
+            }
+        }
+
+        private void ReleaseNativeActorSlot(uint nativeSlot, string owner)
+        {
+            lock (actorIdentityLock)
+            {
+                if (reservedActorSlots.TryGetValue(nativeSlot, out string existingOwner)
+                    && String.Equals(existingOwner, owner, StringComparison.Ordinal))
+                {
+                    reservedActorSlots.Remove(nativeSlot);
+                    int objectNameOrdinal = NativeActorId.GetObjectNameOrdinal(nativeSlot);
+                    if (reservedObjectNameOrdinals.TryGetValue(objectNameOrdinal, out string objectNameOwner)
+                        && String.Equals(objectNameOwner, owner, StringComparison.Ordinal))
+                    {
+                        reservedObjectNameOrdinals.Remove(objectNameOrdinal);
+                    }
+                }
+            }
         }
 
         private void TracePrivateAreaSpawn(Npc npc, uint actorNumber, uint classId, string uniqueId, bool isMob)
@@ -782,12 +1086,95 @@ namespace AetherXIV.Core.Map.Actors
 
         public Director CreateDirector(string path, bool hasContentGroup, params object[] args)
         {
+            DevDiagnostics.Trace(
+                "director.create.request",
+                "area", zoneName,
+                "areaKind", GetType().Name,
+                "territory", territoryId,
+                "areaActorId", String.Format("0x{0:X}", actorId),
+                "path", path ?? "",
+                "hasContentGroup", hasContentGroup,
+                "existingDirectorCount", currentDirectors.Count,
+                "usesAuthoritativeNativeSlots", usesAuthoritativeNativeSlots,
+                "argumentCount", args == null ? 0 : args.Length);
+
             lock (directorLock)
             {
+                if (usesAuthoritativeNativeSlots
+                    && NativeActorIdentityPolicy.TryGetResidentDirector(
+                    territoryId,
+                    path,
+                    out uint nativeSlot,
+                    out uint nativeClassId,
+                    out string nativeClassPath))
+                {
+                    // Weather is the one area-persistent director created by
+                    // Zone itself. Do not turn quest/warp directors into an
+                    // area-wide singleton merely because their wire actor id
+                    // comes from the native catalog.
+                    if (String.Equals(path, "WeatherDirector", StringComparison.Ordinal))
+                    {
+                        Director existingWeather = currentDirectors.FirstOrDefault(
+                            director => !director.IsDeleted()
+                                && String.Equals(director.GetScriptPath(), path, StringComparison.Ordinal));
+                        if (existingWeather != null)
+                        {
+                            TraceDirectorCreated(existingWeather, "reused-area-weather");
+                            return existingWeather;
+                        }
+                    }
+
+                    string slotOwner = "resident-director:" + path;
+                    lock (actorIdentityLock)
+                    {
+                        if (!reservedActorSlots.TryGetValue(nativeSlot, out string existingSlotOwner))
+                            ReserveNativeActorSlot(nativeSlot, slotOwner);
+                        else if (!String.Equals(existingSlotOwner, slotOwner, StringComparison.Ordinal))
+                            throw new InvalidOperationException(String.Format(
+                                "Native director slot 0x{0:X} in territory {1} is owned by {2}, not {3}.",
+                                nativeSlot,
+                                territoryId,
+                                existingSlotOwner,
+                                slotOwner));
+                    }
+
+                    Director residentDirector = new Director(
+                        nativeSlot,
+                        this,
+                        path,
+                        hasContentGroup,
+                        nativeClassId,
+                        nativeClassPath,
+                        args);
+                    currentDirectors.Add(residentDirector);
+                    TraceDirectorCreated(residentDirector, "created-catalog-resident");
+                    return residentDirector;
+                }
+
                 Director director = new Director(AllocateSpawnedActorNumber(), this, path, hasContentGroup, args);
-                currentDirectors.Add(director.actorId, director);
+                currentDirectors.Add(director);
+                TraceDirectorCreated(director, "created-runtime");
                 return director;
             }
+        }
+
+        private void TraceDirectorCreated(Director director, string action)
+        {
+            DevDiagnostics.Trace(
+                "director.create.result",
+                "area", zoneName,
+                "areaKind", GetType().Name,
+                "territory", territoryId,
+                "areaActorId", String.Format("0x{0:X}", actorId),
+                "path", director == null ? "" : director.GetScriptPath(),
+                "action", action ?? "",
+                "actorId", director == null ? "" : String.Format("0x{0:X}", director.actorId),
+                "nativeSlot", director == null ? 0 : NativeActorId.GetNativeSlot(director.actorId),
+                "hasNativeSlot", director != null && director.HasNativeSlot(),
+                "classId", director == null ? 0 : director.GetDirectorClassId(),
+                "isCreated", director != null && director.IsCreated(),
+                "isDeleted", director != null && director.IsDeleted(),
+                "directorCount", currentDirectors.Count);
         }
 
         public Director CreateGuildleveDirector(uint glid, byte difficulty, Player owner, params object[] args)
@@ -832,29 +1219,34 @@ namespace AetherXIV.Core.Map.Actors
             lock (directorLock)
             {
                 GuildleveDirector director = new GuildleveDirector(AllocateSpawnedActorNumber(), this, directorScriptPath, glid, difficulty, owner, args);
-                currentDirectors.Add(director.actorId, director);
+                currentDirectors.Add(director);
                 return director;
             }
         }
 
-        public void DeleteDirector(uint id)
+        public void DeleteDirector(Director director)
         {
+            if (director == null)
+                return;
+
             lock (directorLock)
             {
-                if (currentDirectors.ContainsKey(id))
-                {
-                    if (!currentDirectors[id].IsDeleted())
-                        currentDirectors[id].EndDirector();
-                    currentDirectors.Remove(id);
-                }
+                if (!currentDirectors.Remove(director))
+                    return;
+
+                // Native slots remain reserved for the area's lifetime. A
+                // completed per-player logical director does not free its
+                // stable client identity for an unrelated actor.
+                if (!director.HasNativeSlot())
+                    ReleaseTransientActorNumber(director.actorId);
             }
         }
 
         public Director GetDirectorById(uint id)
         {
-            if (currentDirectors.ContainsKey(id))
-                return currentDirectors[id];
-            return null;
+            lock (directorLock)
+                return currentDirectors.FirstOrDefault(
+                    director => director.actorId == id && !director.IsDeleted());
         }
 
         public override void Update(DateTime tick)

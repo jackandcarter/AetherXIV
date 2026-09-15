@@ -1,50 +1,79 @@
-# Umbra 2.0 Plugin SDK
+# Umbra 2.1 Plugin SDK
 
 Umbra is AetherXIV Launcher's in-game framework for the supported Final Fantasy
 XIV 1.23b client. It provides a versioned managed plugin API, native DirectX 9
 render integration, plugin isolation, repository-backed installs, safe mode,
 diagnostics, and a loopback-only development bridge.
 
-This document describes the implementation currently in this repository:
+This document describes the development contract and bundled base runtime
+distributed with AetherXIV:
 
-- Umbra API: `2.0`
-- Framework implementation: `0.1.0`
-- Plugin target framework: `.NET 10`
+- Umbra API: `2.0` (the currently shipped API contract)
+- Framework implementation: read the package receipt; do not infer a 2.1 API
+  version from the AetherXIV product version.
+- Plugin target framework: `net10.0-windows` (managed IL, x86 client compatible)
 - Recognized client: Final Fantasy XIV 1.23b build `2012.09.19.0001`, x86
 
 Unknown client hashes are not granted client-memory adapters. Plugins must check
 service availability instead of assuming that chat or appearance bindings work.
+
+## Enable and use Umbra
+
+The AetherXIV Launcher intentionally exposes only framework-level controls:
+
+1. Turn on **Enable Umbra** to add the verified framework to the game launch.
+2. Turn on **Safe Mod** when you want Umbra available without loading third-party
+   plugins.
+3. The disabled **Umbra Updates (Service Offline)** control becomes **Check for
+   Umbra Updates** after the signed Demi Dev Unit service is deployed and
+   enabled. Normal launch does not require or automatically contact it.
+
+Plugin installation and updates do not happen in the Launcher. After the
+framework starts in game, open the Umbra Plugin Manager to add custom repository
+URLs, install or update plugins, and set developer-plugin locations. The
+official repository will appear there after a future update service is enabled;
+custom HTTPS repositories work without that service.
+
+At startup the Plugin Manager uses its last verified repository cache
+immediately, then refreshes repositories after the framework is ready. When
+installed plugin manifests have newer repository versions, Umbra shows the
+number of available updates in a bottom-right notification. Selecting the
+notification opens the existing **Updates** tab.
 
 ## SDK projects
 
 | Project | Purpose |
 |---|---|
 | `Aether.Umbra.PluginApi` | Stable contracts referenced by third-party plugins |
-| `Aether.Umbra.Framework` | Runtime, services, plugin manager, repositories, and dev tools |
+| `Aether.Umbra.Sdk` | MSBuild SDK that applies and validates the Umbra 2.0 plugin build contract |
+| `Aether.Umbra.Framework` | Bundled base runtime, services, plugin manager, repositories, and development tools |
 | `Aether.Umbra.Bootstrap` | Native x86 DirectX 9/Win32 bootstrap loaded into the client |
 | `Aether.Umbra.SamplePlugin` | Buildable API 2.0 example plugin |
 
 Plugin projects should reference only `Aether.Umbra.PluginApi`. Do not reference
-the Framework assembly or native bootstrap from third-party plugin code.
+the Framework assembly or native bootstrap from third-party plugin code. The
+framework and bootstrap remain part of the main solution so the bundled base is
+built and verified with every release. Future remote updates use the separate
+signed Dev Unit delivery plane.
 
 ## Create a plugin
 
-Create a .NET class library targeting `net10.0` and reference the API project:
+The bundled developer archive contains both `Aether.Umbra.Sdk` and
+`Aether.Umbra.PluginApi` packages. Its sample template is already configured to
+restore those packages from the archive's local `nuget` directory:
 
 ```xml
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Aether.Umbra.Sdk/2.0.0">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <AssemblyName>Example.Umbra.Plugin</AssemblyName>
   </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="../Aether.Umbra.PluginApi/Aether.Umbra.PluginApi.csproj" />
-    <None Include="umbra-plugin.json" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
 </Project>
 ```
+
+The SDK sets `net10.0-windows`, references the public API for compilation,
+requires `umbra-plugin.json`, and copies that manifest to the build output. It
+rejects projects that override the target framework. Plugin projects must not
+reference the Umbra Framework or native bootstrap.
 
 Implement `IUmbraPlugin`:
 
@@ -113,7 +142,10 @@ Place `umbra-plugin.json` beside the plugin assembly:
   "api_version": "2.0",
   "entry": "Example.Umbra.Plugin.dll",
   "entry_type": "ExamplePlugin",
-  "minimum_framework_version": "0.1.0",
+  "minimum_framework_version": "2.0.0",
+  "target_framework": "net10.0-windows",
+  "architecture": "x86",
+  "language": "CSharp",
   "enabled": false,
   "capabilities": ["commands.register", "chat.print"]
 }
@@ -128,6 +160,9 @@ Place `umbra-plugin.json` beside the plugin assembly:
 | `entry` | Yes | Relative path to the managed entry assembly |
 | `entry_type` | No | Fully qualified plugin type; required when multiple public implementations exist |
 | `minimum_framework_version` | Yes | Oldest Framework implementation accepted |
+| `target_framework` | Yes | Must be `net10.0-windows` for API 2.x |
+| `architecture` | Yes | Must be `x86` for the 1.23b client |
+| `language` | Yes | Must be `CSharp` for the API 2.x developer contract |
 | `enabled` | Yes | Whether the runtime should load the plugin automatically |
 | `capabilities` | No | Privileged services requested by the plugin |
 
@@ -168,7 +203,9 @@ Available primitives include:
 - Windows and sizing: `BeginWindow`, `EndWindow`, `SetNextWindowSize`.
 - Layout: `SameLine`, `Separator`, `Spacing`, `BeginChild`, `BeginPanel`, and
   `EndChild`.
-- Text and input: `Text`, `InputText`, `Checkbox`, and `Toggle`.
+- Text and input: `Text`, `InputText`, `InputInt`, `Checkbox`, `Toggle`,
+  `SliderInt`, `SliderFloat`, and `Combo`.
+- Disclosure and status: `CollapsingHeader` and `ProgressBar`.
 - Actions and visuals: styled `Button`, `Icon`, `Badge`, and `Artwork`.
 - Framework action: `RequestPluginManagerOpen`.
 
@@ -231,14 +268,23 @@ deleting it.
 
 Repository and download URLs must use HTTPS; HTTP is allowed only for loopback
 development. Repository responses are cached for use when a later fetch fails.
+Custom repositories are explicitly user-trusted and do not receive a supported
+or reviewed trust label. The current 2.1 AetherXIV release does not require a central
+service; a future official repository/update service can be added without
+changing the custom-repository contract.
 
-The Repositories tab accepts an HTTPS URL for a JSON plugin index. GitHub Pages,
-GitHub Releases, or any other static HTTPS host can be used; Umbra does not clone
-or build a source repository on the client. A custom index may use a Dalamud-style
-top-level array, while the supported AetherXIV service uses a named envelope:
+The Repositories tab accepts either a GitHub repository homepage or a direct
+HTTPS URL for a JSON plugin index. For a homepage such as
+`https://github.com/owner/repository`, Umbra reads
+`umbra-repository.json` from that repository's default branch. It never clones
+or builds source code on the client. Direct raw GitHub, GitHub Pages, GitHub
+Release, and other static HTTPS manifest URLs also work. A custom index may use
+a top-level plugin array or a named envelope. Named envelopes supply the display
+name shown on the repository card:
 
 ```json
 {
+  "schema_version": 1,
   "repository_name": "Example Umbra Repository",
   "plugins": [
     {
@@ -251,7 +297,10 @@ top-level array, while the supported AetherXIV service uses a named envelope:
       "download_url": "https://example.invalid/releases/example.plugin-1.0.0.zip",
       "size_bytes": 12345,
       "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      "minimum_framework_version": "0.1.0",
+      "minimum_framework_version": "2.0.0",
+      "target_framework": "net10.0-windows",
+      "architecture": "x86",
+      "language": "CSharp",
       "entry": "Example.Plugin.dll"
     }
   ]
@@ -261,8 +310,7 @@ top-level array, while the supported AetherXIV service uses a named envelope:
 Every package must contain `umbra-plugin.json` or `plugin.json` at the ZIP root.
 Its identity, name, version, API version, minimum framework version, and optional
 entry path must match the repository entry, and the declared assembly must exist.
-Custom repositories are checksum-verified but remain unreviewed; only the managed
-AetherXIV catalog receives the supported trust label.
+Custom repositories are checksum-verified but remain unreviewed.
 
 Installable entries require identity/version fields, API and minimum framework
 versions, URL, archive size, and SHA-256. Umbra verifies size and hash before
@@ -272,24 +320,108 @@ Updates preserve the previous package in `Cache/PluginBackups`, and a failed
 activation restores the prior installation. Hidden and testing-only entries are
 not normally installable.
 
+Each configured source shows its current health, manifest-entry and compatible
+plugin counts, last check time, and the most recent error. **View plugins** opens
+Discover filtered to that source. A failed refresh keeps the last known-good
+cache and marks the source **Cached**; it does not erase working catalog data.
+The URL field is cleared only after a repository is validated and saved. Removing
+a custom source requires confirmation and never removes already installed
+plugins.
+
+Developer-plugin files are never installed, updated, or deleted by Umbra. Safe
+mode prevents all custom and developer plugins from loading while leaving the
+framework and Plugin Manager available for recovery.
+
+## GitHub custom repository workflow
+
+A plugin developer can host both the index and immutable plugin ZIPs on GitHub:
+
+1. Build the plugin and place `umbra-plugin.json` at the ZIP root beside the
+   declared entry assembly.
+2. Publish that ZIP on a versioned GitHub Release.
+3. Record the release asset's exact HTTPS URL, byte size, and SHA-256 in the
+   repository JSON.
+4. Commit `umbra-repository.json` at the repository root, or host the JSON at a
+   stable raw GitHub or GitHub Pages URL.
+5. Ask testers to add either the GitHub repository homepage or raw JSON URL in
+   Umbra's in-game **Repositories** tab.
+6. Testers can select **View plugins**, choose the package in Discover, and
+   install it. New installs remain disabled until explicitly enabled from
+   **Installed**.
+
+For example, testers can enter `https://github.com/owner/repository`, while a
+direct raw index can look like
+`https://raw.githubusercontent.com/owner/repository/main/umbra-repository.json`.
+When a newer version is published in the same index, installed users see it in
+the in-game **Updates** tab. The Launcher is not involved.
+
+## Developer plugins
+
+The in-game Plugin Manager has a **Load Developer Plugins** option and a
+configurable developer-plugin path. A location may point to a plugin DLL,
+manifest, or directory. Rescan/reload controls allow iteration without creating
+an install package. Umbra treats these locations as developer-owned: it does not
+copy, update, quarantine, or delete their source files.
+
 ## Development bridge
 
 The optional bridge listens only on `127.0.0.1`, defaults to port `8797`, and is
-disabled unless enabled through environment or control state.
+disabled unless enabled through environment or control state. The managed
+framework owns the bridge. A smaller native listener is started only when the
+managed framework cannot be hosted, so the two implementations never compete
+for the same port.
+
+The managed bridge generates a new 256-bit token for every framework session
+and stores it in the local `control.json`. Requests must provide that token as
+either `Authorization: Bearer <token>` or `X-Aether-Umbra-Token: <token>`.
+Browser-origin requests are rejected even when they originate on the same
+machine.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/status` | Runtime, process, bridge, and capture status |
-| `GET` | `/events?limit=100` | Recent bounded development events |
+| `GET` | `/status` | Runtime, process, and bridge status |
+| `GET` | `/capabilities` | Supported operations and verified-adapter availability |
+| `GET` | `/modules` | Loaded modules, ranges, and exact main-executable hash |
+| `GET` | `/watches` | Active exact-build, module-relative change watches |
+| `GET` | `/events?limit=100` | Recent bounded, sequenced development events |
+| `GET` | `/events?after=N&wait_ms=30000` | Cursor-based bounded event long poll |
 | `GET` | `/logs?limit=120` | Tail the framework log |
-| `POST` | `/capture/start` | Start a JSON Lines event capture |
-| `POST` | `/capture/pause` | Pause the active capture |
-| `POST` | `/capture/stop` | Stop the active capture |
+| `GET` | `/observations/actor-appearance` | Verified actor-appearance cache, when available |
 | `POST` | `/memory/peek` | Bounded read-only process-memory probe |
 | `POST` | `/scan/pattern` | Bounded read-only byte-pattern scan |
+| `POST` | `/watch/start` | Start a bounded module-relative change watch |
+| `POST` | `/watch/stop` | Stop a change watch by ID |
 
-The bridge provides no memory writes. Keep it disabled for ordinary play and do
-not expose or proxy it outside the local machine.
+Memory endpoints accept an absolute address or a safer `module` plus `offset`.
+Module-relative requests are rejected when the requested range crosses the
+loaded module boundary.
+
+Change watches require the exact cataloged client executable hash. At most
+eight may run, each may observe at most 64 bytes, and sampling is limited to
+250–5000 milliseconds. A watch records only initial state, changes, errors,
+and stop state; it does not assign semantic meaning to the bytes.
+
+Every event carries a bridge-session ID, stable sequence number, UTC timestamp,
+and process-monotonic timestamp. The bridge is intended for local development
+status and bounded watch operations only.
+
+The framework reports unresolved actor-registry, event-receiver, game-UI, and
+network observers explicitly as unavailable. It does not populate those
+contracts from guessed offsets. An observer becomes available only after its
+layout and signatures are verified against the exact cataloged client hash.
+
+The bridge provides no memory writes, packet mutation, or remote function
+invocation. Keep it disabled for ordinary play and do not expose or proxy it
+outside the local machine.
+
+The repository companion avoids copying the token into shell history:
+
+```sh
+python3 tools/Universal/umbra-dev-bridge.py status
+python3 tools/Universal/umbra-dev-bridge.py watch
+python3 tools/Universal/umbra-dev-bridge.py memory-watch-start \
+  candidate ffxivgame.exe 0x1234 --size 4 --interval-ms 500
+```
 
 ## Runtime environment
 
@@ -299,27 +431,25 @@ not expose or proxy it outside the local machine.
 | `AETHER_UMBRA_PLUGIN_DIR` | Plugin discovery/install directory |
 | `AETHER_UMBRA_CACHE_DIR` | Repository, config, trash, and dev cache root |
 | `AETHER_UMBRA_SAFE_MODE` | `1`, `true`, or `yes` disables third-party plugins |
-| `AETHER_UMBRA_REPOSITORY_URLS` | Semicolon/newline-separated repositories |
-| `AETHER_UMBRA_REPOSITORIES_JSON` | Repository sources and supported/custom metadata |
 | `AETHER_UMBRA_DEV_BRIDGE` | Enables the bridge initially |
 | `AETHER_UMBRA_DEV_BRIDGE_PORT` | Bridge port from 1024 to 65535 |
-| `AETHER_UMBRA_DEV_BRIDGE_DIR` | Bridge state/capture directory |
+| `AETHER_UMBRA_DEV_BRIDGE_DIR` | Bridge state directory |
 | `AETHER_UMBRA_DEV_BRIDGE_CONTROL` | Bridge control JSON path |
 
 Launcher-controlled injection also supplies bootstrap/framework paths, load
-delay, safe mode, repositories, and Wine managed-host preference. Plugins should
+delay, safe mode, and Wine managed-host preference. Plugins should
 use the plugin context rather than reading Launcher variables directly.
 
-## Build and test
+## Build
 
 ```sh
 dotnet build "AetherXIV Launcher/Umbra/Aether.Umbra.SamplePlugin/Aether.Umbra.SamplePlugin.csproj" -c Release
-dotnet test AetherXIV.sln
 ```
 
-Use `Aether.Umbra.SamplePlugin` as the current reference implementation. Package
-the plugin DLL, its managed dependencies, and `umbra-plugin.json` together in a
-ZIP when publishing through a repository.
+Use `Aether.Umbra.SamplePlugin` as the current reference implementation. The
+official SDK ZIP contains the API assembly, local NuGet package, this guide, and
+a buildable sample template. Package the plugin DLL, its managed dependencies,
+and `umbra-plugin.json` together in a ZIP when publishing through a repository.
 
 ## Current SDK limitations
 
@@ -328,4 +458,7 @@ ZIP when publishing through a repository.
 - Client interop is restricted to one recognized 1.23b executable hash.
 - Third-party plugins receive no arbitrary memory-write, packet-mutation, or
   general unsafe-native API.
-- API 2.0 is implemented, while Framework 0.1.0 remains pre-stable.
+- Remote framework updates and the official repository remain offline until a
+  future update service is deployed. Every
+  Launcher release includes its current Umbra framework, while user-added
+  custom repositories and local developer plugins continue to work in game.

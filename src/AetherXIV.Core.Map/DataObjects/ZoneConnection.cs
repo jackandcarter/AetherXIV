@@ -22,6 +22,7 @@ namespace AetherXIV.Core.Map.dataobjects
 
         public void QueuePacket(SubPacket subpacket)
         {
+            DevDiagnostics.TraceWireSubPacket("Map", "server-to-world", subpacket);
             if (SendPacketQueue.Count == SendPacketQueue.BoundedCapacity - 1)
                 FlushQueuedSendPackets();
 

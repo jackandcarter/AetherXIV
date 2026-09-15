@@ -20,18 +20,39 @@ namespace Aether.Umbra.Framework;
 
 public static class UmbraInProcessEntryPoint
 {
+    private const int BootstrapFailureResult = -100;
     private static readonly object Gate = new();
     private static bool started;
 
     [UnmanagedCallersOnly(EntryPoint = "UmbraBootstrap", CallConvs = [typeof(CallConvStdcall)])]
     public static int UmbraBootstrap()
     {
-        return StartRuntimeThread(null, "hostfxr");
+        string? earlyLogPath = null;
+        try
+        {
+            earlyLogPath = Environment.GetEnvironmentVariable("AETHER_UMBRA_LOG");
+            return StartRuntimeThread(earlyLogPath, "hostfxr");
+        }
+        catch (Exception ex)
+        {
+            EarlyLog(earlyLogPath, $"umbra_managed_bootstrap_failed host=hostfxr error={ex}");
+            return BootstrapFailureResult;
+        }
     }
 
     public static int UmbraBootstrapCoreClr(IntPtr args, int sizeBytes)
     {
-        return StartRuntimeThread(ReadUtf16Argument(args, sizeBytes), "coreclr");
+        string? earlyLogPath = null;
+        try
+        {
+            earlyLogPath = ReadUtf16Argument(args, sizeBytes);
+            return StartRuntimeThread(earlyLogPath, "coreclr");
+        }
+        catch (Exception ex)
+        {
+            EarlyLog(earlyLogPath, $"umbra_managed_bootstrap_failed host=coreclr error={ex}");
+            return BootstrapFailureResult;
+        }
     }
 
     private static int StartRuntimeThread(string? earlyLogPath, string host)

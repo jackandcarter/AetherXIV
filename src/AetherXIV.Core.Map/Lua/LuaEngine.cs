@@ -31,6 +31,7 @@ namespace AetherXIV.Core.Map.lua
         private static LuaEngine mThisEngine;
         private Dictionary<Coroutine, ulong> mSleepingOnTime = new Dictionary<Coroutine, ulong>();
         private Dictionary<string, List<Coroutine>> mSleepingOnSignal = new Dictionary<string, List<Coroutine>>();
+        private readonly Object mWaiterLock = new Object();
         private sealed class PlayerEventWaiter
         {
             public Coroutine Coroutine;
@@ -47,9 +48,38 @@ namespace AetherXIV.Core.Map.lua
         private LuaEngine()
         {
             UserData.RegistrationPolicy = InteropRegistrationPolicy.Automatic;
+            RegisterLuaSequenceConversions();
 
             luaTimer = new Timer(new TimerCallback(PulseSleepingOnTime),
                            null, TimeSpan.Zero, TimeSpan.FromMilliseconds(50));
+        }
+
+        private static void RegisterLuaSequenceConversions()
+        {
+            // Legacy quest scripts consume these return values as ordinary Lua
+            // sequences (unpack, #, and one-based indexing). MoonSharp otherwise
+            // exposes CLR arrays as userdata, which breaks the journal command and
+            // the generic PopulaceStandard quest selector.
+            Script.GlobalOptions.CustomConverters.SetClrToScriptCustomConversion<object[]>(
+                (script, values) => CreateLuaSequence(script, values));
+            Script.GlobalOptions.CustomConverters.SetClrToScriptCustomConversion<Quest[]>(
+                (script, values) => CreateLuaSequence(script, values));
+        }
+
+        private static DynValue CreateLuaSequence<T>(Script script, IEnumerable<T> values)
+        {
+            Table table = new Table(script);
+            if (values == null)
+                return DynValue.NewTable(table);
+
+            int index = 1;
+            foreach (T value in values)
+            {
+                table.Set(index, DynValue.FromObject(script, value));
+                index++;
+            }
+
+            return DynValue.NewTable(table);
         }
 
         public static LuaEngine GetInstance()
@@ -63,27 +93,37 @@ namespace AetherXIV.Core.Map.lua
         public void AddWaitCoroutine(Coroutine coroutine, float seconds)
         {
             ulong time = Utils.MilisUnixTimeStampUTC() + (ulong)(seconds * 1000);
-            mSleepingOnTime.Add(coroutine, time);
+            int waiterCount;
+            lock (mWaiterLock)
+            {
+                mSleepingOnTime.Add(coroutine, time);
+                waiterCount = mSleepingOnTime.Count;
+            }
             DevDiagnostics.Trace(
                 "lua.wait.register",
                 "waitType", "_WAIT_TIME",
                 "seconds", seconds,
                 "wakeTime", time,
                 "coroutine", coroutine.GetHashCode(),
-                "timeWaiters", mSleepingOnTime.Count);
+                "timeWaiters", waiterCount);
         }
 
         public void AddWaitSignalCoroutine(Coroutine coroutine, string signal)
         {
-            if (!mSleepingOnSignal.ContainsKey(signal))
-                mSleepingOnSignal.Add(signal, new List<Coroutine>());
-            mSleepingOnSignal[signal].Add(coroutine);
+            int waiterCount;
+            lock (mWaiterLock)
+            {
+                if (!mSleepingOnSignal.ContainsKey(signal))
+                    mSleepingOnSignal.Add(signal, new List<Coroutine>());
+                mSleepingOnSignal[signal].Add(coroutine);
+                waiterCount = mSleepingOnSignal[signal].Count;
+            }
             DevDiagnostics.Trace(
                 "lua.wait.register",
                 "waitType", "_WAIT_SIGNAL",
                 "signal", signal,
                 "coroutine", coroutine.GetHashCode(),
-                "signalWaiters", mSleepingOnSignal[signal].Count);
+                "signalWaiters", waiterCount);
         }
 
         public void AddWaitEventCoroutine(
@@ -93,15 +133,20 @@ namespace AetherXIV.Core.Map.lua
             string expectedName = null,
             byte expectedType = 0)
         {
-            if (!mSleepingOnPlayerEvent.ContainsKey(player.actorId))
+            int waiterCount;
+            lock (mWaiterLock)
             {
-                mSleepingOnPlayerEvent.Add(player.actorId, new PlayerEventWaiter
+                if (!mSleepingOnPlayerEvent.ContainsKey(player.actorId))
                 {
-                    Coroutine = coroutine,
-                    ExpectedOwner = expectedOwner,
-                    ExpectedName = expectedName ?? "",
-                    ExpectedType = expectedType
-                });
+                    mSleepingOnPlayerEvent.Add(player.actorId, new PlayerEventWaiter
+                    {
+                        Coroutine = coroutine,
+                        ExpectedOwner = expectedOwner,
+                        ExpectedName = expectedName ?? "",
+                        ExpectedType = expectedType
+                    });
+                }
+                waiterCount = mSleepingOnPlayerEvent.Count;
             }
             DevDiagnostics.Trace(
                 "lua.wait.register",
@@ -112,90 +157,61 @@ namespace AetherXIV.Core.Map.lua
                 "expectedOwner", String.Format("0x{0:X}", expectedOwner),
                 "expectedName", expectedName ?? "",
                 "expectedType", expectedType,
-                "eventWaiters", mSleepingOnPlayerEvent.Count);
+                "eventWaiters", waiterCount);
         }
 
-        internal static bool MatchesExpectedPlayerEvent(
-            uint expectedOwner,
-            string expectedName,
-            byte expectedType,
-            uint actualOwner,
-            string actualName,
-            byte actualType)
+        /// <summary>
+        /// Drops a player's parked _WAIT_EVENT coroutine without resuming it.
+        /// Called on session teardown (logout / disconnect / map handoff) so a
+        /// mid-cutscene park can't be resumed by an unrelated event after
+        /// relog — Garlemald handle_session_end purge_owner parity (the stale
+        /// Charlys→Hobriaut hijack).
+        /// </summary>
+        public void PurgePlayerEventWaiter(Player player)
         {
-            if (expectedOwner != 0 && expectedOwner != actualOwner)
-                return false;
+            if (player == null)
+                return;
 
-            if (!String.IsNullOrEmpty(expectedName) &&
-                !String.Equals(expectedName, actualName, StringComparison.Ordinal))
-                return false;
-
-            return expectedType == 0 || expectedType == actualType;
-        }
-
-        private bool TryTakePlayerEventWaiter(
-            Player player,
-            uint actualOwner,
-            string actualName,
-            byte actualType,
-            out PlayerEventWaiter waiter)
-        {
-            if (!mSleepingOnPlayerEvent.TryGetValue(player.actorId, out waiter))
-                return false;
-
-            if (!MatchesExpectedPlayerEvent(
-                waiter.ExpectedOwner,
-                waiter.ExpectedName,
-                waiter.ExpectedType,
-                actualOwner,
-                actualName,
-                actualType))
+            bool purged;
+            lock (mWaiterLock)
             {
-                DevDiagnostics.Trace(
-                    "lua.wait.eventMismatch",
-                    "player", player.customDisplayName,
-                    "actor", String.Format("0x{0:X}", player.actorId),
-                    "expectedOwner", String.Format("0x{0:X}", waiter.ExpectedOwner),
-                    "expectedName", waiter.ExpectedName,
-                    "actualOwner", String.Format("0x{0:X}", actualOwner),
-                    "actualName", actualName ?? "",
-                    "actualType", actualType,
-                    "action", "dispatch unrelated event");
-                waiter = null;
-                return false;
+                purged = mSleepingOnPlayerEvent.Remove(player.actorId);
             }
 
-            mSleepingOnPlayerEvent.Remove(player.actorId);
-            return true;
-        }
-
-        private bool TryTakePlayerEventWaiter(Player player, out PlayerEventWaiter waiter)
-        {
-            if (!mSleepingOnPlayerEvent.TryGetValue(player.actorId, out waiter))
-                return false;
-
-            mSleepingOnPlayerEvent.Remove(player.actorId);
-            return true;
+            if (purged)
+            {
+                DevDiagnostics.Trace(
+                    "lua.wait.purged",
+                    "player", player.customDisplayName,
+                    "actor", String.Format("0x{0:X}", player.actorId),
+                    "action", "purge-on-session-end");
+            }
         }
 
         public void PulseSleepingOnTime(object state)
         {
             ulong currentTime = Utils.MilisUnixTimeStampUTC();
             List<Coroutine> mToAwake = new List<Coroutine>();
-
-            foreach (KeyValuePair<Coroutine, ulong> entry in mSleepingOnTime)
+            int remainingWaiters;
+            lock (mWaiterLock)
             {
-                if (entry.Value <= currentTime)
-                    mToAwake.Add(entry.Key);
+                foreach (KeyValuePair<Coroutine, ulong> entry in mSleepingOnTime)
+                {
+                    if (entry.Value <= currentTime)
+                        mToAwake.Add(entry.Key);
+                }
+
+                foreach (Coroutine coroutine in mToAwake)
+                    mSleepingOnTime.Remove(coroutine);
+                remainingWaiters = mSleepingOnTime.Count;
             }
 
             foreach (Coroutine key in mToAwake)
             {
-                mSleepingOnTime.Remove(key);
                 DevDiagnostics.Trace(
                     "lua.time.resume",
                     "coroutine", key.GetHashCode(),
-                    "remainingTimeWaiters", mSleepingOnTime.Count);
+                    "remainingTimeWaiters", remainingWaiters);
                 DynValue value = key.Resume();
                 ResolveResume(null, key, value);
             }
@@ -204,18 +220,23 @@ namespace AetherXIV.Core.Map.lua
         public void OnSignal(string signal, params object[] args)
         {
             List<Coroutine> mToAwake = new List<Coroutine>();
-            int waiterCount = mSleepingOnSignal.ContainsKey(signal) ? mSleepingOnSignal[signal].Count : 0;
+            int waiterCount;
+            lock (mWaiterLock)
+            {
+                waiterCount = mSleepingOnSignal.ContainsKey(signal)
+                    ? mSleepingOnSignal[signal].Count
+                    : 0;
+                if (mSleepingOnSignal.ContainsKey(signal))
+                {
+                    mToAwake.AddRange(mSleepingOnSignal[signal]);
+                    mSleepingOnSignal.Remove(signal);
+                }
+            }
             DevDiagnostics.Trace(
                 "lua.signal.emit",
                 "signal", signal,
                 "args", args == null ? 0 : args.Length,
                 "waiters", waiterCount);
-
-            if (mSleepingOnSignal.ContainsKey(signal))
-            {
-                mToAwake.AddRange(mSleepingOnSignal[signal]);
-                mSleepingOnSignal.Remove(signal);
-            }
 
             foreach (Coroutine key in mToAwake)
             {
@@ -228,13 +249,77 @@ namespace AetherXIV.Core.Map.lua
             }
         }
 
+        internal static bool MatchesExpectedPlayerEvent(
+            uint expectedOwner,
+            string expectedName,
+            byte expectedType,
+            uint actualOwner,
+            string actualName,
+            byte actualType)
+        {
+            if (expectedOwner != 0 && expectedOwner != actualOwner)
+                return false;
+            if (!String.IsNullOrEmpty(expectedName) && !String.Equals(expectedName, actualName, StringComparison.Ordinal))
+                return false;
+            return expectedType == 0 || expectedType == actualType;
+        }
+
+        private bool TryTakePlayerEventWaiter(
+            Player player,
+            uint actualOwner,
+            string actualName,
+            byte actualType,
+            out PlayerEventWaiter waiter)
+        {
+            lock (mWaiterLock)
+            {
+                if (!mSleepingOnPlayerEvent.TryGetValue(player.actorId, out waiter))
+                    return false;
+                if (!MatchesExpectedPlayerEvent(waiter.ExpectedOwner, waiter.ExpectedName, waiter.ExpectedType, actualOwner, actualName, actualType))
+                {
+                    DevDiagnostics.Trace("lua.wait.eventMismatch", "player", player.customDisplayName,
+                        "actor", String.Format("0x{0:X}", player.actorId),
+                        "expectedOwner", String.Format("0x{0:X}", waiter.ExpectedOwner),
+                        "expectedName", waiter.ExpectedName,
+                        "actualOwner", String.Format("0x{0:X}", actualOwner),
+                        "actualName", actualName ?? "",
+                        "actualType", actualType,
+                        "action", "dispatch unrelated event");
+                    waiter = null;
+                    return false;
+                }
+                mSleepingOnPlayerEvent.Remove(player.actorId);
+                return true;
+            }
+        }
+
+        private bool TryTakePlayerEventWaiter(Player player, out PlayerEventWaiter waiter)
+        {
+            lock (mWaiterLock)
+            {
+                if (!mSleepingOnPlayerEvent.TryGetValue(player.actorId, out waiter))
+                    return false;
+                mSleepingOnPlayerEvent.Remove(player.actorId);
+                return true;
+            }
+        }
+
         public void OnEventUpdate(Player player, List<LuaParam> args)
         {
             PlayerEventWaiter waiter;
-            if (TryTakePlayerEventWaiter(player, out waiter))
+            bool hadWaiter = TryTakePlayerEventWaiter(player, out waiter);
+
+            if (hadWaiter)
             {
                 try
                 {
+                    DevDiagnostics.Trace(
+                        "lua.resume",
+                        "player", player.customDisplayName,
+                        "actor", String.Format("0x{0:X}", player.actorId),
+                        "source", "event.update",
+                        "coroutine", waiter.Coroutine.GetHashCode(),
+                        "params", LuaUtils.DumpParams(args));
                     Coroutine coroutine = waiter.Coroutine;
                     if (waiter.ExpectedOwner != 0)
                     {
@@ -242,20 +327,12 @@ namespace AetherXIV.Core.Map.lua
                         player.currentEventName = waiter.ExpectedName;
                         player.currentEventType = waiter.ExpectedType;
                     }
-                    DevDiagnostics.Trace(
-                        "lua.resume",
-                        "player", player.customDisplayName,
-                        "actor", String.Format("0x{0:X}", player.actorId),
-                        "source", "event.update",
-                        "coroutine", coroutine.GetHashCode(),
-                        "params", LuaUtils.DumpParams(args));
                     DynValue value = coroutine.Resume(LuaUtils.CreateLuaParamObjectList(args));
                     ResolveResume(player, coroutine, value);
                 }
                 catch (ScriptRuntimeException e)
                 {
                     LuaEngine.SendError(player, String.Format("OnEventUpdated: {0}", e.DecoratedMessage));
-                    player.EndEvent();
                 }
             }
             else
@@ -704,9 +781,9 @@ namespace AetherXIV.Core.Map.lua
             DynValue result;
 
             if (child != null && child.Globals[funcName] != null)
-                result = child.Call(child.Globals[funcName], args2);
+                result = ((Script)child).Call(child.Globals[funcName], args2);
             else if (parent != null && parent.Globals[funcName] != null)
-                result = parent.Call(parent.Globals[funcName], args2);
+                result = ((Script)parent).Call(parent.Globals[funcName], args2);
             else
                 return null;
 
@@ -770,8 +847,6 @@ namespace AetherXIV.Core.Map.lua
             if (parent == null && child == null)
             {
                 LuaEngine.SendError(player, String.Format("Could not find script for actor {0}.", target.GetName()));
-                if (player != null && funcName == "onEventStarted")
-                    player.EndEvent();
                 return;
             }
 
@@ -779,9 +854,9 @@ namespace AetherXIV.Core.Map.lua
             Coroutine coroutine = null;
 
             if (child != null && !child.Globals.Get(funcName).IsNil())
-                coroutine = child.CreateCoroutine(child.Globals[funcName]).Coroutine;
+                coroutine = ((Script)child).CreateCoroutine(child.Globals[funcName]).Coroutine;
             else if (parent != null && parent.Globals.Get(funcName) != null && !parent.Globals.Get(funcName).IsNil())
-                coroutine = parent.CreateCoroutine(parent.Globals[funcName]).Coroutine;
+                coroutine = ((Script)parent).CreateCoroutine(parent.Globals[funcName]).Coroutine;
 
             if (coroutine != null)
             {
@@ -790,8 +865,12 @@ namespace AetherXIV.Core.Map.lua
                     DynValue value = coroutine.Resume(args2);
                     ResolveResume(player, coroutine, value);
                 }
-                catch (ScriptRuntimeException e)
+                catch (Exception e)
                 {
+                    string message = e is ScriptRuntimeException scriptException
+                        ? scriptException.DecoratedMessage
+                        : e.Message;
+                    TraceLuaFailure(player, target, funcName, childPath ?? parentPath, e, message);
                     Program.Log.Error("Lua NPC function failed: player={0} actor={1} unique={2} class={3} func={4} parent={5} child={6}: {7}",
                         player != null ? player.customDisplayName : "(none)",
                         target.GetName(),
@@ -800,10 +879,8 @@ namespace AetherXIV.Core.Map.lua
                         funcName,
                         parentPath,
                         childPath,
-                        e.DecoratedMessage);
-                    SendError(player, e.DecoratedMessage);
-                    if (player != null)
-                        player.EndEvent();
+                        message);
+                    SendError(player, message);
                 }
             }
             else if (!optional)
@@ -817,8 +894,6 @@ namespace AetherXIV.Core.Map.lua
                 }
 
                 LuaEngine.SendError(player, String.Format("Could not find function '{0}' for actor {1}.", funcName, target.GetName()));
-                if (player != null && funcName == "onEventStarted")
-                    player.EndEvent();
             }
         }
 
@@ -849,15 +924,7 @@ namespace AetherXIV.Core.Map.lua
             if (target is Npc)
                 return CallLuaFunctionNpcForReturn(player, (Npc)target, funcName, optional, args);
 
-            object[] args2 = new object[args.Length + (player == null ? 1 : 2)];
-            Array.Copy(args, 0, args2, (player == null ? 1 : 2), args.Length);
-            if (player != null)
-            {
-                args2[0] = player;
-                args2[1] = target;
-            }
-            else
-                args2[0] = target;
+            object[] args2 = ComposeActorFunctionArguments(player, target, args);
 
             string luaPath = ResolveActorScriptPath(player, target, funcName);
             LuaScript script = LoadScript(luaPath);
@@ -865,21 +932,46 @@ namespace AetherXIV.Core.Map.lua
             {
                 if (!script.Globals.Get(funcName).IsNil())
                 {
-                    //Run Script
-                    DynValue result = script.Call(script.Globals[funcName], args2);
-                    List<LuaParam> lparams = LuaUtils.CreateLuaParamList(result);
-                    return lparams;
+                    try
+                    {
+                        DynValue result = ((Script)script).Call(
+                            script.Globals[funcName],
+                            args2);
+                        return LuaUtils.CreateLuaParamList(result);
+                    }
+                    catch (Exception e)
+                    {
+                        string message = e is ScriptRuntimeException scriptException
+                            ? scriptException.DecoratedMessage
+                            : e.Message;
+                        TraceLuaFailure(player, target, funcName, luaPath, e, message);
+                        Program.Log.Error(
+                            "Lua function failed: player={0} actor={1} func={2} path={3}: {4}",
+                            player == null ? "(none)" : player.customDisplayName,
+                            target.GetName(),
+                            funcName,
+                            luaPath,
+                            message);
+                        SendError(player, message);
+                    }
                 }
-                else
+                else if (!optional)
                 {
-                    if (!optional)
-                        SendError(player, String.Format("Could not find function '{0}' for actor {1}.", funcName, target.GetName()));
+                    string message = String.Format(
+                        "Could not find function '{0}' for actor {1}.",
+                        funcName,
+                        target.GetName());
+                    Program.Log.Error("{0} Script path: {1}.", message, luaPath);
+                    SendError(player, message);
                 }
             }
-            else
+            else if (!optional)
             {
-                if (!optional)
-                    SendError(player, String.Format("Could not find script for actor {0}.", target.GetName()));
+                string message = String.Format(
+                    "Could not find script for actor {0}.",
+                    target.GetName());
+                Program.Log.Error("{0} Requested path: {1}.", message, luaPath);
+                SendError(player, message);
             }
             return null;
         }
@@ -893,7 +985,9 @@ namespace AetherXIV.Core.Map.lua
                 if (!script.Globals.Get(funcName).IsNil())
                 {
                     //Run Script
-                    DynValue result = script.Call(script.Globals[funcName], args);
+                    DynValue result = ((Script)script).Call(
+                        script.Globals[funcName],
+                        args);
                     List<LuaParam> lparams = LuaUtils.CreateLuaParamList(result);
                     return lparams;
                 }
@@ -910,10 +1004,7 @@ namespace AetherXIV.Core.Map.lua
                 return;
             }
 
-            object[] args2 = new object[args.Length + 2];
-            Array.Copy(args, 0, args2, 2, args.Length);
-            args2[0] = player;
-            args2[1] = target;
+            object[] args2 = ComposeActorFunctionArguments(player, target, args);
 
             string luaPath = ResolveActorScriptPath(player, target, funcName);
             LuaScript script = LoadScript(luaPath);
@@ -923,51 +1014,110 @@ namespace AetherXIV.Core.Map.lua
                 {
                     try
                     {
-                        Coroutine coroutine = script.CreateCoroutine(script.Globals[funcName]).Coroutine;
+                        Coroutine coroutine = ((Script)script)
+                            .CreateCoroutine(script.Globals[funcName])
+                            .Coroutine;
                         DynValue value = coroutine.Resume(args2);
                         ResolveResume(player, coroutine, value);
                     }
                     catch(Exception e)
                     {
+                        string message = e is ScriptRuntimeException scriptException
+                            ? scriptException.DecoratedMessage
+                            : e.Message;
+                        TraceLuaFailure(player, target, funcName, luaPath, e, message);
                         Program.Log.Error("Lua function failed: player={0} actor={1} func={2} path={3}: {4}",
                             player != null ? player.customDisplayName : "(none)",
                             target.GetName(),
                             funcName,
                             luaPath,
-                            e.Message);
-                        player.SendMessage(0x20, "", e.Message);
-                        player.EndEvent();
-
+                            message);
+                        SendError(player, message);
                     }
                 }
-                else
+                else if (!optional)
                 {
-                    if (!optional)
-                        SendError(player, String.Format("Could not find function '{0}' for actor {1}.", funcName, target.GetName()));
+                    string message = String.Format(
+                        "Could not find function '{0}' for actor {1}.",
+                        funcName,
+                        target.GetName());
+                    Program.Log.Error("{0} Script path: {1}.", message, luaPath);
+                    SendError(player, message);
                 }
+            }
+            else if (!(target is Area) && !optional)
+            {
+                string message = String.Format(
+                    "Could not find script for actor {0}.",
+                    target.GetName());
+                Program.Log.Error("{0} Requested path: {1}.", message, luaPath);
+                SendError(player, message);
+            }
+        }
+
+        private static void TraceLuaFailure(
+            Player player,
+            Actor target,
+            string function,
+            string path,
+            Exception exception,
+            string message)
+        {
+            DevDiagnostics.Trace(
+                "lua.call.failed",
+                "player", player == null ? "(none)" : player.customDisplayName,
+                "actor", target == null ? "(none)" : target.GetName(),
+                "actorId", target == null ? "" : String.Format("0x{0:X}", target.actorId),
+                "actorType", target == null ? "" : target.GetType().Name,
+                "function", function ?? "",
+                "path", path ?? "",
+                "exceptionType", exception == null ? "" : exception.GetType().FullName,
+                "message", message ?? "");
+        }
+
+        internal static object[] ComposeActorFunctionArguments(
+            Player player,
+            Actor target,
+            object[] args)
+        {
+            if (target == null)
+                throw new ArgumentNullException(nameof(target));
+            if (args == null)
+                throw new ArgumentNullException(nameof(args));
+
+            int prefixLength = player == null ? 1 : 2;
+            object[] invocationArguments = new object[args.Length + prefixLength];
+            if (player != null)
+            {
+                invocationArguments[0] = player;
+                invocationArguments[1] = target;
             }
             else
             {
-                if (!(target is Area) && !optional)
-                    SendError(player, String.Format("Could not find script for actor {0}.", target.GetName()));
+                invocationArguments[0] = target;
             }
+
+            Array.Copy(args, 0, invocationArguments, prefixLength, args.Length);
+            return invocationArguments;
         }
 
         public void EventStarted(Player player, Actor target, EventStartPacket eventStart)
         {
+            // Base args: eventName + client luaParams (legacy Meteor shape:
+            // only the eventName string is pushed; scripts route on it).
             List<LuaParam> lparams = new List<LuaParam>();
             lparams.AddRange(eventStart.luaParams);
             lparams.Insert(0, new LuaParam(2, eventStart.eventName));
             PlayerEventWaiter waiter;
-            if (TryTakePlayerEventWaiter(
+            bool hadWaiter = TryTakePlayerEventWaiter(
                 player,
                 eventStart.ownerActorID,
                 eventStart.eventName,
                 eventStart.eventType,
-                out waiter))
+                out waiter);
+            Coroutine coroutine = hadWaiter ? waiter.Coroutine : null;
+            if (hadWaiter)
             {
-                Coroutine coroutine = waiter.Coroutine;
-
                 try
                 {
                     DevDiagnostics.Trace(
@@ -983,7 +1133,6 @@ namespace AetherXIV.Core.Map.lua
                 catch (ScriptRuntimeException e)
                 {
                     LuaEngine.SendError(player, String.Format("OnEventStarted: {0}", e.DecoratedMessage));
-                    player.EndEvent();
                 }
             }
             else
@@ -1043,15 +1192,9 @@ namespace AetherXIV.Core.Map.lua
                         break;
                     case "_WAIT_EVENT":
                         Player waitingPlayer = (Player)value.Tuple[1].UserData.Object;
-                        uint expectedOwner = value.Tuple.Length > 2 && value.Tuple[2].Type == DataType.Number
-                            ? (uint)value.Tuple[2].Number
-                            : 0;
-                        string expectedName = value.Tuple.Length > 3 && value.Tuple[3].Type == DataType.String
-                            ? value.Tuple[3].String
-                            : "";
-                        byte expectedType = value.Tuple.Length > 4 && value.Tuple[4].Type == DataType.Number
-                            ? (byte)value.Tuple[4].Number
-                            : (byte)0;
+                        uint expectedOwner = value.Tuple.Length > 2 && value.Tuple[2].Type == DataType.Number ? (uint)value.Tuple[2].Number : 0;
+                        string expectedName = value.Tuple.Length > 3 && value.Tuple[3].Type == DataType.String ? value.Tuple[3].String : "";
+                        byte expectedType = value.Tuple.Length > 4 && value.Tuple[4].Type == DataType.Number ? (byte)value.Tuple[4].Number : (byte)0;
                         DevDiagnostics.Trace(
                             "lua.wait",
                             "player", waitingPlayer.customDisplayName,
@@ -1061,12 +1204,7 @@ namespace AetherXIV.Core.Map.lua
                             "expectedName", expectedName,
                             "expectedType", expectedType,
                             "coroutine", coroutine.GetHashCode());
-                        GetInstance().AddWaitEventCoroutine(
-                            waitingPlayer,
-                            coroutine,
-                            expectedOwner,
-                            expectedName,
-                            expectedType);
+                        GetInstance().AddWaitEventCoroutine(waitingPlayer, coroutine, expectedOwner, expectedName, expectedType);
                         break;
                     default:
                         return value;
@@ -1246,11 +1384,16 @@ namespace AetherXIV.Core.Map.lua
 
             try
             {
-                script.DoFile(path);
+                ((Script)script).DoFile(path);
             }
-            catch (SyntaxErrorException e)
+            catch (InterpreterException e)
             {
                 Program.Log.Error("{0}.", e.DecoratedMessage);
+                return null;
+            }
+            catch (Exception e)
+            {
+                Program.Log.Error("Could not load Lua script {0}: {1}", path, e.Message);
                 return null;
             }
             return script;
@@ -1279,9 +1422,8 @@ namespace AetherXIV.Core.Map.lua
             message = "[LuaError] " + message;
             if (player == null)
                 return;
-            List<SubPacket> SendError = new List<SubPacket>();
             player.SendMessage(SendMessagePacket.MESSAGE_TYPE_SYSTEM_ERROR, "", message);
-            player.QueuePacket(EndEventPacket.BuildPacket(player.actorId, player.currentEventOwner, player.currentEventName, 0));
+            player.EndEvent();
         }
 
     }

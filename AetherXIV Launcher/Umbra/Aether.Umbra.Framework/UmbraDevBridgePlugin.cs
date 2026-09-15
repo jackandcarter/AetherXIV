@@ -68,17 +68,35 @@ public sealed class UmbraDevBridgePlugin : IUmbraPlugin
         if (!force && control == lastControl)
             return;
 
+        UmbraDevBridgeControl? previousControl = lastControl;
         lastControl = control;
         if (control.Enabled)
         {
+            bool ownershipClaimed = false;
             try
             {
-                service.StartAsync(control.Port).GetAwaiter().GetResult();
+                if (service.IsRunning && previousControl?.Port != control.Port)
+                    service.StopAsync().GetAwaiter().GetResult();
+                UmbraNativeUi.SetManagedDevBridgeOwnership(true);
+                ownershipClaimed = true;
+                service.StartAsync(control.Port, control.Token).GetAwaiter().GetResult();
                 context.Logger.Info($"enabled port={control.Port}");
             }
             catch (Exception ex)
             {
                 context.Logger.Error("start failed", ex);
+                if (ownershipClaimed)
+                {
+                    try
+                    {
+                        UmbraNativeUi.SetManagedDevBridgeOwnership(false);
+                        context.Logger.Warning("native fallback restored after managed bridge start failure");
+                    }
+                    catch (Exception handoffException)
+                    {
+                        context.Logger.Error("native fallback restore failed", handoffException);
+                    }
+                }
             }
 
             return;

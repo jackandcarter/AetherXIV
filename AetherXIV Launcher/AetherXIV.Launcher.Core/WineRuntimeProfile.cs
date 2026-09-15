@@ -17,18 +17,14 @@ namespace AetherXIV.Launcher.Core;
 
 public enum WineRuntimeKind
 {
-    NativeWindows,
-    CrossOverBottle,
-    WinePrefix,
-    WhiskyBottle,
-    CustomCommand
+    NativeWindows = 0,
+    WinePrefix = 2
 }
 
 public enum RuntimeSelectionMode
 {
-    AutomaticManaged,
-    DetectedRuntime,
-    CustomRuntime
+    AutomaticManaged = 0,
+    CustomRuntime = 2
 }
 
 public sealed record WineRuntimeProfile(
@@ -41,7 +37,6 @@ public sealed record WineRuntimeProfile(
 {
     public const string DefaultDirect3DConfig = "renderer=gl";
     public const string OpenGLThreadedDirect3DConfig = "renderer=gl,csmt=1";
-    public const string VulkanDirect3DConfig = "renderer=vulkan,csmt=0";
 
     public static WineRuntimeProfile NativeWindows()
     {
@@ -52,20 +47,6 @@ public sealed record WineRuntimeProfile(
             null,
             null,
             new Dictionary<string, string>());
-    }
-
-    public static WineRuntimeProfile CrossOverBottle(string name, string bottleName, string command = "wine")
-    {
-        return new WineRuntimeProfile(
-            name,
-            WineRuntimeKind.CrossOverBottle,
-            command,
-            bottleName,
-            null,
-            new Dictionary<string, string>
-            {
-                ["CX_BOTTLE"] = bottleName
-            });
     }
 
     public static WineRuntimeProfile WinePrefix(
@@ -83,44 +64,20 @@ public sealed record WineRuntimeProfile(
         return new WineRuntimeProfile(name, WineRuntimeKind.WinePrefix, command, null, prefixPath, variables);
     }
 
-    public static WineRuntimeProfile WhiskyBottle(string name, string bottleName, string command)
-    {
-        return new WineRuntimeProfile(
-            name,
-            WineRuntimeKind.WhiskyBottle,
-            command,
-            bottleName,
-            null,
-            new Dictionary<string, string>());
-    }
-
-    public static WineRuntimeProfile Custom(string name, string command)
-    {
-        return new WineRuntimeProfile(
-            name,
-            WineRuntimeKind.CustomCommand,
-            command,
-            null,
-            null,
-            new Dictionary<string, string>());
-    }
-
     public WineRuntimeProfile WithGraphicsTarget(ClientGraphicsTarget graphicsTarget)
     {
         Dictionary<string, string> variables = new(Environment);
         switch (graphicsTarget)
         {
-            case ClientGraphicsTarget.WineDefault:
-                variables.Remove("WINE_D3D_CONFIG");
-                break;
             case ClientGraphicsTarget.OpenGLThreaded:
                 variables["WINE_D3D_CONFIG"] = OpenGLThreadedDirect3DConfig;
                 break;
-            case ClientGraphicsTarget.WineD3DVulkan:
-                variables["WINE_D3D_CONFIG"] = VulkanDirect3DConfig;
-                break;
             default:
-                variables["WINE_D3D_CONFIG"] = DefaultDirect3DConfig;
+                // Wine default (and the legacy OpenGLCompatibility value, which
+                // resolves to the same backend on this pinned runtime) leaves
+                // Wine's own renderer selection in place instead of pinning
+                // WINE_D3D_CONFIG.
+                variables.Remove("WINE_D3D_CONFIG");
                 break;
         }
 
@@ -132,22 +89,14 @@ public sealed record WineRuntimeProfile(
         if (Kind == WineRuntimeKind.NativeWindows)
             return applicationArguments ?? "";
 
+        if (Kind != WineRuntimeKind.WinePrefix)
+            throw new InvalidOperationException("AetherXIV only launches through its bundled Wine runtime and isolated managed prefix.");
+
         if (string.IsNullOrWhiteSpace(Command))
             throw new InvalidOperationException("Runtime command is required.");
 
         if (string.IsNullOrWhiteSpace(windowsExecutablePath))
             throw new InvalidOperationException("Windows executable path is required.");
-
-        if (Kind == WineRuntimeKind.WhiskyBottle)
-        {
-            if (string.IsNullOrWhiteSpace(BottleName))
-                throw new InvalidOperationException("Whisky bottle name is required.");
-
-            string whiskyArguments = $"run {CommandLineArguments.Quote(BottleName)} {CommandLineArguments.Quote(windowsExecutablePath)}";
-            return string.IsNullOrWhiteSpace(applicationArguments)
-                ? whiskyArguments
-                : $"{whiskyArguments} -- {applicationArguments}";
-        }
 
         string arguments = CommandLineArguments.Quote(windowsExecutablePath);
         return string.IsNullOrWhiteSpace(applicationArguments)

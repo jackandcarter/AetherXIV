@@ -193,7 +193,7 @@ public sealed class CharacterSeedDatabaseLoader
     private static string ResolveWorldName(WorldId worldId)
     {
         return worldId.Value == 1
-            ? "AetherXIV 2.0 Local"
+            ? "AetherXIV 2.1 Local"
             : $"Imported World {worldId.Value}";
     }
 

@@ -37,8 +37,6 @@ public sealed class MariaDbLauncherContentRepository : ILauncherContentRepositor
         if (row is null)
             return null;
 
-        IReadOnlyList<string> pluginCatalogUrls = await ReadPluginCatalogUrlsAsync(connection, row.ConfigKey, cancellationToken)
-            .ConfigureAwait(false);
         return new LauncherConfig(
             row.ServiceVersion,
             row.ServerName,
@@ -52,9 +50,9 @@ public sealed class MariaDbLauncherContentRepository : ILauncherContentRepositor
             row.PatchBaseUrl,
             row.TargetBootVersion,
             row.TargetGameVersion,
-            row.ClientPluginFrameworkCatalogUrl,
-            pluginCatalogUrls,
-            row.PluginBlocklistUrl);
+            null,
+            Array.Empty<string>(),
+            null);
     }
 
     public async ValueTask<LauncherStatusRecord?> GetStatusAsync(CancellationToken cancellationToken = default)
@@ -229,87 +227,6 @@ ORDER BY is_default DESC, sort_order ASC, name ASC, version ASC;
         return artifacts;
     }
 
-    public async ValueTask<IReadOnlyList<UmbraFrameworkArtifact>> GetUmbraFrameworkArtifactsAsync(
-        string platformRid,
-        CancellationToken cancellationToken = default)
-    {
-        await using MySqlConnection connection = await connectionFactory.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using MySqlCommand command = connection.CreateCommand();
-        command.CommandText = """
-SELECT name, version, api_version, platform_rid, archive_url, archive_format, size_bytes, sha256,
-       bootstrap_relative_path, framework_relative_path, supported_game_sha256_json,
-       is_default, is_active, sort_order
-FROM launcher_umbra_framework_artifacts
-WHERE is_active = 1
-  AND (@platform_rid = '' OR platform_rid = @platform_rid)
-ORDER BY is_default DESC, sort_order ASC, name ASC, version ASC;
-""";
-        command.Parameters.AddWithValue("@platform_rid", platformRid ?? "");
-
-        List<UmbraFrameworkArtifact> artifacts = [];
-        await using MySqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            artifacts.Add(new UmbraFrameworkArtifact(
-                reader.GetString("name"),
-                reader.GetString("version"),
-                reader.GetString("api_version"),
-                reader.GetString("platform_rid"),
-                reader.GetString("archive_url"),
-                reader.GetString("archive_format"),
-                reader.GetInt64("size_bytes"),
-                reader.GetString("sha256"),
-                reader.GetString("bootstrap_relative_path"),
-                reader.GetString("framework_relative_path"),
-                ReadStringList(reader, "supported_game_sha256_json"),
-                reader.GetBoolean("is_default"),
-                reader.GetBoolean("is_active"),
-                reader.GetInt32("sort_order")));
-        }
-
-        return artifacts;
-    }
-
-    public async ValueTask<UmbraPluginCatalog?> GetUmbraPluginCatalogAsync(CancellationToken cancellationToken = default)
-    {
-        await using MySqlConnection connection = await connectionFactory.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        PluginRepositoryRow? repository = await ReadDefaultPluginRepositoryAsync(connection, cancellationToken)
-            .ConfigureAwait(false);
-        if (repository is null)
-            return null;
-
-        IReadOnlyList<UmbraPluginCatalogEntry> plugins = await ReadPluginsAsync(
-            connection,
-            repository.RepositoryId,
-            cancellationToken).ConfigureAwait(false);
-        return new UmbraPluginCatalog(repository.RepositoryName, plugins);
-    }
-
-    public async ValueTask<IReadOnlyList<UmbraPluginBlock>> GetUmbraPluginBlocksAsync(CancellationToken cancellationToken = default)
-    {
-        await using MySqlConnection connection = await connectionFactory.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await using MySqlCommand command = connection.CreateCommand();
-        command.CommandText = """
-SELECT plugin_key, repository_url, version, reason
-FROM launcher_umbra_plugin_blocks
-WHERE is_active = 1
-ORDER BY plugin_key ASC, version ASC;
-""";
-
-        List<UmbraPluginBlock> blocks = [];
-        await using MySqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            blocks.Add(new UmbraPluginBlock(
-                reader.GetString("plugin_key"),
-                reader.GetString("repository_url"),
-                ReadNullableString(reader, "version"),
-                reader.GetString("reason")));
-        }
-
-        return blocks;
-    }
-
     private static async Task<LauncherConfigRow?> ReadActiveConfigRowAsync(
         MySqlConnection connection,
         CancellationToken cancellationToken)
@@ -318,7 +235,7 @@ ORDER BY plugin_key ASC, version ASC;
         command.CommandText = """
 SELECT config_key, service_version, server_name, server_status_url, news_url, patch_manifest_url,
        runtime_catalog_url, login_url, account_create_url, client_login_url, patch_base_url,
-       target_boot_version, target_game_version, client_plugin_framework_catalog_url, plugin_blocklist_url
+       target_boot_version, target_game_version
 FROM launcher_config
 WHERE is_active = 1
 ORDER BY config_key ASC
@@ -342,90 +259,7 @@ LIMIT 1;
             ReadNullableString(reader, "client_login_url"),
             ReadNullableString(reader, "patch_base_url"),
             reader.GetString("target_boot_version"),
-            reader.GetString("target_game_version"),
-            ReadNullableString(reader, "client_plugin_framework_catalog_url"),
-            ReadNullableString(reader, "plugin_blocklist_url"));
-    }
-
-    private static async Task<IReadOnlyList<string>> ReadPluginCatalogUrlsAsync(
-        MySqlConnection connection,
-        string configKey,
-        CancellationToken cancellationToken)
-    {
-        await using MySqlCommand command = connection.CreateCommand();
-        command.CommandText = """
-SELECT catalog_url
-FROM launcher_config_plugin_catalogs
-WHERE config_key = @config_key
-ORDER BY sort_order ASC, catalog_url ASC;
-""";
-        command.Parameters.AddWithValue("@config_key", configKey);
-
-        List<string> urls = [];
-        await using MySqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            urls.Add(reader.GetString("catalog_url"));
-
-        return urls;
-    }
-
-    private static async Task<PluginRepositoryRow?> ReadDefaultPluginRepositoryAsync(
-        MySqlConnection connection,
-        CancellationToken cancellationToken)
-    {
-        await using MySqlCommand command = connection.CreateCommand();
-        command.CommandText = """
-SELECT repository_id, repository_name
-FROM launcher_umbra_plugin_repositories
-WHERE is_active = 1
-ORDER BY sort_order ASC, repository_id ASC
-LIMIT 1;
-""";
-
-        await using MySqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            return null;
-
-        return new PluginRepositoryRow(
-            reader.GetInt32("repository_id"),
-            reader.GetString("repository_name"));
-    }
-
-    private static async Task<IReadOnlyList<UmbraPluginCatalogEntry>> ReadPluginsAsync(
-        MySqlConnection connection,
-        int repositoryId,
-        CancellationToken cancellationToken)
-    {
-        await using MySqlCommand command = connection.CreateCommand();
-        command.CommandText = """
-SELECT plugin_key, name, version, api_version, author, description, download_url, size_bytes, sha256,
-       minimum_framework_version, is_active
-FROM launcher_umbra_plugins
-WHERE repository_id = @repository_id
-  AND is_active = 1
-ORDER BY sort_order ASC, name ASC, plugin_key ASC;
-""";
-        command.Parameters.AddWithValue("@repository_id", repositoryId);
-
-        List<UmbraPluginCatalogEntry> plugins = [];
-        await using MySqlDataReader reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            plugins.Add(new UmbraPluginCatalogEntry(
-                reader.GetString("plugin_key"),
-                reader.GetString("name"),
-                reader.GetString("version"),
-                reader.GetString("api_version"),
-                reader.GetString("author"),
-                reader.GetString("description"),
-                reader.GetString("download_url"),
-                reader.GetInt64("size_bytes"),
-                reader.GetString("sha256"),
-                reader.GetString("minimum_framework_version"),
-                reader.GetBoolean("is_active")));
-        }
-
-        return plugins;
+            reader.GetString("target_game_version"));
     }
 
     private static IReadOnlyDictionary<string, string> ReadStringDictionary(MySqlDataReader reader, string name)
@@ -472,11 +306,5 @@ ORDER BY sort_order ASC, name ASC, plugin_key ASC;
         string? ClientLoginUrl,
         string? PatchBaseUrl,
         string TargetBootVersion,
-        string TargetGameVersion,
-        string? ClientPluginFrameworkCatalogUrl,
-        string? PluginBlocklistUrl);
-
-    private sealed record PluginRepositoryRow(
-        int RepositoryId,
-        string RepositoryName);
+        string TargetGameVersion);
 }

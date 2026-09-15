@@ -102,7 +102,9 @@ public sealed record LaunchPlan(
             "--log",
             CommandLineArguments.Quote(helperLogPath),
             "--observe-seconds",
-            HelperObservationSeconds.ToString()
+            HelperObservationSeconds.ToString(),
+            "--compatibility-runtime",
+            mapClientPathsForWine ? "true" : "false"
         };
         AppendUmbraArguments(helperParts, normalizedUmbra);
         string helperArguments = string.Join(" ", helperParts);
@@ -162,7 +164,10 @@ public sealed record LaunchPlan(
             BootstrapPath = WinePathMapper.ToWindowsPath(normalized.BootstrapPath),
             FrameworkPath = WinePathMapper.ToWindowsPath(normalized.FrameworkPath),
             PluginDirectory = WinePathMapper.ToWindowsPath(normalized.PluginDirectory),
-            LogPath = WinePathMapper.ToWindowsPath(normalized.LogPath)
+            LogPath = WinePathMapper.ToWindowsPath(normalized.LogPath),
+            BundledRepositoryPath = string.IsNullOrWhiteSpace(normalized.BundledRepositoryPath)
+                ? normalized.BundledRepositoryPath
+                : WinePathMapper.ToWindowsPath(normalized.BundledRepositoryPath)
         };
     }
 
@@ -185,11 +190,17 @@ public sealed record LaunchPlan(
         parts.Add(options.SafeMode ? "true" : "false");
         parts.Add("--umbra-load-delay-ms");
         parts.Add(options.LoadDelayMilliseconds.ToString());
-        parts.Add("--umbra-repository-urls");
-        parts.Add(CommandLineArguments.Quote(string.Join(";", options.RepositoryUrls)));
-        parts.Add("--umbra-repositories-json");
-        parts.Add(CommandLineArguments.Quote(options.RepositoriesJson));
         parts.Add("--umbra-enable-managed-on-wine");
         parts.Add(options.EnableManagedOnWine ? "true" : "false");
+        if (!string.IsNullOrWhiteSpace(options.SupportedRepositoryUrl))
+        {
+            parts.Add("--umbra-supported-repository");
+            parts.Add(CommandLineArguments.Quote(options.SupportedRepositoryUrl));
+        }
+        if (!string.IsNullOrWhiteSpace(options.BundledRepositoryPath))
+        {
+            parts.Add("--umbra-bundled-repository");
+            parts.Add(CommandLineArguments.Quote(options.BundledRepositoryPath));
+        }
     }
 }

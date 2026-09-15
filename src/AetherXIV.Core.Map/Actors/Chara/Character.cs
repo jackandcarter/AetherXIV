@@ -187,6 +187,33 @@ namespace AetherXIV.Core.Map.Actors
                 "actor", String.Format("0x{0:X}", actorId),
                 "actorName", customDisplayName != null ? customDisplayName : actorName,
                 "graphic", graphicNum);
+
+            // Keep the normal graphic path unchanged, but add a focused
+            // diagnostic for the Gridania side-quest actor. This records the
+            // exact player/area/quest state at the point where the Lua branch
+            // has chosen a graphic; it does not choose or mutate that branch.
+            Npc npc = this as Npc;
+            if (DevDiagnostics.Enabled && npc != null && npc.GetActorClassId() == 1000458 && player != null)
+            {
+                Quest vkorolonQuest = player.GetQuest("Etc5g0");
+                DevDiagnostics.Trace(
+                    "actor.questGraphic.vkorolon",
+                    "player", player.customDisplayName,
+                    "actor", String.Format("0x{0:X}", actorId),
+                    "actorName", customDisplayName != null ? customDisplayName : actorName,
+                    "uniqueId", npc.GetUniqueId(),
+                    "actorClassId", npc.GetActorClassId(),
+                    "graphic", graphicNum,
+                    "questPresent", vkorolonQuest != null,
+                    "questPhase", vkorolonQuest == null ? 0 : vkorolonQuest.GetPhase(),
+                    "canAcceptQuest", player.CanAcceptQuest("Etc5g0"),
+                    "zone", zone == null ? "" : zone.zoneName,
+                    "areaKind", zone == null ? "" : zone.GetType().Name,
+                    "privateArea", zone is PrivateArea,
+                    "privateAreaName", zone is PrivateArea ? ((PrivateArea)zone).GetPrivateAreaName() : "",
+                    "privateAreaType", zone is PrivateArea ? ((PrivateArea)zone).GetPrivateAreaType() : 0);
+            }
+
             player.QueuePacket(SetActorQuestGraphicPacket.BuildPacket(actorId, graphicNum));
         }
 
@@ -790,6 +817,30 @@ namespace AetherXIV.Core.Map.Actors
             }
         }
 
+        //Legacy GM-command surface (settp.lua): set TP to an absolute value
+        //instead of adding a delta. Same clamp/flags path as AddTP.
+        public void SetTP(int tp)
+        {
+            if (IsAlive())
+            {
+                short before = charaWork.parameterTemp.tp;
+                var setTp = tp.Clamp((int) GetMod(Modifier.MinimumTpLock), 3000);
+                charaWork.parameterTemp.tp = (short) setTp;
+                tpBase = (ushort)charaWork.parameterTemp.tp;
+                updateFlags |= ActorUpdateFlags.HpTpMp;
+                DevDiagnostics.Trace(
+                    "character.tp.set",
+                    "actor", String.Format("0x{0:X}", actorId),
+                    "actorName", customDisplayName != null ? customDisplayName : actorName,
+                    "requested", tp,
+                    "before", before,
+                    "after", charaWork.parameterTemp.tp);
+
+                if (tpBase >= 1000)
+                    EmitContentProgressSignal("tpOver1000");
+            }
+        }
+
         public void AddTP(int tp)
         {
             if (IsAlive() && tp != 0)
@@ -819,13 +870,12 @@ namespace AetherXIV.Core.Map.Actors
             if (!(this is Player player))
                 return;
 
-            if (zone is PrivateAreaContent contentArea &&
-                GridaniaOpeningTutorialPolicy.IsContentArea(contentArea.GetPrivateAreaName()))
-            {
-                lua.LuaEngine.GetInstance().OnSignal(contentArea.GetPlayerSignal(player, signal));
-                return;
-            }
-
+            // Signals are emitted bare, matching the legacy Meteor contract and
+            // the Limsa/Uldah opening directors. The 2.0 build used to scope
+            // them per-player ("signal:<actorId>") inside the Gridania opening
+            // content only, which split the signal namespace from every other
+            // director; the Gridania director now waits on the same bare names
+            // the other openings use.
             lua.LuaEngine.GetInstance().OnSignal(signal);
         }
 
@@ -1528,6 +1578,13 @@ namespace AetherXIV.Core.Map.Actors
                 return itemPackages[package];
             else
                 return null;
+        }
+
+        //Legacy script name (gm givecurrency.lua calls player:getInventory(location)).
+        //Same lookup as GetItemPackage — this is an alias, not a second path.
+        public ItemPackage getInventory(ushort package)
+        {
+            return GetItemPackage(package);
         }
 
         public ushort GetPackageForItem(uint catalogID)

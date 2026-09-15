@@ -112,7 +112,7 @@ public sealed class LegacyAetherXivBlowfishCipher : ILegacyStreamCipher
             ["clientNumber"] = $"0x{parsedHandshake.ClientNumber:X8}",
             ["sessionKey"] = Convert.ToHexString(sessionKey),
             ["responseBytes"] = response.Length,
-            ["traceBasis"] = "ffxiv_traces/login.pcapng secure-start + recovered secure ack plaintext"
+            ["traceBasis"] = "reviewed-local-validation secure-start + recovered secure ack plaintext"
         });
 
         return true;

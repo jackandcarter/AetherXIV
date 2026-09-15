@@ -461,4 +461,3 @@ end
 function getCurrentCount(city, category)
     return gcDelivery.currentCount[city][category];
 end
-

@@ -38,12 +38,17 @@ public static class WorldRelayFramePolicy
     /// </summary>
     public static bool RequiresBoundaryBefore(
         bool currentFrameContainsRunEventFunction,
+        bool currentFrameContainsEndEvent,
         ushort candidateSubpacketType,
         ushort candidateOpcode)
     {
-        return currentFrameContainsRunEventFunction
-            && candidateSubpacketType == 0x0003
-            && candidateOpcode == EndEventOpcode;
+        if (candidateSubpacketType != 0x0003)
+            return false;
+
+        return (currentFrameContainsRunEventFunction
+                && candidateOpcode == EndEventOpcode)
+            || (currentFrameContainsEndEvent
+                && candidateOpcode == RunEventFunctionOpcode);
     }
 
     public static bool CanAppend(

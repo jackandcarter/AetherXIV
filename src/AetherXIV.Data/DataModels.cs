@@ -569,7 +569,8 @@ public sealed record StaticActorSpawnRecord(
     string? CustomDisplayName,
     ProvenanceRef Provenance,
     uint? MapObjectLayoutId = null,
-    uint? MapObjectInstanceId = null);
+    uint? MapObjectInstanceId = null,
+    uint? NativeActorSlot = null);
 
 public sealed record BattleNpcSpawnRecord(
     BattleNpcId BattleNpcId,

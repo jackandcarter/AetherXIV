@@ -75,6 +75,8 @@ public readonly record struct MapLoginHandshakeResponsePacket(uint ActorId);
 
 public sealed class MapLoginHandshakeResponsePacketCodec : IPacketCodec<MapLoginHandshakeResponsePacket>
 {
+    public const int PayloadSize = 0x10;
+
     public PacketOpcode Opcode => PacketOpcode.MapLoginHandshake;
 
     public Type PacketType => typeof(MapLoginHandshakeResponsePacket);
@@ -82,14 +84,14 @@ public sealed class MapLoginHandshakeResponsePacketCodec : IPacketCodec<MapLogin
     public MapLoginHandshakeResponsePacket Decode(SubPacket packet)
     {
         EnsureOpcode(packet, Opcode);
-        RequirePayload(packet.Payload.Span, 0x10, "map login handshake response");
+        RequirePayload(packet.Payload.Span, PayloadSize, "map login handshake response");
         return new MapLoginHandshakeResponsePacket(
             PacketBinary.ReadUInt32LittleEndian(packet.Payload.Span[0x08..]));
     }
 
     public SubPacket Encode(uint sourceActorId, MapLoginHandshakeResponsePacket packet)
     {
-        byte[] payload = new byte[0x10];
+        byte[] payload = new byte[PayloadSize];
         PacketBinary.WriteUInt32LittleEndian(payload.AsSpan(0x08), packet.ActorId);
         return SubPacket.Create(Opcode, sourceActorId, payload);
     }
@@ -388,7 +390,11 @@ public sealed class ClientListObjectLifecycleAcknowledgePacketCodec
     {
         EnsureOpcode(packet, Opcode);
         ReadOnlySpan<byte> payload = packet.Payload.Span;
-        RequirePayload(payload, PayloadSize, "client list-object lifecycle acknowledge");
+        if (payload.Length != PayloadSize)
+        {
+            throw new InvalidDataException(
+                $"client list-object lifecycle acknowledge payload must be exactly {PayloadSize} bytes; received {payload.Length}.");
+        }
         return new ClientListObjectLifecycleAcknowledgePacket(
             PacketBinary.ReadUInt32LittleEndian(payload),
             PacketBinary.ReadUInt32LittleEndian(payload[4..]),

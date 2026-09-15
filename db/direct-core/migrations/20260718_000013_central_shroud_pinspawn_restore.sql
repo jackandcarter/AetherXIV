@@ -13,7 +13,7 @@
 --   * Forest Funguar and Chigoe placements are retained until their exact
 --     1.23b actor variant and battle profile are independently established.
 --
--- Official capture: ffxiv_traces/gather_wood.pcapng
+-- Official capture: reviewed-local-validation
 -- SHA-256: c308aa4c984eb3e1912383c06e5115c6924713978df43cdb8075335e1bac7d32
 
 DROP TEMPORARY TABLE IF EXISTS `tmp_central_shroud_pinspawn`;

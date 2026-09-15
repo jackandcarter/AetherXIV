@@ -13,6 +13,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\AetherXIV.Core\AetherXivBuildInfo.cs" Link="Shared\AetherXivBuildInfo.cs" />
     <ProjectReference Include="..\AetherXIV.Core.Common\AetherXIV.Core.Common.csproj" />
   </ItemGroup>
 

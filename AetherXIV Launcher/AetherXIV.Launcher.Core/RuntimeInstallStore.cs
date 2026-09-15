@@ -13,24 +13,11 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-using System.Text.Json;
-
 namespace AetherXIV.Launcher.Core;
 
 public static class RuntimeInstallStore
 {
-    private const string ManifestFileName = "aetherxiv-launcher-runtime.json";
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true
-    };
-
     public static string ApplicationDataRoot => GetApplicationDataRoot();
-
-    public static string RuntimesRoot => Path.Combine(ApplicationDataRoot, "Runtimes");
-
-    public static string RuntimeCacheRoot => Path.Combine(ApplicationDataRoot, "RuntimeCache");
 
     public static string PrefixesRoot => Path.Combine(ApplicationDataRoot, "Prefixes");
 
@@ -60,46 +47,11 @@ public static class RuntimeInstallStore
         return Path.Combine(root, "Demi Dev Unit", "AetherXIV Launcher");
     }
 
-    public static string InstallRootFor(RuntimeArtifact artifact, string? runtimesRoot = null)
-    {
-        ArgumentNullException.ThrowIfNull(artifact);
-        return Path.Combine(runtimesRoot ?? RuntimesRoot, artifact.StableId);
-    }
-
-    public static string ManifestPathFor(string installRoot)
-    {
-        return Path.Combine(Path.GetFullPath(installRoot), ManifestFileName);
-    }
-
-    public static void Save(ManagedRuntimeInstall install)
-    {
-        ArgumentNullException.ThrowIfNull(install);
-        Directory.CreateDirectory(install.InstallPath);
-        File.WriteAllText(ManifestPathFor(install.InstallPath), JsonSerializer.Serialize(install, JsonOptions));
-    }
-
-    public static ManagedRuntimeInstall Load(string installRoot)
-    {
-        string json = File.ReadAllText(ManifestPathFor(installRoot));
-        ManagedRuntimeInstall? install = JsonSerializer.Deserialize<ManagedRuntimeInstall>(json, JsonOptions);
-        return install ?? throw new InvalidOperationException("Managed runtime install manifest could not be read.");
-    }
-
-    public static ManagedRuntimeInstall? FindInstalled(RuntimeArtifact artifact, string? runtimesRoot = null)
-    {
-        string installRoot = InstallRootFor(artifact, runtimesRoot);
-        string manifestPath = ManifestPathFor(installRoot);
-        if (!File.Exists(manifestPath))
-            return null;
-
-        ManagedRuntimeInstall install = Load(installRoot);
-        return File.Exists(install.ExecutablePath) ? install : null;
-    }
-
     public static void ResetManagedPrefix()
     {
         if (Directory.Exists(ManagedPrefixPath))
             Directory.Delete(ManagedPrefixPath, true);
+        RuntimeReadinessStore.Invalidate();
     }
 
     public static string SanitizePathSegment(string value)
@@ -116,4 +68,5 @@ public static class RuntimeInstallStore
 
         return cleaned.Trim('-', '.').ToLowerInvariant();
     }
+
 }

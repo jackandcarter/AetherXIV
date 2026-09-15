@@ -13,7 +13,9 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\AetherXIV.Core\AetherXivBuildInfo.cs" Link="Shared\AetherXivBuildInfo.cs" />
     <ProjectReference Include="..\AetherXIV.Core.Common\AetherXIV.Core.Common.csproj" />
+    <ProjectReference Include="..\AetherXIV.Protocol\AetherXIV.Protocol.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -46,6 +48,9 @@
       <Link>scripts.manifest.json</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <EmbeddedResource Include="..\..\Data\seeds\actor-catalog\native-actor-slot-overrides.json">
+      <LogicalName>AetherXIV.NativeActorIdentities.json</LogicalName>
+    </EmbeddedResource>
     <Content Include="..\..\Data\config\map_config.ini">
       <Link>map_config.ini</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

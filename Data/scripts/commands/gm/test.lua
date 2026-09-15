@@ -15,8 +15,8 @@ Positions your character forward a set <distance>, defaults to 5 yalms.
 
 function onTrigger(player, argc)
 		worldMaster = GetWorldMaster();
-		player:SendGameMessage(player, worldMaster, 34108, 0x20);	
-		player:SendGameMessage(player, worldMaster, 50011, 0x20);	
+		player:SendGameMessage(worldMaster, 34108, 0x20);	
+		player:SendGameMessage(worldMaster, 50011, 0x20);	
 
 		director = player:GetZone():CreateDirector("Quest/QuestDirectorMan0l001");
 		player:AddDirector(director);

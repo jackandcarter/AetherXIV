@@ -241,6 +241,8 @@ namespace AetherXIV.Core.Map.actors.chara.ai.controllers
                 candidates.Add(command.Clone());
             foreach (var command in owner.spellList.Values)
                 candidates.Add(command.Clone());
+            foreach (var command in owner.mobSkillList.Values)
+                candidates.Add(command.Clone());
 
             if (candidates.Count == 0)
             {
@@ -285,6 +287,8 @@ namespace AetherXIV.Core.Map.actors.chara.ai.controllers
                     return weaponSkillEnabled && tick >= lastSkillTime;
                 case CommandType.Ability:
                     return tick >= lastSpecialSkillTime;
+                case CommandType.MobSkill:
+                    return tick >= lastSpecialSkillTime;
             }
 
             return false;
@@ -316,6 +320,10 @@ namespace AetherXIV.Core.Map.actors.chara.ai.controllers
                     lastSpecialSkillTime = tick.AddMilliseconds(recastMs);
                     owner.aiContainer.InternalAbility(target, command.id);
                     break;
+                case CommandType.MobSkill:
+                    lastSpecialSkillTime = tick.AddMilliseconds(recastMs);
+                    owner.aiContainer.InternalMobSkill(target, command.id);
+                    break;
             }
         }
 
@@ -338,6 +346,8 @@ namespace AetherXIV.Core.Map.actors.chara.ai.controllers
                 "skillCount", owner.skillList.Count,
                 "spellListId", owner.spellListId,
                 "spellCount", owner.spellList.Count,
+                "mobSkillListId", owner.mobSkillListId,
+                "mobSkillCount", owner.mobSkillList.Count,
                 "target", owner.target == null ? "0x0" : String.Format("0x{0:X}", owner.target.actorId),
                 "targetName", owner.target == null ? "" : (owner.target.customDisplayName != null ? owner.target.customDisplayName : owner.target.actorName));
         }

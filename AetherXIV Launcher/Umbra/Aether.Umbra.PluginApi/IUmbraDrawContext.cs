@@ -62,6 +62,18 @@ public interface IUmbraDrawContext
 
     bool Toggle(string label, ref bool value);
 
+    bool InputInt(string label, ref int value, int step = 1);
+
+    bool SliderInt(string label, ref int value, int minimum, int maximum);
+
+    bool SliderFloat(string label, ref float value, float minimum, float maximum);
+
+    bool Combo(string label, ref int selectedIndex, IReadOnlyList<string> items);
+
+    bool CollapsingHeader(string label, bool defaultOpen = false);
+
+    void ProgressBar(float fraction, string overlay = "");
+
     void SameLine();
 
     void Separator();

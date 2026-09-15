@@ -47,8 +47,27 @@ function init(npc)
 	return false, false, 0, 0;	
 end
 
-function onEventStarted(player, npc, triggerName)	
+function onEventStarted(player, npc, triggerName)
 	local actorClassId = npc:GetActorClassId();
+
+	-- Rururaji is part of the Ul'dah opening while Man0u0 is active. The
+	-- specialized populace class still owns the wire event, but the quest
+	-- remains the authoritative event actor and state owner.
+	if (actorClassId == 1000840 and player:HasQuest(110009) == true) then
+		local quest = player:GetQuest(110009);
+		local sequence = quest:GetSequence();
+
+		if (sequence == 0) then
+			callClientFunction(player, "delegateEvent", player, quest, "processEvent000_13");
+		elseif (sequence == 10) then
+			callClientFunction(player, "delegateEvent", player, quest, "processEvent020_7");
+		end
+
+		player:EndEvent();
+		quest:UpdateENPCs();
+		return;
+	end
+
 	local curLevel = player:GetHighestLevel();
 	local hasIssuance = player:CanPresentChocoboIssuance(actorClassId);
 	local hasChocobo = player.hasChocobo;

@@ -41,6 +41,32 @@ public static class RuntimeValidator
         string prefixPath,
         CancellationToken cancellationToken = default)
     {
+        return await ValidateAsync(profile, prefixPath, null, cancellationToken);
+    }
+
+    public static async Task<RuntimeValidationResult> ValidateAsync(
+        WineRuntimeProfile profile,
+        string prefixPath,
+        UmbraFrameworkInstall? umbraInstall,
+        CancellationToken cancellationToken = default)
+    {
+        return await ValidateAsync(
+            profile,
+            prefixPath,
+            umbraInstall,
+            null,
+            verifyBundledIntegrity: false,
+            cancellationToken);
+    }
+
+    public static async Task<RuntimeValidationResult> ValidateAsync(
+        WineRuntimeProfile profile,
+        string prefixPath,
+        UmbraFrameworkInstall? umbraInstall,
+        ManagedRuntimeInstall? bundledRuntimeInstall,
+        bool verifyBundledIntegrity,
+        CancellationToken cancellationToken = default)
+    {
         ArgumentNullException.ThrowIfNull(profile);
 
         if (profile.Kind == WineRuntimeKind.NativeWindows)
@@ -53,33 +79,21 @@ public static class RuntimeValidator
                 RuntimeLaunchDiagnostics.CreateLogPath());
         }
 
+        if (profile.Kind != WineRuntimeKind.WinePrefix)
+        {
+            return new RuntimeValidationResult(
+                false,
+                "AetherXIV requires its bundled Wine runtime and isolated managed prefix on this platform.",
+                null,
+                profile.Name,
+                RuntimeLaunchDiagnostics.CreateLogPath("runtime-validate"));
+        }
+
         if (string.IsNullOrWhiteSpace(profile.Command))
             throw new InvalidOperationException("Runtime command is required.");
 
         if (!File.Exists(profile.Command) && !CommandExistsOnPath(profile.Command))
             throw new FileNotFoundException("Runtime executable was not found.", profile.Command);
-
-        if (profile.Kind == WineRuntimeKind.WhiskyBottle)
-        {
-            if (!WhiskyRuntimeEnvironment.TryCreateWineProfile(
-                    profile.Command,
-                    profile.BottleName ?? "",
-                    out WineRuntimeProfile whiskyWineProfile,
-                    out string whiskyError))
-            {
-                return new RuntimeValidationResult(
-                    false,
-                    $"Whisky runtime resolution failed: {whiskyError}",
-                    null,
-                    $"Whisky:{profile.BottleName}",
-                    RuntimeLaunchDiagnostics.CreateLogPath("runtime-validate"));
-            }
-
-            return await ValidateAsync(
-                whiskyWineProfile,
-                whiskyWineProfile.PrefixPath ?? prefixPath,
-                cancellationToken);
-        }
 
         string logPath = RuntimeLaunchDiagnostics.CreateLogPath("runtime-validate");
         RuntimePrerequisiteResult prerequisites = await RuntimePlatformPrerequisites.CheckAsync(
@@ -107,6 +121,36 @@ public static class RuntimeValidator
                 logPath);
         }
 
+        if (verifyBundledIntegrity)
+        {
+            if (bundledRuntimeInstall is null)
+            {
+                return new RuntimeValidationResult(
+                    false,
+                    "The bundled runtime installation metadata is unavailable for integrity verification.",
+                    null,
+                    profile.Name,
+                    logPath);
+            }
+
+            BundledRuntimeIntegrityResult integrity = await BundledRuntimeIntegrityVerifier.VerifyAsync(
+                bundledRuntimeInstall,
+                cancellationToken);
+            await File.AppendAllTextAsync(
+                logPath,
+                $"runtime_integrity={integrity.Message}{Environment.NewLine}",
+                cancellationToken);
+            if (!integrity.IsValid)
+            {
+                return new RuntimeValidationResult(
+                    false,
+                    $"Bundled runtime integrity verification failed. {integrity.Message} Reinstall or repair this AetherXIV build.",
+                    null,
+                    profile.Name,
+                    logPath);
+            }
+        }
+
         Dictionary<string, string> environment = new(profile.Environment);
         string runtimeTarget = profile.Name;
         string? normalizedPrefix = null;
@@ -116,30 +160,6 @@ public static class RuntimeValidator
                 ? profile.PrefixPath
                 : prefixPath;
             normalizedPrefix = Path.GetFullPath(selectedPrefix);
-            Directory.CreateDirectory(normalizedPrefix);
-            environment["WINEPREFIX"] = normalizedPrefix;
-            runtimeTarget = normalizedPrefix;
-        }
-        else if (profile.Kind == WineRuntimeKind.CrossOverBottle)
-        {
-            if (string.IsNullOrWhiteSpace(profile.BottleName))
-            {
-                return new RuntimeValidationResult(
-                    false,
-                    "CrossOver bottle name is required.",
-                    null,
-                    "CrossOver",
-                    logPath);
-            }
-
-            environment["CX_BOTTLE"] = profile.BottleName;
-            environment.Remove("WINEPREFIX");
-            runtimeTarget = $"CrossOver bottle {profile.BottleName}";
-        }
-        else if (environment.TryGetValue("WINEPREFIX", out string? explicitPrefix)
-                 && !string.IsNullOrWhiteSpace(explicitPrefix))
-        {
-            normalizedPrefix = Path.GetFullPath(explicitPrefix);
             Directory.CreateDirectory(normalizedPrefix);
             environment["WINEPREFIX"] = normalizedPrefix;
             runtimeTarget = normalizedPrefix;
@@ -225,7 +245,26 @@ public static class RuntimeValidator
             {
                 return new RuntimeValidationResult(
                     false,
-                    "Runtime cannot start the bundled FFXIV 1.x launch helper. Select a Wine/CrossOver runtime with Windows .NET support or use a self-contained helper package.",
+                    "The bundled AetherXIV runtime cannot start the FFXIV 1.x launch helper. Reinstall or repair this AetherXIV build; another Wine provider will not be selected.",
+                    version.Output.Trim(),
+                    runtimeTarget,
+                    logPath);
+            }
+        }
+
+        if (umbraInstall is not null)
+        {
+            string? umbraFailure = await ValidateUmbraRuntimeAsync(
+                profile,
+                umbraInstall,
+                environment,
+                logPath,
+                cancellationToken);
+            if (umbraFailure is not null)
+            {
+                return new RuntimeValidationResult(
+                    false,
+                    umbraFailure,
                     version.Output.Trim(),
                     runtimeTarget,
                     logPath);
@@ -234,12 +273,80 @@ public static class RuntimeValidator
 
         return new RuntimeValidationResult(
             true,
-            prerequisites.Warnings.Count == 0
-                ? "Runtime, Wine prefix, and client launch helper are ready."
-                : $"Runtime, Wine prefix, and client launch helper are ready. {string.Join(" ", prerequisites.Warnings)}",
+            BuildReadyMessage(prerequisites.Warnings, umbraInstall is not null),
             version.Output.Trim(),
             runtimeTarget,
             logPath);
+    }
+
+    private static string BuildReadyMessage(IReadOnlyList<string> warnings, bool umbraValidated)
+    {
+        string message = umbraValidated
+            ? "Runtime, Wine prefix, client launch helper, and Umbra x86 .NET runtime are ready."
+            : "Runtime, Wine prefix, and client launch helper are ready.";
+        return warnings.Count == 0 ? message : $"{message} {string.Join(" ", warnings)}";
+    }
+
+    private static async Task<string?> ValidateUmbraRuntimeAsync(
+        WineRuntimeProfile profile,
+        UmbraFrameworkInstall install,
+        Dictionary<string, string> environment,
+        string logPath,
+        CancellationToken cancellationToken)
+    {
+        string managedDirectory = Path.GetDirectoryName(install.FrameworkPath) ?? "";
+        string appHostPath = string.Equals(
+            Path.GetExtension(install.FrameworkPath),
+            ".exe",
+            StringComparison.OrdinalIgnoreCase)
+            ? install.FrameworkPath
+            : Path.ChangeExtension(install.FrameworkPath, ".exe");
+        string runtimeRoot = Path.GetFullPath(Path.Combine(managedDirectory, "..", "Runtime"));
+
+        if (!File.Exists(appHostPath) || !Directory.Exists(runtimeRoot))
+        {
+            return "The bundled Umbra runtime is incomplete. Reinstall or rebuild the launcher before enabling Umbra.";
+        }
+
+        Dictionary<string, string> probeEnvironment = new(environment)
+        {
+            ["DOTNET_ROOT"] = WinePathMapper.ToWindowsPath(runtimeRoot),
+            ["DOTNET_ROOT_X86"] = WinePathMapper.ToWindowsPath(runtimeRoot)
+        };
+
+        ProcessRunResult probe;
+        try
+        {
+            probe = await RunAndLogAsync(
+                profile.Command,
+                profile.BuildArguments(appHostPath, "--runtime-probe"),
+                probeEnvironment,
+                logPath,
+                TimeSpan.FromSeconds(90),
+                cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            return UmbraCompatibilityFailureMessage("The managed runtime probe timed out.");
+        }
+
+        if (probe.ExitCode != 0)
+        {
+            string detail = FirstUsefulLine(probe.Error, probe.Output);
+            return UmbraCompatibilityFailureMessage(
+                $"The managed runtime probe exited with code {probe.ExitCode}: {detail}");
+        }
+
+        if (!probe.Output.Contains("AETHER_UMBRA_MANAGED_RUNTIME_OK", StringComparison.Ordinal))
+            return UmbraCompatibilityFailureMessage("The managed runtime probe did not complete its worker-thread checks.");
+
+        return null;
+    }
+
+    private static string UmbraCompatibilityFailureMessage(string detail)
+    {
+        return "This runtime can launch the FFXIV 1.x helper, but cannot safely host Umbra's 32-bit .NET 10 worker threads. "
+            + $"{detail} Reinstall or repair this AetherXIV build. Umbra launch remains blocked rather than switching to another Wine provider.";
     }
 
     private static string FirstUsefulLine(params string[] values)

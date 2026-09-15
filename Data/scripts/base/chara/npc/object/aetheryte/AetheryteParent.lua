@@ -34,10 +34,29 @@ end
 function onEventStarted(player, aetheryte, triggerName)
 	local aetheryteId = aetheryte:GetActorClassId();
 
+	-- First-touch attunement (Garlemald #46 round 5): unlock the touched
+	-- node BEFORE the menu so TeleportCommand.lua's attunement gate opens
+	-- for it. Persisted in characters_aetherytes, so the gate survives a
+	-- relog.
+	if (player:HasAetheryteNodeUnlocked(aetheryteId) == false) then
+		player:UnlockAetheryteNode(aetheryteId);
+	end
+
+	-- Camp Bearded Rock is the attunement beat for Limsa's opening
+	-- storyline (man0l1 SEQ_003 "Go attune to Camp Bearded Rock"). The
+	-- client finishes this delegated event before the quest advances and the
+	-- ordinary aetheryte menu is shown.
+	if (player:HasQuest(110002) == true and aetheryteId == 1280002) then
+		require ("quests/man/man0l1");
+		local quest = player:GetQuest("Man0l1");
+		if (quest:GetSequence() == SEQ_003) then
+			callClientFunction(player, "delegateEvent", player, quest, "processEvent025");
+			quest:StartSequence(SEQ_005);
+		end
 	-- Camp Bentbranch is the attunement beat for Gridania's opening
 	-- storyline. The client finishes this delegated event before the quest
 	-- advances and the ordinary aetheryte menu is shown.
-	if (player:HasQuest(110006) == true and aetheryteId == 1280062) then
+	elseif (player:HasQuest(110006) == true and aetheryteId == 1280062) then
 		require ("quests/man/man0g1");
 		local quest = player:GetQuest("Man0g1");
 		if (quest:GetSequence() == SEQ_005) then

@@ -12,8 +12,6 @@ Install:
 - Avalonia desktop libraries documented by
   [Avalonia](https://docs.avaloniaui.net/docs/deployment/linux);
 - working X11/XWayland and graphics-driver support;
-- internet access so **Install Runtime** can retrieve the pinned portable Wine
-  package;
 - a user-owned Final Fantasy XIV 1.23b client.
 
 On Ubuntu, the common Avalonia packages include `libx11-6`, `libice6`, `libsm6`,
@@ -58,13 +56,13 @@ sudo chmod +x /opt/aetherxiv/launcher/app/AetherXIV.Launcher.App
 1. Open `launcher/app/AetherXIV.Launcher.App` from the release folder.
 2. Save the **Localhost** server preset.
 3. Locate and validate the Final Fantasy XIV 1.23b client.
-4. On **Runtime**, select **Install Runtime** if Wine is not detected. The
-   Launcher downloads its pinned portable Linux x64 package, verifies it, and
-   validates the executable, required host libraries, isolated prefix, and
+4. On **Runtime**, confirm that **Runtime source** reports the bundled
+   AetherXIV Compatibility Runtime, then select **Validate Runtime**. It
+   validates the runtime receipt, required host libraries, isolated prefix, and
    client helper. If a shared library is missing, install the named library
-   with the distribution's graphical software manager and select **Validate
-   Runtime** again.
-5. Confirm graphics-driver support if Wine starts but the game does not render.
+   with the distribution's graphical software manager and validate again.
+5. Confirm graphics-driver support if the compatibility runtime starts but the
+   game does not render.
 6. Enable Umbra if desired, then log in from **Home**.
 
 An X11 session or XWayland compatibility layer is required.
@@ -79,8 +77,9 @@ the application-data directories; do not copy stale binaries into the new tree.
 
 - A GUI that exits immediately commonly indicates a missing X11, ICE, SM, or
   Fontconfig library.
-- A game-only failure commonly indicates the Wine runtime, prefix, or 32-bit
-  graphics stack rather than the Launcher GUI.
+- A game-only failure commonly indicates the bundled compatibility runtime,
+  managed prefix, or graphics stack rather than the Launcher GUI. Do not add a
+  system Wine provider: repair the matching release if runtime validation fails.
 
 See the [Launcher guide](../LAUNCHER_GUIDE.md), [Core guide](../AETHERXIV_CORE_GUIDE.md),
 and [debugging guide](../DEBUGGING_AND_BUG_REPORTING.md).

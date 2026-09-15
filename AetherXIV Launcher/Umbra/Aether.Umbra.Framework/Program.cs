@@ -21,6 +21,9 @@ if (args.Length == 1 && string.Equals(args[0], "--probe", StringComparison.Ordin
     return 0;
 }
 
+if (args.Length == 1 && string.Equals(args[0], "--runtime-probe", StringComparison.OrdinalIgnoreCase))
+    return UmbraRuntimeProbe.Run();
+
 if (args.Length == 1 && string.Equals(args[0], "--bootstrap", StringComparison.OrdinalIgnoreCase))
 {
     return await UmbraBootstrapRunner.RunFromEnvironmentAsync();

@@ -28,10 +28,14 @@ public sealed record ManagedRuntimeInstall(
 {
     public WineRuntimeProfile ToWineRuntimeProfile(string prefixPath)
     {
-        return WineRuntimeProfile.WinePrefix(
+        WineRuntimeProfile profile = WineRuntimeProfile.WinePrefix(
             $"{Name} {Version}",
             prefixPath,
             ExecutablePath,
             Environment);
+        if (!String.IsNullOrWhiteSpace(PrefixArch))
+            profile.Environment["WINEARCH"] = PrefixArch;
+
+        return profile;
     }
 }

@@ -83,17 +83,81 @@ public sealed record UmbraRepositorySource(
 
     public static bool IsAllowedUri(string value)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out Uri? uri))
+        if (string.IsNullOrWhiteSpace(value))
             return false;
 
-        if (string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-            return true;
+        if (Uri.TryCreate(value, UriKind.Absolute, out Uri? uri))
+        {
+            if (uri.IsFile)
+                return true;
 
-        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(uri.Host, "::1", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // A rooted filesystem path (for example the Wine drive path of the
+        // bundled repository the launcher seeds) is a valid local source.
+        return Path.IsPathRooted(value);
+    }
+
+    /// <summary>
+    /// True when the source points at a repository manifest on the local file
+    /// system (the bundled foundation catalog) instead of a remote URL.
+    /// </summary>
+    public bool IsLocalFileSource =>
+        (Uri.TryCreate(Url, UriKind.Absolute, out Uri? uri) && uri.IsFile)
+        || Path.IsPathRooted(Url);
+
+    public Uri ResolveManifestUri()
+    {
+        if (Path.IsPathRooted(Url))
+            return new Uri(Path.GetFullPath(Url));
+
+        if (!Uri.TryCreate(Url, UriKind.Absolute, out Uri? uri))
+            throw new InvalidDataException($"Invalid Umbra repository URL: {Url}");
+
+        if (!IsGitHubRepositoryUri(uri, out string? owner, out string? repository))
+            return uri;
+
+        return new Uri(
+            $"https://raw.githubusercontent.com/{Uri.EscapeDataString(owner!)}/" +
+            $"{Uri.EscapeDataString(repository!)}/HEAD/umbra-repository.json");
+    }
+
+    public bool IsGitHubRepository =>
+        Uri.TryCreate(Url, UriKind.Absolute, out Uri? uri)
+        && IsGitHubRepositoryUri(uri, out _, out _);
+
+    private static bool IsGitHubRepositoryUri(
+        Uri uri,
+        out string? owner,
+        out string? repository)
+    {
+        owner = null;
+        repository = null;
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
+            || (!string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(uri.Host, "www.github.com", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        string[] parts = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 2)
             return false;
 
-        return string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(uri.Host, "127.0.0.1", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(uri.Host, "::1", StringComparison.OrdinalIgnoreCase);
+        owner = parts[0];
+        repository = parts[1].EndsWith(".git", StringComparison.OrdinalIgnoreCase)
+            ? parts[1][..^4]
+            : parts[1];
+        return !string.IsNullOrWhiteSpace(owner) && !string.IsNullOrWhiteSpace(repository);
     }
 }

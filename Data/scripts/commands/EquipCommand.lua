@@ -54,24 +54,33 @@ GRAPHICSLOT_R_INDEXFINGER 	= 25;
 GRAPHICSLOT_L_INDEXFINGER 	= 26;
 
 function onEventStarted(player, actor, triggerName, equippedItem, param1, param2, param3, param4, param5, param6, param7, equipSlot, itemDBIds)
+	local requestedEquipPoint = equipSlot;
+	if (player:IsValidEquipmentPoint(requestedEquipPoint) == false) then
+		player:EndEvent();
+		return;
+	end
+
 	equipSlot = equipSlot-1;
+	local changed = false;
 	
 	--Equip Item
-	if (equippedItem ~= nil) then		
-		item = player:GetItemPackage(equippedItem.itemPackage):GetItemAtSlot(equippedItem.slot);		
-		equipItem(player, equipSlot, item);			
-		player:SendAppearance();
+	if (equippedItem ~= nil) then
+		local item = player:GetValidatedEquipmentItem(equippedItem, requestedEquipPoint, itemDBIds);
+		if (item ~= nil) then
+			changed = equipItem(player, equipSlot, item);
+		end
 	--Unequip Item
 	else	
-		item = player:GetEquipment():GetItemAtSlot(equipSlot);
-		if (unequipItem(player, equipSlot, item) == true) then --Returns true only if something changed (didn't error out)
-			player:SendAppearance();
-		end
+		local item = player:GetEquipment():GetItemAtSlot(equipSlot);
+		changed = unequipItem(player, equipSlot, item);
 	end
 	
-	player.RecalculateStats("equip");
-	
-	player:EndEvent();	
+	if (changed == true) then
+		player:RecalculateStats("equip");
+		player:CompleteEquipmentCommand();
+	else
+		player:EndEvent();
+	end
 end
 
 function loadGearset(player, classId)	
@@ -107,8 +116,12 @@ end
 function equipItem(player, equipSlot, item)
 	if (item ~= nil) then	
 		local classId = nil;
+		local graphicSlot = nil;
 		local worldMaster = GetWorldMaster();
 		local gItem = GetItemGamedata(item.itemId);
+		if (gItem == nil) then
+			return false;
+		end
 		
 		--If it's the mainhand, begin class change based on weapon
 		if (equipSlot == EQUIPSLOT_MAINHAND) then
@@ -151,7 +164,9 @@ function equipItem(player, equipSlot, item)
 			player:DoClassChange(classId);
 		end
 
-		player:GetEquipment():Set(equipSlot, item);		
+		if (player:GetEquipment():Set(equipSlot, item) == false) then
+			return false;
+		end
 		
 		--EquipSlot -> GraphicSlot
 		if 	   (equipSlot == EQUIPSLOT_MAINHAND and gItem:IsNailWeapon() == false) then graphicSlot = GRAPHICSLOT_MAINHAND;
@@ -217,8 +232,11 @@ function equipItem(player, equipSlot, item)
 				player:GraphicChange(GRAPHICSLOT_SPOFFHAND,  0,0,0,0);
 			end
 		end
-		
+
+		return true;
 	end
+
+	return false;
 end
 
 function unequipItem(player, equipSlot, item)
@@ -228,7 +246,9 @@ function unequipItem(player, equipSlot, item)
 		player:SendGameMessage(player, worldMaster, 30730, 0x20, equipSlot+1, item.itemId, item.quality, 0, 0, 1); --Unable to unequip
 	elseif (item ~= nil) then
 		player:SendGameMessage(player, worldMaster, 30602, 0x20, equipSlot+1, item.itemId, item.quality, 0, 0, 1); --Item Removed
-		player:GetEquipment():Clear(equipSlot);
+		if (player:GetEquipment():Clear(equipSlot) == false) then
+			return false;
+		end
 				
 		if (equipSlot == EQUIPSLOT_BODY) then --Show Undershirt
 			item = player:GetEquipment():GetItemAtSlot(EQUIPSLOT_UNDERSHIRT);
@@ -255,4 +275,6 @@ function unequipItem(player, equipSlot, item)
 		
 		return true;
 	end
+
+	return false;
 end

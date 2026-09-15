@@ -7,9 +7,14 @@ import json
 from pathlib import Path
 
 
-BASE_SQL_COUNT = 68
+BASE_SQL_COUNT = 70
 BASELINE_ID = "20260716_000001_ffxiv_server_v2_baseline"
 INCLUDED_AFTER_BASE = (
+    # The legacy Umbra tables are inputs to the immutable launcher UI
+    # migration below. That migration renames and imports them before the
+    # later control-plane separation migration removes them from game-server
+    # databases.
+    "Data/sql/migrations/20260625_launcher_umbra_services.sql",
     "Data/sql/migrations/20260627_battlenpc_spawn_audit_pins.sql",
     "Data/sql/migrations/20260707_seed_level1_player_base_stats.sql",
     "db/direct-core/migrations/20260716_000001_launcher_ui_contract.sql",

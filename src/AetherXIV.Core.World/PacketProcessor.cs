@@ -37,7 +37,8 @@ namespace AetherXIV.Core.World
         }     
 
         public void ProcessPacket(ClientConnection client, BasePacket packet)
-        {                      
+        {
+            DevDiagnostics.TraceWireBasePacket("World", "client-to-world", packet);
             if (packet.header.isCompressed == 0x01)                       
                 BasePacket.DecompressPacket(ref packet);
             

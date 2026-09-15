@@ -24,8 +24,8 @@ public sealed record UmbraRuntimeOptions(
     bool DevBridgeInitiallyEnabled,
     int DevBridgePort,
     bool SafeMode,
-    IReadOnlyList<string> RepositoryUrls,
-    IReadOnlyList<UmbraRepositorySource> RepositorySources)
+    string SupportedRepositoryUrl = "",
+    string BundledRepositoryPath = "")
 {
     public const int DefaultDevBridgePort = 8797;
 
@@ -59,13 +59,8 @@ public sealed record UmbraRuntimeOptions(
             DefaultDevBridgePort);
 
         bool safeMode = IsTruthy(GetUmbraEnvironment("SAFE_MODE"));
-        IReadOnlyList<string> repositories = ParseRepositoryUrls(
-            GetUmbraEnvironment("REPOSITORY_URLS"));
-        IReadOnlyList<UmbraRepositorySource> repositorySources = UmbraRepositorySource.FromJson(
-            GetUmbraEnvironment("REPOSITORIES_JSON"));
-        if (repositorySources.Count == 0)
-            repositorySources = UmbraRepositorySource.FromUrls(repositories, UmbraRepositorySource.Custom);
-
+        string supportedRepositoryUrl = GetUmbraEnvironment("SUPPORTED_REPOSITORY");
+        string bundledRepositoryPath = GetUmbraEnvironment("BUNDLED_REPOSITORY");
         return new UmbraRuntimeOptions(
             Path.GetFullPath(logPath),
             Path.GetFullPath(pluginDirectory),
@@ -75,8 +70,8 @@ public sealed record UmbraRuntimeOptions(
             devBridgeInitiallyEnabled,
             devBridgePort,
             safeMode,
-            repositorySources.Select(source => source.Url).ToArray(),
-            repositorySources);
+            supportedRepositoryUrl,
+            bundledRepositoryPath);
     }
 
     private static string GetUmbraEnvironment(string suffix)
@@ -89,17 +84,6 @@ public sealed record UmbraRuntimeOptions(
         return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
             || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
             || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static IReadOnlyList<string> ParseRepositoryUrls(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return Array.Empty<string>();
-
-        return value
-            .Split([';', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
     }
 
     private static int ParsePort(string? value, int defaultValue)

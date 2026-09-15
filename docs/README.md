@@ -1,6 +1,9 @@
-# AetherXIV 2.0 Documentation
+# AetherXIV 2.1 Documentation
 
-AetherXIV 2.0 includes two desktop applications:
+Focused Core Map verification accompanies each release candidate; the supported
+scope and known limitations are recorded in the release notes.
+
+AetherXIV 2.1 includes two desktop applications:
 
 - **AetherXIV Core** configures the database and manages the Map, World, Lobby,
   and Launcher Services processes.
@@ -40,11 +43,14 @@ These guides are for contributors and release builders:
 - [Build on Linux](build/LINUX.md)
 - [Build on SteamOS](build/STEAMOS.md)
 - [Complete build and runtime dependency matrix](BUILD_AND_RUNTIME_DEPENDENCIES.md)
-- [Client research and gameplay restoration](development/CLIENT_REVERSE_ENGINEERING.md)
+
+Private research, captures, snapshots, and restoration working notes are
+maintained locally and deliberately excluded from release packages and the
+public source tree.
 
 ## Release information
 
-- [AetherXIV 2.0 release notes](AETHERXIV_2.0_RELEASE_NOTES.md)
+- [AetherXIV 2.1 release notes](AETHERXIV_2.1_RELEASE_NOTES.md)
 
 ## Supported platforms
 

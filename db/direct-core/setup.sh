@@ -133,6 +133,13 @@ migration_checksum_matches_file() {
   crlf="$(tr -d '\r' < "${path}" | sed $'s/$/\r/' | sha256_stdin)"
   [[ "${recorded}" == "${crlf}" ]]
 }
+is_accepted_historic_migration_checksum() {
+  # 000036 was briefly packaged with Limsa's area at id 16 before the
+  # immutable 000037 repair was added. Accept that exact, locally released
+  # checksum so those databases can advance in place; do not weaken checksum
+  # validation for any other migration or revision.
+  [[ "$1:$2" == "20260913_000036_limsa_mini_aetherytes_and_man0l1_escort.sql:239bc2af9020040049c86e3ac9797ac93d5a2c65048abaa8e3f2216051e67762" ]]
+}
 is_trusted_baseline_checksum() {
   local candidate="$1" hash rest
   while read -r hash rest; do
@@ -151,19 +158,25 @@ verify_database() {
   database_literal="$(literal "${DB_NAME}")"
   "${app[@]}" "${DB_NAME}" -e "SELECT 1" >/dev/null
   local required=(users sessions servers characters characters_appearance characters_quest_scenario
-    characters_quest_completed characters_hotbar server_sessions server_zones server_zones_privateareas
+    characters_quest_completed characters_hotbar characters_snpc gamedata_quests server_sessions server_zones server_zones_privateareas
     server_battlenpc_spawn_locations server_battlenpc_spawn_audit_pins server_battlenpc_groups
-    server_battlenpc_pools server_battle_commands
+    server_battlenpc_pools server_battle_commands server_battlenpc_skill_list
+    server_battlenpc_spell_list server_battlenpc_mob_skill_list
     server_player_base_stats characters_class_attributes server_spawn_locations gamedata_actor_class
     gamedata_actor_appearance server_items_modifiers characters_inventory characters_chocobo
     server_npc_spawn_evidence server_npc_spawn_evidence_catalog launcher_config aether_database_compatibility
-    launcher_config_plugin_catalogs launcher_status launcher_news launcher_patch_files launcher_presentation
-    launcher_reel_text launcher_runtime_artifacts launcher_umbra_framework_artifacts
-    launcher_umbra_plugin_repositories launcher_umbra_plugins launcher_umbra_plugin_blocks)
+    launcher_status launcher_news launcher_patch_files launcher_presentation
+    launcher_reel_text launcher_runtime_artifacts)
   for table in "${required[@]}"; do
     [[ "$("${app[@]}" -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${database_literal}' AND table_name='${table}'")" == 1 ]] || missing+=("${table}")
   done
   ((${#missing[@]} == 0)) || { echo "Database schema is incomplete: ${missing[*]}" >&2; return 21; }
+  local orphaned_private_area_spawns
+  orphaned_private_area_spawns="$("${app[@]}" -N -B "${DB_NAME}" -e "SELECT COUNT(*) FROM server_spawn_locations s LEFT JOIN server_zones_privateareas p ON p.parentZoneId=s.zoneId AND p.privateAreaName=s.privateAreaName AND p.privateAreaType=s.privateAreaLevel WHERE s.privateAreaName<>'' AND p.id IS NULL")"
+  [[ "${orphaned_private_area_spawns}" == 0 ]] || {
+    echo "Private-area spawn contract mismatch: ${orphaned_private_area_spawns} static actor spawn(s) target an undeclared area instance." >&2
+    return 33
+  }
   local obsolete_tables
   obsolete_tables="$("${app[@]}" -N -B "${DB_NAME}" -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('server_battlenpc_appearance_audit','server_battlenpc_restoration_evidence','client_decoded_display_name_stage','client_decoded_actor_graphic_stage','client_decoded_actor_class_stage','client_decode_import_batches')")"
   [[ "${obsolete_tables}" == 0 ]] || {
@@ -179,6 +192,12 @@ verify_database() {
   [[ "${zones}" != 0 && "${commands}" != 0 && "${stats}" != 0 && "${launcher_columns}" == 3 && "${class_job_columns}" == 1 ]] || {
     echo "Database seed/launcher verification failed: zones=${zones} commands=${commands} stats=${stats} launcherColumns=${launcher_columns} classJobColumns=${class_job_columns}" >&2
     return 22
+  }
+  local launcher_news_contract
+  launcher_news_contract="$("${app[@]}" -N -B "${DB_NAME}" -e "SELECT CONCAT((SELECT COUNT(*) FROM launcher_news WHERE title IN ('Echo Gate service installed','AetherXIV 2.0 local stack','AetherXIV 2.1 local stack')),':',(SELECT COUNT(*) FROM launcher_news WHERE title='AetherXIV 2.1 Update' AND summary='Update Complete' AND SHA2(body,256)='51cdaec9c643661e054e6bb47793f91a8c14720ef4ce2c02b616176ea61f012c' AND published_at='2026-09-15 01:28:39' AND is_active=1 AND sort_order=0 AND title_color='#8FC9FF' AND summary_color='#FFD37A' AND body_color='#D2A8FF' AND created_at='2026-09-14 20:37:20'))")"
+  [[ "${launcher_news_contract}" == "0:1" ]] || {
+    echo "Launcher news contract mismatch: ${launcher_news_contract:-missing}" >&2
+    return 34
   }
   local npc_service_contract
   npc_service_contract="$("${app[@]}" -N -B "${DB_NAME}" -e "SELECT CONCAT(COUNT(*),':',COALESCE(MAX(version),''),':',COALESCE(MAX(contentHashSha256),''),':',COALESCE(MAX(recordCount),0)) FROM server_npc_spawn_evidence_catalog WHERE catalogId='zone-service-npcs-1.23b'")"
@@ -204,18 +223,30 @@ verify_database() {
     echo "Gridania Man0g1 guild contract mismatch: ${gridania_man0g1_guild_contract:-missing}" >&2
     return 31
   }
+  local limsa_musketeers_echo_contract
+  limsa_musketeers_echo_contract="$("${app[@]}" -N -B "${DB_NAME}" -e "SELECT CONCAT((SELECT COUNT(*) FROM server_zones_privateareas WHERE id=17 AND parentZoneId=230 AND privateAreaName='PrivateAreaMasterPast' AND privateAreaType=3 AND dayMusic=40),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE id BETWEEN 1060 AND 1070 AND zoneId=230 AND privateAreaName='PrivateAreaMasterPast' AND privateAreaLevel=3))")"
+  [[ "${limsa_musketeers_echo_contract}" == "1:11" ]] || {
+    echo "Limsa Man0l1 Musketeers echo contract mismatch: ${limsa_musketeers_echo_contract:-missing}" >&2
+    return 33
+  }
+  local native_actor_slot_contract
+  native_actor_slot_contract="$("${app[@]}" -N -B "${DB_NAME}" -e "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='server_spawn_locations' AND column_name='nativeActorSlot'),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE zoneId=155 AND privateAreaName='' AND privateAreaLevel=0 AND nativeActorSlot IS NOT NULL),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE zoneId=206 AND privateAreaName='' AND privateAreaLevel=0 AND nativeActorSlot IS NOT NULL),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE zoneId=244 AND privateAreaName='' AND privateAreaLevel=0 AND nativeActorSlot IS NOT NULL),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE id=587 AND nativeActorSlot=8),':',(SELECT COUNT(*) FROM server_spawn_locations WHERE id IN (589,590) AND nativeActorSlot IN (53,54)),':',(SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='server_spawn_locations' AND index_name='uq_server_spawn_native_slot'))")"
+  [[ "${native_actor_slot_contract}" == "1:46:103:5:1:2:4" ]] || {
+    echo "Native actor-slot contract mismatch: ${native_actor_slot_contract:-missing}" >&2
+    return 32
+  }
   local contract
   contract="$("${app[@]}" -N -B "${DB_NAME}" -e "SELECT CONCAT(schema_generation,':',schema_version,':',compatibility_id,':',baseline_id) FROM aether_database_compatibility WHERE compatibility_key='direct-core' LIMIT 1")"
-  [[ "${contract}" == "2:1:aetherxiv-direct-core-v2:20260716_000001_ffxiv_server_v2_baseline" ]] || {
+  [[ "${contract}" == "2:2:aetherxiv-direct-core-v2:20260716_000001_ffxiv_server_v2_baseline" ]] || {
     echo "Database compatibility mismatch: ${contract:-missing}" >&2
     return 24
   }
-  echo "AetherXIV 2.0 database verified: ${DB_NAME} (zones=${zones} commands=${commands} baseStats=${stats})"
+  echo "AetherXIV 2.1 database verified: ${DB_NAME} (zones=${zones} commands=${commands} baseStats=${stats})"
 }
 
 has_current_v2_contract() {
   [[ "$("${admin[@]}" -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${db_literal}' AND table_name='aether_database_compatibility'")" == 1 ]] || return 1
-  [[ "$("${admin[@]}" -N -B "${DB_NAME}" -e "SELECT COUNT(*) FROM aether_database_compatibility WHERE compatibility_key='direct-core' AND schema_generation=2 AND schema_version=1 AND compatibility_id='aetherxiv-direct-core-v2' AND baseline_id='20260716_000001_ffxiv_server_v2_baseline'")" == 1 ]]
+  [[ "$("${admin[@]}" -N -B "${DB_NAME}" -e "SELECT COUNT(*) FROM aether_database_compatibility WHERE compatibility_key='direct-core' AND schema_generation=2 AND schema_version=2 AND compatibility_id='aetherxiv-direct-core-v2' AND baseline_id='20260716_000001_ffxiv_server_v2_baseline'")" == 1 ]]
 }
 
 if [[ "${MODE}" == check ]]; then verify_database; exit $?; fi
@@ -269,6 +300,9 @@ restore_original_database() {
 }
 
 BASELINE_IMPORTED=0
+PLAYER_DATA_TO_RESTORE=""
+PLAYER_USERS_BEFORE=0
+PLAYER_CHARACTERS_BEFORE=0
 clean_migrate_database() {
   [[ "${exists}" == 1 ]] || { echo "Clean migration requires an existing database." >&2; exit 2; }
   local user_table_count character_table_count
@@ -313,31 +347,12 @@ clean_migrate_database() {
   fi
 
   if ((can_restore_players == 1)); then
-    set +e
-    "${admin[@]}" "${DB_NAME}" < "${migration_data}"
-    local migration_status=$?
-    local users_after=0 characters_after=0
-    if ((migration_status == 0)); then
-      users_after="$("${admin[@]}" -N -B "${DB_NAME}" -e "SELECT COUNT(*) FROM users")"
-      characters_after="$("${admin[@]}" -N -B "${DB_NAME}" -e "SELECT COUNT(*) FROM characters")"
-      [[ "${users_before}" == "${users_after}" && "${characters_before}" == "${characters_after}" ]] || migration_status=27
-    fi
-    set -e
-    if ((migration_status == 0)); then
-      echo "Migrated ${users_after} accounts and ${characters_after} characters into the AetherXIV 2 baseline. Player-data copy: ${migration_data}"
-    else
-      echo "Player data was incompatible with the canonical schema; keeping the fresh database. The full backup and player-data copy are retained." >&2
-      set +e
-      "${admin[@]}" -e "DROP DATABASE IF EXISTS \`${db_id}\`; CREATE DATABASE \`${db_id}\` CHARACTER SET utf8 COLLATE utf8_general_ci" \
-        && "${admin[@]}" "${DB_NAME}" < "${BASELINE_FILE}"
-      local rebuild_status=$?
-      set -e
-      if ((rebuild_status != 0)); then
-        echo "Fresh database recovery failed; restoring the untouched full backup." >&2
-        restore_original_database
-        exit 27
-      fi
-    fi
+    # The dump can contain columns introduced by an ordered migration (for
+    # example characters.currentJob). Restore only after the canonical schema
+    # has been advanced, rather than importing player rows into the baseline.
+    PLAYER_DATA_TO_RESTORE="${migration_data}"
+    PLAYER_USERS_BEFORE="${users_before}"
+    PLAYER_CHARACTERS_BEFORE="${characters_before}"
   fi
   BASELINE_IMPORTED=1
   echo "Canonical AetherXIV 2 database installed. Full backup: ${LAST_BACKUP_PATH}"
@@ -433,7 +448,8 @@ apply_migrations() {
     checksum="$(sha256_file "${migration}")"
     recorded="$("${admin[@]}" -N -B "${DB_NAME}" -e "SELECT checksum_sha256 FROM aether_schema_migrations WHERE migration_name='${name}' LIMIT 1")"
     if [[ -n "${recorded}" ]]; then
-      if ! migration_checksum_matches_file "${recorded}" "${migration}"; then
+      if ! migration_checksum_matches_file "${recorded}" "${migration}" \
+        && ! is_accepted_historic_migration_checksum "${name}" "${recorded}"; then
         echo "Migration checksum mismatch: ${name}" >&2
         return 23
       fi
@@ -451,9 +467,36 @@ apply_migrations() {
   done
 }
 
+restore_deferred_player_data() {
+  [[ -n "${PLAYER_DATA_TO_RESTORE}" ]] || return 0
+  set +e
+  "${admin[@]}" "${DB_NAME}" < "${PLAYER_DATA_TO_RESTORE}"
+  local restore_status=$?
+  local users_after=0 characters_after=0
+  if ((restore_status == 0)); then
+    users_after="$("${admin[@]}" -N -B "${DB_NAME}" -e "SELECT COUNT(*) FROM users")"
+    characters_after="$("${admin[@]}" -N -B "${DB_NAME}" -e "SELECT COUNT(*) FROM characters")"
+    [[ "${PLAYER_USERS_BEFORE}" == "${users_after}" && "${PLAYER_CHARACTERS_BEFORE}" == "${characters_after}" ]] || restore_status=27
+  fi
+  set -e
+  if ((restore_status == 0)); then
+    echo "Migrated ${users_after} accounts and ${characters_after} characters into the migrated AetherXIV 2 schema. Player-data copy: ${PLAYER_DATA_TO_RESTORE}"
+    return 0
+  fi
+
+  echo "Player data was incompatible with the migrated canonical schema; rebuilding the fresh canonical database. The full backup and player-data copy are retained." >&2
+  "${admin[@]}" -e "DROP DATABASE IF EXISTS \`${db_id}\`; CREATE DATABASE \`${db_id}\` CHARACTER SET utf8 COLLATE utf8_general_ci"
+  "${admin[@]}" "${DB_NAME}" < "${BASELINE_FILE}"
+  apply_migrations
+  PLAYER_DATA_TO_RESTORE=""
+}
+
 BASELINE_CHECKSUM_NEEDS_PROMOTION=0
 migration_status=0
 apply_migrations || migration_status=$?
+if ((migration_status == 0)); then
+  restore_deferred_player_data || migration_status=$?
+fi
 if ((migration_status == 0)) && verify_database; then
   if ((BASELINE_CHECKSUM_NEEDS_PROMOTION == 1)); then
     current_baseline_checksum="$(sha256_file "${BASELINE_FILE}")"

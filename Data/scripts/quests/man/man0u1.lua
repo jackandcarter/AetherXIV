@@ -4,6 +4,8 @@ require("quest")
 MAN0U1_SEQ_INTRO = 0;
 MAN0U1_SEQ_CAMP = 5;
 MAN0U1_SEQ_RETURN = 10;
+MAN0U1_SEQ_GUILD_SCHOOLING = 12;
+MAN0U1_SEQ_GUILD_TASKS = 15;
 
 MAN0U1_FLAG_CAMP_ATTUNED = 0;
 
@@ -11,6 +13,14 @@ MAN0U1_MOMODI = 1000841;
 MAN0U1_MOMODI_DISPLAY_ID = 1500014;
 MAN0U1_MARKER_MOMODI = 11001001;
 MAN0U1_MARKER_CAMP_BLACK_BRUSH = 11001002;
+MAN0U1_ITEM_COLISEUM_PASS = 11000126;
+
+-- Shipped Man0u1.processEvent013 calls tellByNpcLinkshellChat with these
+-- Momodi rows. That client routine yields after each line; a server
+-- callClientFunction resumes on its first EventUpdate and tears the pearl
+-- down before the conversation can complete. Publish the recovered rows on
+-- the authoritative NPC-linkshell channel instead.
+MAN0U1_POST_ATTUNEMENT_NPCLS_ROWS = { 242, 243, 244, 245, 246 };
 
 function isObjectivesComplete(player, quest)
 	return false;
@@ -42,9 +52,12 @@ function onTalk(player, quest, npc)
 	elseif (sequence == MAN0U1_SEQ_CAMP) then
 		callClientFunction(player, "delegateEvent", player, quest, "processEvent010_2");
 	elseif (sequence == MAN0U1_SEQ_RETURN) then
-		-- The next historical beat starts here. Keep it replayable until the
-		-- remainder of Court in the Sands is implemented in this core.
 		callClientFunction(player, "delegateEvent", player, quest, "processEvent015");
+		quest:StartSequence(MAN0U1_SEQ_GUILD_SCHOOLING);
+	elseif (sequence == MAN0U1_SEQ_GUILD_SCHOOLING) then
+		callClientFunction(player, "delegateEvent", player, quest, "processEvent017");
+		player:SendGameMessage(GetWorldMaster(), 25117, MESSAGE_TYPE_GENERAL_INFO, MAN0U1_ITEM_COLISEUM_PASS);
+		quest:StartSequence(MAN0U1_SEQ_GUILD_TASKS);
 	end
 
 	player:EndEvent();
@@ -57,9 +70,10 @@ function onNpcLS(player, quest, from, msgStep)
 	end
 
 	if (quest:GetData():GetFlag(MAN0U1_FLAG_CAMP_ATTUNED)) then
-		-- Momodi's post-attunement guildleve call. The client quest function
-		-- supplies the authentic presentation and dialogue.
-		callClientFunction(player, "delegateEvent", player, quest, "processEvent013");
+		for _, textId in ipairs(MAN0U1_POST_ATTUNEMENT_NPCLS_ROWS) do
+			player:SendGameMessageLocalizedDisplayName(
+				quest, textId, MESSAGE_TYPE_NPC_LINKSHELL, MAN0U1_MOMODI_DISPLAY_ID);
+		end
 		quest:EndOfNpcLsMsgs();
 		quest:StartSequenceForNpcLs(MAN0U1_SEQ_RETURN);
 	else

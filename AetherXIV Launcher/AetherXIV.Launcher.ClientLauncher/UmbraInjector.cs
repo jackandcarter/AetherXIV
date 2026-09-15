@@ -102,12 +102,18 @@ internal static class UmbraInjector
         Environment.SetEnvironmentVariable("AETHER_UMBRA_LOG", options.LogPath);
         Environment.SetEnvironmentVariable("AETHER_UMBRA_SAFE_MODE", options.SafeMode ? "1" : "0");
         Environment.SetEnvironmentVariable("AETHER_UMBRA_LOAD_DELAY_MS", options.LoadDelayMilliseconds.ToString());
-        Environment.SetEnvironmentVariable("AETHER_UMBRA_REPOSITORY_URLS", string.Join(";", options.RepositoryUrls));
-        Environment.SetEnvironmentVariable("AETHER_UMBRA_REPOSITORIES_JSON", options.RepositoriesJson);
         if (options.EnableManagedOnWine)
             Environment.SetEnvironmentVariable("AETHER_UMBRA_ENABLE_MANAGED_ON_WINE", "1");
         else
             Environment.SetEnvironmentVariable("AETHER_UMBRA_ENABLE_MANAGED_ON_WINE", null);
+        if (!string.IsNullOrWhiteSpace(options.SupportedRepositoryUrl))
+            Environment.SetEnvironmentVariable("AETHER_UMBRA_SUPPORTED_REPOSITORY", options.SupportedRepositoryUrl);
+        else
+            Environment.SetEnvironmentVariable("AETHER_UMBRA_SUPPORTED_REPOSITORY", null);
+        if (!string.IsNullOrWhiteSpace(options.BundledRepositoryPath))
+            Environment.SetEnvironmentVariable("AETHER_UMBRA_BUNDLED_REPOSITORY", options.BundledRepositoryPath);
+        else
+            Environment.SetEnvironmentVariable("AETHER_UMBRA_BUNDLED_REPOSITORY", null);
     }
 
     private static string UmbraCacheDirectoryFor(string pluginDirectory)

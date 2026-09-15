@@ -1,0 +1,5 @@
+<Project Sdk="Aether.Umbra.Sdk/2.0.0">
+  <PropertyGroup>
+    <AssemblyName>Aether.Umbra.SamplePlugin</AssemblyName>
+  </PropertyGroup>
+</Project>

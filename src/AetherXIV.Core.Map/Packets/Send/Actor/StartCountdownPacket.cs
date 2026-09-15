@@ -12,21 +12,13 @@ namespace AetherXIV.Core.Map.packets.send.actor
 
         public static SubPacket BuildPacket(uint sourceActorId, byte countdownLength, ulong syncTime, string message)
         {
-            byte[] data = new byte[PACKET_SIZE - 0x20];
-
-            using (MemoryStream mem = new MemoryStream(data))
-            {
-                using (BinaryWriter binWriter = new BinaryWriter(mem))
-                {
-                    binWriter.Write((Byte)countdownLength);
-                    binWriter.Seek(8, SeekOrigin.Begin);
-                    binWriter.Write((UInt64)syncTime);
-                    binWriter.Seek(18, SeekOrigin.Begin);
-                    binWriter.Write(Encoding.ASCII.GetBytes(message), 0, Encoding.ASCII.GetByteCount(message) >= 0x20 ? 0x20 : Encoding.ASCII.GetByteCount(message));
-                }
-            }
-
-            return new SubPacket(OPCODE, sourceActorId, data);
+            return ProtocolPacketAdapter.Encode(
+                new AetherXIV.Protocol.StartCountdownPacketCodec(),
+                sourceActorId,
+                new AetherXIV.Protocol.StartCountdownPacket(
+                    countdownLength,
+                    syncTime,
+                    message));
         }
     }
 }

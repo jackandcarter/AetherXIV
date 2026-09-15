@@ -20,9 +20,6 @@ INSERT INTO `launcher_config` (`config_key`, `config_value`) VALUES
   ('account_create_url', 'create-account'),
   ('client_login_url', '../login/index.php'),
   ('runtime_catalog_url', 'runtime-catalog'),
-  ('client_plugin_framework_catalog_url', 'umbra/framework-catalog'),
-  ('plugin_catalog_urls', ''),
-  ('plugin_blocklist_url', 'umbra/plugin-blocklist'),
   ('target_boot_version', '2010.09.18.0000'),
   ('target_game_version', '2012.09.19.0001');
 
@@ -41,8 +38,11 @@ CREATE TABLE `launcher_news` (
   KEY `idx_launcher_news_published` (`is_published`, `published_at`, `sort_order`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
-INSERT INTO `launcher_news` (`title`, `summary`, `body`, `published_at`, `sort_order`) VALUES
-  ('Echo Gate service installed', 'Launcher news is now served from the AetherXIV database.', 'Use launcher_news rows to publish updates for testers.', UTC_TIMESTAMP(), 0);
+INSERT INTO `launcher_news` (`title`, `summary`, `body`, `published_at`, `is_published`, `sort_order`) VALUES
+  ('AetherXIV 2.1 Update',
+   'Update Complete',
+   'This update includes many new changes, quality of life updates, and gameplay restorations.\n\nSome of the new updates include:\n\n- Restored ambient zone enemies in the shroud and other areas.\n\n- Quest Progression restoration in Limsa, Uldah, and Gridania.\n\n- Auto attack and spell casting restorations.\n\n- Equipment changes and Class changing recalculations.\n\n- Crafting system restorations.\n\nFor more detailed info on these changes check out the release notes in Discord, or on Github.',
+   '2026-09-15 01:28:39', 1, 0);
 
 DROP TABLE IF EXISTS `launcher_patch_files`;
 CREATE TABLE `launcher_patch_files` (
@@ -134,87 +134,4 @@ CREATE TABLE `launcher_runtime_artifacts` (
   `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   KEY `idx_launcher_runtime_artifacts_platform` (`platform_rid`, `is_active`, `is_default`, `sort_order`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-DROP TABLE IF EXISTS `launcher_umbra_framework_artifacts`;
-CREATE TABLE `launcher_umbra_framework_artifacts` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `name` varchar(120) NOT NULL,
-  `version` varchar(64) NOT NULL,
-  `api_version` varchar(32) NOT NULL DEFAULT '1.0',
-  `platform_rid` varchar(32) NOT NULL DEFAULT 'win-x86',
-  `archive_url` varchar(500) NOT NULL,
-  `archive_format` varchar(16) NOT NULL DEFAULT 'zip',
-  `size_bytes` bigint(20) NOT NULL,
-  `sha256` char(64) NOT NULL,
-  `bootstrap_relative_path` varchar(255) NOT NULL DEFAULT 'Aether.Umbra.Bootstrap.x86.dll',
-  `framework_relative_path` varchar(255) NOT NULL DEFAULT 'Managed/Aether.Umbra.Framework.dll',
-  `supported_game_sha256` text NULL,
-  `is_default` tinyint(1) NOT NULL DEFAULT 0,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_launcher_umbra_framework_platform` (`platform_rid`, `is_active`, `is_default`, `sort_order`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-DROP TABLE IF EXISTS `launcher_umbra_plugin_repositories`;
-CREATE TABLE `launcher_umbra_plugin_repositories` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `repository_key` varchar(64) NOT NULL,
-  `name` varchar(120) NOT NULL,
-  `description` varchar(500) NULL,
-  `repository_url` varchar(500) NOT NULL,
-  `repository_kind` varchar(32) NOT NULL DEFAULT 'supported',
-  `is_supported` tinyint(1) NOT NULL DEFAULT 1,
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `last_error` varchar(1000) NULL,
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_launcher_umbra_plugin_repositories_key` (`repository_key`),
-  UNIQUE KEY `uq_launcher_umbra_plugin_repositories_url` (`repository_url`),
-  KEY `idx_launcher_umbra_plugin_repositories_active` (`is_supported`, `is_active`, `sort_order`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-DROP TABLE IF EXISTS `launcher_umbra_plugin_releases`;
-CREATE TABLE `launcher_umbra_plugin_releases` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `repository_id` int(11) unsigned NOT NULL,
-  `plugin_key` varchar(120) NOT NULL,
-  `name` varchar(160) NOT NULL,
-  `version` varchar(64) NOT NULL,
-  `api_version` varchar(32) NOT NULL DEFAULT '1.0',
-  `author` varchar(160) NOT NULL DEFAULT '',
-  `description` varchar(1000) NOT NULL DEFAULT '',
-  `download_url` varchar(500) NOT NULL,
-  `size_bytes` bigint(20) NOT NULL,
-  `sha256` char(64) NOT NULL,
-  `minimum_framework_version` varchar(64) NOT NULL DEFAULT '0.1.0',
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `sort_order` int(11) NOT NULL DEFAULT 0,
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_launcher_umbra_plugin_releases_version` (`repository_id`, `plugin_key`, `version`),
-  KEY `idx_launcher_umbra_plugin_releases_active` (`repository_id`, `is_active`, `sort_order`),
-  CONSTRAINT `fk_launcher_umbra_plugin_releases_repository`
-    FOREIGN KEY (`repository_id`) REFERENCES `launcher_umbra_plugin_repositories` (`id`)
-    ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
-DROP TABLE IF EXISTS `launcher_umbra_plugin_blocks`;
-CREATE TABLE `launcher_umbra_plugin_blocks` (
-  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-  `plugin_key` varchar(120) NOT NULL,
-  `repository_url` varchar(500) NULL,
-  `version` varchar(64) NULL,
-  `reason` varchar(1000) NOT NULL DEFAULT '',
-  `is_active` tinyint(1) NOT NULL DEFAULT 1,
-  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  PRIMARY KEY (`id`),
-  KEY `idx_launcher_umbra_plugin_blocks_active` (`is_active`, `plugin_key`, `version`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;

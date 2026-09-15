@@ -23,12 +23,16 @@ namespace AetherXIV.Core.World
         static int Main(string[] args)
         {
             Environment.CurrentDirectory = AppContext.BaseDirectory;
+            AetherXivRuntimePaths.ConfigureLogDirectory("world");
             // set up logging
             Log = LogManager.GetCurrentClassLogger();
 
             Log.Info("==================================");
             Log.Info("AetherXIV Core v2.0: World Server");
-            Log.Info("Version: 2.0 (build 21991)");
+            Log.Info(
+                "Version: {0} (build {1})",
+                global::AetherXIV.Core.AetherXivBuildInfo.ProductVersion,
+                global::AetherXIV.Core.AetherXivBuildInfo.BuildNumber);
             Log.Info("==================================");
 
 #if DEBUG

@@ -15,14 +15,18 @@
 
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Security.Cryptography;
 
 namespace Aether.Umbra.Framework;
 
 public sealed record UmbraDevBridgeControl(
     [property: JsonPropertyName("enabled")] bool Enabled,
     [property: JsonPropertyName("port")] int Port,
-    [property: JsonPropertyName("updated_at")] DateTimeOffset UpdatedAt)
+    [property: JsonPropertyName("updated_at")] DateTimeOffset UpdatedAt,
+    [property: JsonPropertyName("token")] string? Token = null)
 {
+    public const int TokenBytes = 32;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -32,9 +36,32 @@ public sealed record UmbraDevBridgeControl(
     public static UmbraDevBridgeControl Ensure(string path, bool enabled, int port)
     {
         if (TryRead(path) is { } existing)
-            return existing;
+        {
+            if (IsValidToken(existing.Token))
+                return existing;
 
-        UmbraDevBridgeControl control = new(enabled, port, DateTimeOffset.UtcNow);
+            UmbraDevBridgeControl repaired = existing with
+            {
+                Token = CreateToken(),
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+            Write(path, repaired);
+            return repaired;
+        }
+
+        UmbraDevBridgeControl control = new(enabled, port, DateTimeOffset.UtcNow, CreateToken());
+        Write(path, control);
+        return control;
+    }
+
+    public static UmbraDevBridgeControl BeginSession(string path, bool enabled, int port)
+    {
+        UmbraDevBridgeControl? existing = TryRead(path);
+        UmbraDevBridgeControl control = new(
+            existing?.Enabled ?? enabled,
+            existing?.Port ?? port,
+            DateTimeOffset.UtcNow,
+            CreateToken());
         Write(path, control);
         return control;
     }
@@ -68,5 +95,16 @@ public sealed record UmbraDevBridgeControl(
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".");
         File.WriteAllText(path, JsonSerializer.Serialize(control, JsonOptions));
+    }
+
+    internal static bool IsValidToken(string? token)
+    {
+        return token is { Length: TokenBytes * 2 }
+            && token.All(Uri.IsHexDigit);
+    }
+
+    private static string CreateToken()
+    {
+        return Convert.ToHexString(RandomNumberGenerator.GetBytes(TokenBytes)).ToLowerInvariant();
     }
 }

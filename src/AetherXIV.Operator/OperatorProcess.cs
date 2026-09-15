@@ -120,6 +120,11 @@ public sealed class AetherXivServiceProcess : IDisposable
         startInfo.Environment["AETHERXIV_DEV_LOG_SERVER"] = config.DevLogging.ServerTrace ? "1" : "0";
         startInfo.Environment["AETHERXIV_TRACE_RUN_ID"] = traceRunId;
         startInfo.Environment["AETHERXIV_DEV_DIAGNOSTICS"] = config.TraceEnabled ? "1" : "0";
+        startInfo.Environment["AETHERXIV_WIRE_DIAGNOSTICS"] = config.TraceEnabled
+            && config.DevLogging.Enabled
+            && config.DevLogging.NetworkTrace
+            ? "1"
+            : "0";
         startInfo.Environment["AETHERXIV_DEV_DIAGNOSTICS_DIR"] = Path.Combine(
             config.DiagnosticsDirectory,
             traceRunId);
