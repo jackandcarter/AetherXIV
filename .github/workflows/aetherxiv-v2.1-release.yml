@@ -309,7 +309,8 @@ jobs:
           test -f "${framework}/Runtime/dotnet.exe"
           export DYLD_FALLBACK_LIBRARY_PATH="$(pwd)/${runtime_root}/lib/wine/x86_64-unix"
           "${wine}" --version | grep -Fq 'wine-11.0'
-          codesign --verify --deep --strict "bin/build/Release/MacOS/AetherXIV Launcher.app"
+          codesign --verify --strict "bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/AetherXIV.Launcher.App"
+          codesign --verify --strict "${wine}"
 
       - name: Package macOS full, Core, and Launcher downloads
         run: |
