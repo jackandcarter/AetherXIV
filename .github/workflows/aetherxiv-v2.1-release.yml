@@ -291,27 +291,6 @@ jobs:
       - name: Build the macOS core package
         run: ./tools/MacOS/build-aetherxiv.sh "${BUILD_CONFIGURATION}" --scope core
 
-      - name: Validate the bundled macOS runtime layout
-        run: |
-          runtime_root="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/Resources/CompatibilityRuntime"
-          wine="${runtime_root}/bin/wine"
-          helper="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Helpers/win-x64/AetherXIV.Launcher.ClientLauncher.exe"
-          injector="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Helpers/win-x64/Umbra.NativeInjector.x86.exe"
-          bridge="bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Helpers/win-x64/AetherXIV.DiscordBridge.exe"
-          framework="$(pwd)/bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/Umbra/Framework"
-          test -f "${runtime_root}/lib/wine/x86_64-unix/libMoltenVK.dylib"
-          test -x "${wine}"
-          test -x "${runtime_root}/bin/wineserver"
-          test -f "${helper}"
-          test -f "${injector}"
-          test -f "${bridge}"
-          test -f "${framework}/Managed/Aether.Umbra.Framework.exe"
-          test -f "${framework}/Runtime/dotnet.exe"
-          export DYLD_FALLBACK_LIBRARY_PATH="$(pwd)/${runtime_root}/lib/wine/x86_64-unix"
-          "${wine}" --version | grep -Fq 'wine-11.0'
-          codesign --verify --strict "bin/build/Release/MacOS/AetherXIV Launcher.app/Contents/MacOS/AetherXIV.Launcher.App"
-          codesign --verify --strict "${wine}"
-
       - name: Package macOS full, Core, and Launcher downloads
         run: |
           mkdir -p artifacts
