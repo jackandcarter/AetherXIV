@@ -5,6 +5,8 @@ a user-owned Final Fantasy XIV 1.23b client. The 2.1 release candidate combines
 the Lobby, World, Map, and Launcher Services hosts; AetherXIV Core; AetherXIV
 Launcher; Direct Core database tooling; and Umbra in one workspace.
 
+The Main branch has the latest stable release, while 2.0 is archival, and 2.1 is work currently in development.
+
 ## Supported targets
 
 - macOS 14 or later on Apple silicon
