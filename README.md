@@ -5,9 +5,9 @@ a user-owned Final Fantasy XIV 1.23b client. The 2.1 release candidate combines
 the Lobby, World, Map, and Launcher Services hosts; AetherXIV Core; AetherXIV
 Launcher; Direct Core database tooling; and Umbra in one workspace.
 
-Main branch: Current Stable Release
-2.0 branch: Archival
-2.1 branch: Current Development
+- Main branch: Current Stable Release
+- 2.0 branch: Archival
+- 2.1 branch: Current Development
 
 ## Supported targets
 
