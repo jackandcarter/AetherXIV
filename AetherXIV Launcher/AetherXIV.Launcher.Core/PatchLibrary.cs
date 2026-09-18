@@ -155,7 +155,8 @@ public static class LegacyPatchManifest
 
     public static PatchLibraryReport InspectLibrary(
         string rootPath,
-        PatchLibraryInspectionMode inspectionMode = PatchLibraryInspectionMode.Size)
+        PatchLibraryInspectionMode inspectionMode = PatchLibraryInspectionMode.Size,
+        CancellationToken cancellationToken = default)
     {
         string normalizedRoot = string.IsNullOrWhiteSpace(rootPath)
             ? ""
@@ -172,13 +173,14 @@ public static class LegacyPatchManifest
 
         foreach (PatchEntry entry in Entries)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             string patchPath = ResolveEntryPath(patchLayout, entry, metainfo: false);
             string metainfoPath = ResolveEntryPath(metainfoLayout, entry, metainfo: true);
             bool patchExists = !string.IsNullOrWhiteSpace(patchPath) && File.Exists(patchPath);
             bool metainfoExists = !string.IsNullOrWhiteSpace(metainfoPath) && File.Exists(metainfoPath);
             long? actualSize = patchExists ? new FileInfo(patchPath).Length : null;
             uint? actualCrc32 = patchExists && inspectionMode >= PatchLibraryInspectionMode.Checksum
-                ? Crc32.ComputeFile(patchPath)
+                ? Crc32.ComputeFile(patchPath, cancellationToken)
                 : null;
 
             PatchFileReport fileReport = new(
@@ -369,13 +371,13 @@ public static class Crc32
         return Compute(stream);
     }
 
-    public static uint ComputeFile(string path)
+    public static uint ComputeFile(string path, CancellationToken cancellationToken = default)
     {
         using FileStream stream = File.OpenRead(path);
-        return Compute(stream);
+        return Compute(stream, cancellationToken);
     }
 
-    public static uint Compute(Stream stream)
+    public static uint Compute(Stream stream, CancellationToken cancellationToken = default)
     {
         uint crc = 0xFFFFFFFFu;
         byte[] buffer = new byte[64 * 1024];
@@ -383,13 +385,18 @@ public static class Crc32
         int bytesRead;
         while ((bytesRead = stream.Read(buffer, 0, buffer.Length)) > 0)
         {
-            for (int i = 0; i < bytesRead; i++)
-            {
-                crc = Table[(crc ^ buffer[i]) & 0xFF] ^ (crc >> 8);
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            crc = Update(crc, buffer.AsSpan(0, bytesRead));
         }
 
         return ~crc;
+    }
+
+    internal static uint Update(uint crc, ReadOnlySpan<byte> data)
+    {
+        foreach (byte value in data)
+            crc = Table[(crc ^ value) & 0xFF] ^ (crc >> 8);
+        return crc;
     }
 
     private static uint[] CreateTable()

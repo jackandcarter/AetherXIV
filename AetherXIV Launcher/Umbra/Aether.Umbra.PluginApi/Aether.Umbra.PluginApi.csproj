@@ -4,8 +4,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <PackageVersion>2.1.0</PackageVersion>
     <PackageId>Aether.Umbra.PluginApi</PackageId>
-    <Description>Public API contracts for Aether Umbra 2.0 plugins.</Description>
+    <Description>Public API contracts for Aether Umbra 2.1 plugins.</Description>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/jackandcarter/AetherXIV</RepositoryUrl>
     <PackageTags>aetherxiv;umbra;plugin;api</PackageTags>

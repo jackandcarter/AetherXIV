@@ -42,7 +42,7 @@ public static class AetherXivDatabaseCompatibility
     public const string CompatibilityId = "aetherxiv-direct-core-v2";
     public const string BaselineId = "20260716_000001_ffxiv_server_v2_baseline";
     public const string GuildleveContentMigration = "20260716_000005_guildleve_content_contract.sql";
-    public const string LatestDirectCoreMigration = "20260914_000039_restore_launcher_news_post.sql";
+    public const string LatestDirectCoreMigration = "20260916_000040_gridania_qzamqo_restoration.sql";
     public static readonly IReadOnlyList<string> RequiredDirectCoreMigrations =
     [
         "20260627_battlenpc_spawn_audit_pins.sql",
@@ -85,7 +85,8 @@ public static class AetherXivDatabaseCompatibility
         "20260913_000036_limsa_mini_aetherytes_and_man0l1_escort.sql",
         "20260914_000037_repair_limsa_private_area_identity.sql",
         "20260914_000038_limsa_man0l1_musketeers_echo.sql",
-        "20260914_000039_restore_launcher_news_post.sql"
+        "20260914_000039_restore_launcher_news_post.sql",
+        "20260916_000040_gridania_qzamqo_restoration.sql"
     ];
     public const string NpcServiceCatalogId = "zone-service-npcs-1.23b";
     public const string NpcServiceCatalogVersion = "2026.07.19.1";
@@ -295,6 +296,7 @@ LIMIT 1;
                 return;
             }
             expectedMigrations[migrationName] = CalculateLineEndingChecksums(File.ReadAllBytes(migrationPath));
+            AddReviewedHistoricalChecksums(databasePackage, migrationName, expectedMigrations[migrationName]);
         }
 
         Dictionary<string, string> recordedMigrations = new(StringComparer.Ordinal);
@@ -975,6 +977,23 @@ FROM (
         command.CommandText = sql;
         object? result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return result is null or DBNull ? null : Convert.ToString(result);
+    }
+
+    public static void AddReviewedHistoricalChecksums(string package, string migrationName, HashSet<string> checksums)
+    {
+        string history = Path.Combine(package, "migration-history.sha256");
+        if (!File.Exists(history)) return; // Older packages retain strict verification.
+        // Snapshot canonical hashes: history entries cannot transitively authorize one another.
+        HashSet<string> canonical = new(checksums, StringComparer.OrdinalIgnoreCase);
+        foreach (string line in File.ReadLines(history))
+        {
+            if (String.IsNullOrWhiteSpace(line) || line.TrimStart().StartsWith('#')) continue;
+            string[] fields = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            if (fields.Length != 3 || fields.Skip(1).Any(hash => hash.Length != 64 || !hash.All(Uri.IsHexDigit)))
+                throw new InvalidDataException("Invalid reviewed migration checksum history.");
+            if (fields[0] == migrationName && canonical.Contains(fields[2]))
+                checksums.Add(fields[1].ToLowerInvariant());
+        }
     }
 
     private static HashSet<string> CalculateLineEndingChecksums(byte[] raw)

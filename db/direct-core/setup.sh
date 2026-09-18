@@ -134,11 +134,16 @@ migration_checksum_matches_file() {
   [[ "${recorded}" == "${crlf}" ]]
 }
 is_accepted_historic_migration_checksum() {
-  # 000036 was briefly packaged with Limsa's area at id 16 before the
-  # immutable 000037 repair was added. Accept that exact, locally released
-  # checksum so those databases can advance in place; do not weaken checksum
-  # validation for any other migration or revision.
-  [[ "$1:$2" == "20260913_000036_limsa_mini_aetherytes_and_man0l1_escort.sql:239bc2af9020040049c86e3ac9797ac93d5a2c65048abaa8e3f2216051e67762" ]]
+  local name old current extra
+  [[ -f "${SCRIPT_DIR}/migration-history.sha256" ]] || return 1
+  while read -r name old current extra; do
+    [[ -n "${name}" && "${name}" != \#* ]] || continue
+    if [[ "${name}" == "$1" && "${old}" == "$2" && -z "${extra}" ]] &&
+        migration_checksum_matches_file "${current}" "${MIGRATIONS_DIR}/${name}"; then
+      return 0
+    fi
+  done < "${SCRIPT_DIR}/migration-history.sha256"
+  return 1
 }
 is_trusted_baseline_checksum() {
   local candidate="$1" hash rest

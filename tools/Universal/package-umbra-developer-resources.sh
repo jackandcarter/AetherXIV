@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DOTNET_BIN="${DOTNET_BIN:-/usr/local/share/dotnet/dotnet}"
-SDK_VERSION="${1:-2.0.0}"
+SDK_VERSION="${1:-2.1.0}"
 SAMPLE_VERSION="${2:-2.0.0}"
 OUTPUT_DIR="${3:-${ROOT_DIR}/artifacts/umbra}"
 UMBRA_ROOT="${ROOT_DIR}/AetherXIV Launcher/Umbra"

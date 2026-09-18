@@ -123,6 +123,13 @@ public sealed record UmbraRepositorySource(
         if (!Uri.TryCreate(Url, UriKind.Absolute, out Uri? uri))
             throw new InvalidDataException($"Invalid Umbra repository URL: {Url}");
 
+        if (uri.Scheme == Uri.UriSchemeHttps && (uri.Host == "github.com" || uri.Host == "www.github.com"))
+        {
+            string[] parts = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 5 && parts[2] == "blob")
+                return new Uri("https://raw.githubusercontent.com/" + string.Join("/", parts.Where((_, index) => index != 2)));
+        }
+
         if (!IsGitHubRepositoryUri(uri, out string? owner, out string? repository))
             return uri;
 

@@ -40,7 +40,7 @@ else {
     }
 }
 $launcherRoot = Join-Path $rootDir "AetherXIV Launcher"
-$umbraVersion = if ($env:AETHERXIV_UMBRA_VERSION) { $env:AETHERXIV_UMBRA_VERSION } else { "2.0.0" }
+$umbraVersion = if ($env:AETHERXIV_UMBRA_VERSION) { $env:AETHERXIV_UMBRA_VERSION } else { "2.1.0" }
 $releaseWorkRoot = Join-Path $rootDir "bin\build\.work\$Configuration\Windows"
 $env:AetherXivWorkRoot = $releaseWorkRoot
 

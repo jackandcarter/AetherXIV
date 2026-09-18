@@ -389,6 +389,8 @@ namespace AetherXIV.Core.Map.Actors
             charaWork.parameterTemp.tp = 0;
 
             Database.LoadPlayerCharacter(this);
+            if (equipment.GetItemAtSlot(SLOT_MAINHAND) != null)
+                RefreshEquipmentAppearance(false);
             lastPlayTimeUpdate = Utils.UnixTimeStampUTC();
 
             this.aiContainer = new AIContainer(this, new PlayerController(this), null, new TargetFind(this));
@@ -1525,7 +1527,7 @@ namespace AetherXIV.Core.Map.Actors
             
         }
 
-        public void GraphicChange(int slot, InventoryItem invItem)
+        public void GraphicChange(int slot, InventoryItem invItem, bool publish = true)
         {
             if (invItem == null)
                 appearanceIds[slot] = 0;
@@ -1575,8 +1577,48 @@ namespace AetherXIV.Core.Map.Actors
                 }
             }
 
-            Database.SavePlayerAppearance(this);
-            BroadcastPacket(CreateAppearancePacket(), true);
+            if (publish)
+            {
+                Database.SavePlayerAppearance(this);
+                BroadcastPacket(CreateAppearancePacket(), true);
+            }
+        }
+
+        private void RefreshEquipmentAppearance(bool publish = true)
+        {
+            // Reuse the existing packing/paired-weapon path, publishing once.
+            for (int graphic = 5; graphic <= 26; graphic++) appearanceIds[graphic] = 0;
+            GraphicChange(5, equipment.GetItemAtSlot(SLOT_MAINHAND), false);
+            int[,] mapping = { {4,9},{5,10},{6,11},{8,12},{10,13},{12,14},
+                {13,15},{14,16},{15,17},{16,18},{17,R_EAR},{18,L_EAR},{19,21},{20,22},
+                {21,23},{22,24},{23,25},{24,26} };
+            for (int i = 0; i < mapping.GetLength(0); i++)
+                GraphicChange(mapping[i,1], equipment.GetItemAtSlot((ushort)mapping[i,0]), false);
+            if (equipment.GetItemAtSlot(SLOT_BODY) == null)
+                GraphicChange(13, equipment.GetItemAtSlot(SLOT_UNDERSHIRT), false);
+            if (equipment.GetItemAtSlot(SLOT_LEGS) == null)
+                GraphicChange(14, equipment.GetItemAtSlot(SLOT_UNDERGARMENT), false);
+            if (equipment.GetItemAtSlot(SLOT_HANDS) == null) GraphicChange(15, 0, 1, 0, 0);
+            if (equipment.GetItemAtSlot(SLOT_BOOTS) == null) GraphicChange(16, 0, 1, 0, 0);
+            ItemData main = equipment.GetItemAtSlot(SLOT_MAINHAND)?.itemData;
+            if (main != null)
+            {
+                if (main.IsCarpenterWeapon()) { GraphicChange(7,898,4,0,0); GraphicChange(8,898,4,0,0); }
+                else if (main.IsBlackSmithWeapon()) { GraphicChange(7,899,1,0,0); GraphicChange(8,899,1,0,0); }
+                else if (main.IsArmorerWeapon()) { GraphicChange(7,899,2,0,0); GraphicChange(8,899,2,0,0); }
+                else if (main.IsGoldSmithWeapon()) { GraphicChange(6,729,1,0,0); GraphicChange(7,898,1,0,0); }
+                else if (main.IsTannerWeapon()) { GraphicChange(7,898,3,0,0); GraphicChange(8,898,3,0,0); }
+                else if (main.IsAlchemistWeapon()) GraphicChange(7,900,1,0,0);
+                else if (main.IsCulinarianWeapon()) { GraphicChange(7,900,2,0,0); GraphicChange(8,898,2,0,0); }
+            }
+            InventoryItem offhand = equipment.GetItemAtSlot(SLOT_OFFHAND);
+            if (offhand != null)
+                GraphicChange(offhand.itemData.IsWeaverWeapon() || offhand.itemData.IsGoldSmithWeapon() ? 8 : 6, offhand, false);
+            if (publish)
+            {
+                Database.SavePlayerAppearance(this);
+                BroadcastPacket(CreateAppearancePacket(), true);
+            }
         }
 
         public void SendAppearance()
@@ -1715,7 +1757,7 @@ namespace AetherXIV.Core.Map.Actors
             SendCharaExpInfo();
         }
 
-        public void DoClassChange(byte classId)
+        public void DoClassChange(byte classId, bool equipmentCommitted = false)
         {
             //load hotbars
             //Calculate stats
@@ -1744,13 +1786,17 @@ namespace AetherXIV.Core.Map.Actors
             DoBattleAction(0, 0x7c000062, resultContainer.GetList());
 
             if (currentJob != 0 && ConvertJobIdToClassId((byte)currentJob) != classId)
-                SetCurrentJob(0);
-
-            //If new class, init abilties and level
-            if (charaWork.battleSave.skillLevel[classId - 1] <= 0)
             {
-                UpdateClassLevel(classId, 1);
-                EquipAbilitiesAtLevel(classId, 1);
+                currentJob = 0;
+                BroadcastPacket(SetCurrentJobPacket.BuildPacket(actorId, 0), true);
+                if (!equipmentCommitted) Database.SavePlayerCurrentJob(this);
+            }
+
+            bool firstClassUse = charaWork.battleSave.skillLevel[classId - 1] <= 0;
+            if (firstClassUse)
+            {
+                if (equipmentCommitted) charaWork.battleSave.skillLevel[classId - 1] = 1;
+                else UpdateClassLevel(classId, 1);
             }
 
             //Set rested EXP
@@ -1764,9 +1810,8 @@ namespace AetherXIV.Core.Map.Actors
             }
 
             //If new class, init abilties and level
-            if (charaWork.battleSave.skillLevel[classId - 1] <= 0)
+            if (firstClassUse)
             {
-                UpdateClassLevel(classId, 1);
                 EquipAbilitiesAtLevel(classId, 1);
             }
 
@@ -1774,6 +1819,7 @@ namespace AetherXIV.Core.Map.Actors
 
             propertyBuilder.AddProperty("charaWork.parameterSave.state_mainSkill[0]");
             propertyBuilder.AddProperty("charaWork.parameterSave.state_mainSkillLevel");
+            propertyBuilder.AddProperty(String.Format("charaWork.battleSave.skillLevel[{0}]", classId - 1));
             propertyBuilder.NewTarget("playerWork/expBonus");
             propertyBuilder.AddProperty("playerWork.restBonusExpRate");
             propertyBuilder.NewTarget("charaWork/battleStateForSelf");
@@ -1796,8 +1842,11 @@ namespace AetherXIV.Core.Map.Actors
             foreach (SubPacket packet in packets)
                 BroadcastPacket(packet, true);
 
-            Database.SavePlayerCurrentClass(this);
-            RecalculateStats();
+            if (!equipmentCommitted)
+            {
+                Database.SavePlayerCurrentClass(this);
+                RecalculateStats("class-change");
+            }
         }
 
         public void UpdateClassLevel(byte classId, short level)
@@ -2060,6 +2109,134 @@ namespace AetherXIV.Core.Map.Actors
             return equipment;
         }
 
+        public bool TryChangeEquipment(InventoryItem item, int requestedEquipPoint)
+        {
+            var timer = DevDiagnostics.Enabled ? System.Diagnostics.Stopwatch.StartNew() : null;
+            string requestId = DevDiagnostics.Enabled ? Guid.NewGuid().ToString("N") : null;
+            short previousClass = GetClass();
+            int previousJob = currentJob;
+            bool success = false;
+            string outcome = "exception";
+            DevDiagnostics.Trace("inventory.equipment.begin", "requestId", requestId,
+                "actor", actorId, "equipPoint", requestedEquipPoint,
+                "itemId", item?.itemId, "uniqueId", item?.uniqueId,
+                "classId", previousClass, "jobId", previousJob);
+            try
+            {
+                success = TryChangeEquipmentCore(item, requestedEquipPoint, requestId, out outcome);
+                return success;
+            }
+            catch (Exception exception)
+            {
+                outcome = "exception:" + exception.GetType().Name + ":" + outcome;
+                throw;
+            }
+            finally
+            {
+                DevDiagnostics.Trace("inventory.equipment.end", "requestId", requestId,
+                    "actor", actorId, "success", success, "outcome", success ? "applied" : outcome,
+                    "previousClass", previousClass, "classId", GetClass(),
+                    "previousJob", previousJob, "jobId", currentJob,
+                    "elapsedMs", timer?.Elapsed.TotalMilliseconds);
+            }
+        }
+
+        private bool TryChangeEquipmentCore(InventoryItem item, int requestedEquipPoint,
+            string requestId, out string outcome)
+        {
+            outcome = "invalid-equip-point";
+            if (!IsValidEquipmentPoint(requestedEquipPoint) || requestedEquipPoint > 27) return false;
+            int slot = requestedEquipPoint - 1;
+            outcome = "required-slot";
+            if (item == null && (slot == SLOT_MAINHAND || slot == SLOT_UNDERSHIRT || slot == SLOT_UNDERGARMENT))
+                return false;
+
+            byte targetClass = charaWork.parameterSave.state_mainSkill[0];
+            if (item != null && slot == SLOT_MAINHAND)
+            {
+                targetClass = EquipmentRequestPolicy.WeaponClass(item.itemId);
+                outcome = "unsupported-weapon-class";
+                if (targetClass == 0) return false;
+            }
+            outcome = "item-policy-or-ownership";
+            if (item != null && !CanEquipItemAtPoint(item, requestedEquipPoint, targetClass)) return false;
+            InventoryItem[] previous = equipment.Snapshot();
+            bool changesClass = targetClass != charaWork.parameterSave.state_mainSkill[0];
+            InventoryItem[] next = changesClass ? GetGearset(targetClass) : equipment.Snapshot();
+            outcome = "gearset-read-failed";
+            if (next == null) return false;
+
+            // Shared underwear belongs to class zero and survives a class swap.
+            next[SLOT_UNDERSHIRT] = previous[SLOT_UNDERSHIRT];
+            next[SLOT_UNDERGARMENT] = previous[SLOT_UNDERGARMENT];
+            if (changesClass)
+            {
+                HashSet<ulong> seen = new HashSet<ulong>();
+                HashSet<int> occupiedSavedPoints = new HashSet<int>();
+                for (int i = 0; i < next.Length; i++)
+                {
+                    InventoryItem saved = next[i];
+                    if (i == slot || i == SLOT_UNDERSHIRT || i == SLOT_UNDERGARMENT || saved == null) continue;
+                    if (!CanEquipItemAtPoint(saved, i + 1, targetClass) || !seen.Add(saved.uniqueId))
+                    {
+                        next[i] = null;
+                        continue;
+                    }
+                    int[] savedPoints = EquipmentRequestPolicy.OccupiedPoints(((EquipmentItem)saved.itemData).equipPoint, i + 1);
+                    if (savedPoints.Any(occupiedSavedPoints.Contains)) next[i] = null;
+                    else occupiedSavedPoints.UnionWith(savedPoints);
+                }
+            }
+            if (item != null)
+            {
+                int[] occupied = EquipmentRequestPolicy.OccupiedPoints(((EquipmentItem)item.itemData).equipPoint, requestedEquipPoint);
+                for (int i = 0; i < next.Length; i++)
+                {
+                    InventoryItem other = next[i];
+                    if (i == slot || other == null) continue;
+                    EquipmentItem otherData = other.itemData as EquipmentItem;
+                    bool conflict = other.uniqueId == item.uniqueId || (otherData != null &&
+                        EquipmentRequestPolicy.OccupiedPoints(otherData.equipPoint, i + 1).Any(occupied.Contains));
+                    if (!conflict) continue;
+                    // An offhand/armor request cannot remove the required main weapon.
+                    outcome = "required-slot-conflict";
+                    if (i == SLOT_MAINHAND || i == SLOT_UNDERSHIRT || i == SLOT_UNDERGARMENT) return false;
+                    next[i] = null;
+                }
+            }
+            next[slot] = item;
+            if (DevDiagnostics.Enabled)
+                DevDiagnostics.Trace("inventory.equipment.commit.begin", "requestId", requestId,
+                    "actor", actorId, "targetClass", targetClass, "changesClass", changesClass,
+                    "loadout", String.Join(",", next.Select((entry, index) =>
+                        $"{index + 1}:{entry?.uniqueId ?? 0}:{entry?.itemId ?? 0}")));
+            outcome = "database-commit-failed";
+            if (!Database.CommitEquipmentChange(this, targetClass, next)) return false;
+            DevDiagnostics.Trace("inventory.equipment.commit.end", "requestId", requestId,
+                "actor", actorId, "targetClass", targetClass);
+            outcome = "publication-exception-after-commit";
+            using (DeferStatRecalculation())
+            {
+                equipment.ApplyCommittedList(next);
+                if (changesClass) DoClassChange(targetClass, true);
+                RefreshEquipmentAppearance();
+                RecalculateStats("equip");
+            }
+            outcome = "applied";
+            return true;
+        }
+
+        private bool CanEquipItemAtPoint(InventoryItem item, int point, byte classId)
+        {
+            EquipmentItem data = item.itemData as EquipmentItem;
+            if (data == null || !ReferenceEquals(item.owner, this) || item.itemPackage != ItemPackage.NORMAL
+                || !ReferenceEquals(GetItemPackage(ItemPackage.NORMAL).GetItemAtSlot(item.slot), item)) return false;
+            if (!EquipmentRequestPolicy.FitsPoint(data.equipPoint, point)) return false;
+            if (!EquipmentRequestPolicy.FitsTribe(data.equipTribe, playerWork.tribe)) return false;
+            if (point == 1 && (!(data is WeaponItem) || EquipmentRequestPolicy.WeaponClass(item.itemId) == 0)) return false;
+            return EquipmentRequestPolicy.MeetsRequiredLevel(data.levelType, data.level, Math.Max(1, (int)GetClassLevel(classId)));
+        }
+
         public bool IsValidEquipmentPoint(int requestedEquipPoint)
         {
             return requestedEquipPoint > 0
@@ -2076,14 +2253,9 @@ namespace AetherXIV.Core.Map.Actors
             bool equippedElsewhere = false;
             bool itemTypeMatchesSlot = equipmentItem != null;
 
-            // Head/body are the first capture-backed armor slice. Weapons use
-            // a different equipPoint domain (the captured gladius is 36 while
-            // its wire equipment point is 1), so do not generalize their slot
-            // rules here. Still prevent a forged weapon from entering either
-            // restored armor slot.
-            if (requestedEquipPoint == SLOT_HEAD + 1
-                || requestedEquipPoint == SLOT_BODY + 1)
-                itemTypeMatchesSlot = equipmentItem is ArmorItem;
+            if (requestedEquipPoint == SLOT_MAINHAND + 1)
+                itemTypeMatchesSlot = equipmentItem is WeaponItem
+                    && EquipmentRequestPolicy.WeaponClass(item.itemId) != 0;
 
             if (item != null && IsValidEquipmentPoint(requestedEquipPoint))
             {
@@ -2117,7 +2289,7 @@ namespace AetherXIV.Core.Map.Actors
                 item == null ? ushort.MaxValue : item.slot,
                 equipmentItem != null,
                 itemTypeMatchesSlot,
-                equipmentItem is ArmorItem || equipmentItem is AccessoryItem,
+                true,
                 equipmentItem == null ? -1 : equipmentItem.equipPoint,
                 equippedElsewhere);
 
@@ -2504,6 +2676,7 @@ namespace AetherXIV.Core.Map.Actors
                 questScenario,
                 playerWork.questScenario,
                 "quest-completed");
+            RefreshEarnedActions();
             SendGameMessage(Server.GetWorldManager().GetActor(), 25086, 0x20, (object)questId);
         }
 
@@ -2599,6 +2772,7 @@ namespace AetherXIV.Core.Map.Actors
             SendQuestClientUpdate(slot);
             newQuestInstance.OnAccept(true);
             Database.SaveQuest(this, newQuestInstance, slot);
+            RefreshEarnedActions();
         }
 
         public bool CanAcceptQuest(string name)
@@ -4873,22 +5047,35 @@ namespace AetherXIV.Core.Map.Actors
         //Equips any abilities for the given classId at the given level. If actionList is not null, adds a "You learn Command" message
         private void EquipAbilitiesAtLevel(byte classId, short level, List<CommandResult> actionList = null)
         {
-            //If there's any abilites that unlocks at this level, equip them.
-            List<ushort> commandIds = Server.GetWorldManager().GetBattleCommandIdByLevel(classId, level);
-            foreach (ushort commandId in commandIds)
-            {
-                EquipAbilityInFirstOpenSlot(classId, commandId, false);
-                byte jobId = ConvertClassIdToJobId(classId);
-                if (jobId != classId)
-                    EquipAbilityInFirstOpenSlot(jobId, commandId, false);
+            // Reconcile all earned levels, including characters advanced by GM/database tools.
+            RefreshEarnedActions();
+            if (actionList != null && ConvertJobIdToClassId(GetCurrentClassOrJob()) == classId)
+                foreach (ushort commandId in Server.GetWorldManager().GetBattleCommandIdByLevel(classId, level))
+                    actionList.Add(new CommandResult(actorId, 33926, 0, commandId));
+        }
 
-                //33926: You learn [command].
-                if (actionList != null)
-                {
-                    if (classId == GetCurrentClassOrJob() || jobId == GetCurrentClassOrJob())
-                        actionList.Add(new CommandResult(actorId, 33926, 0, commandId));
-                }
-            }
+        public bool HasLearnedBattleCommand(uint commandId)
+        {
+            var ability = Server.GetWorldManager().GetBattleCommand(commandId);
+            if (ability == null) return false;
+            byte baseClass = ConvertJobIdToClassId(ability.job);
+            if (!IsDiscipleOfWarOrMagicClass(baseClass)) return false;
+            if (baseClass == ability.job) return GetClassLevel(baseClass) >= ability.level;
+            if (GetCurrentClassOrJob() != ability.job) return false;
+            bool hasSoul = JobProgressionPolicy.TryGetForBaseClass(baseClass, out var job)
+                && HasItem(job.SoulCrystalItemId)
+                && JobProgressionPolicy.MeetsLevelRequirements(job, GetClassLevel);
+            return AbilityUnlockPolicy.GetEligibleActions(ability.job, GetClassLevel(baseClass),
+                hasSoul, IsQuestCompleted, Server.GetWorldManager().GetBattleCommandIdByLevel)
+                .Contains((ushort)commandId);
+        }
+
+        private void RefreshEarnedActions(bool preserveActiveRecasts = true)
+        {
+            Database.LoadHotbar(this, preserveActiveRecasts);
+            for (ushort slot = charaWork.commandBorder; slot < charaWork.commandBorder + AbilityUnlockPolicy.HotbarCapacity; slot++)
+                hotbarSlotsToUpdate.Add(slot);
+            updateFlags |= ActorUpdateFlags.Hotbar;
         }
 
         //Increaess level of current class and equips new abilities earned at that level
@@ -4916,7 +5103,7 @@ namespace AetherXIV.Core.Map.Actors
                 if (actionList != null)
                     actionList.Add(new CommandResult(actorId, 33909, 0, (ushort)newLevel));
 
-                EquipAbilitiesAtLevel(classId, GetLevel(), actionList);
+                EquipAbilitiesAtLevel(classId, newLevel, actionList);
 
                 if (classId == GetClass())
                     RecalculateStats("level-up");
@@ -4945,6 +5132,12 @@ namespace AetherXIV.Core.Map.Actors
         public PlayerAttributePointState GetAttributePoints()
         {
             byte classId = GetAttributeAllocationClassId();
+            // Patch 1.20: only Disciples of War/Magic earn allotment points.
+            // Do not advertise unusable points (or legacy invalid allocations)
+            // for crafting/gathering classes merely because they have levels.
+            if (!IsDiscipleOfWarOrMagicClass(classId))
+                return new PlayerAttributePointState(0, 0,
+                    new PlayerClassAttributeAllocation(classId, 0, 0, 0, 0, 0, 0, 0));
             PlayerClassAttributeAllocation allocation = GetClassAttributeAllocation(classId);
             return new PlayerAttributePointState(
                 GetEarnedAttributePointsForLevel(GetLevel()),
@@ -4959,6 +5152,9 @@ namespace AetherXIV.Core.Map.Actors
             short earnedPoints = GetEarnedAttributePointsForLevel(level);
             short statCap = GetAttributePointCapForLevel(level);
             int[] requested = { strength, vitality, dexterity, intelligence, mind, piety };
+            PlayerClassAttributeAllocation previous = GetClassAttributeAllocation(classId);
+            int[] existing = { previous.strength, previous.vitality, previous.dexterity,
+                previous.intelligence, previous.mind, previous.piety };
             int spentPoints = 0;
 
             for (int i = 0; i < requested.Length; i++)
@@ -4978,6 +5174,22 @@ namespace AetherXIV.Core.Map.Actors
                 }
 
                 spentPoints += requested[i];
+            }
+
+            // Patch 1.21a separates paid guild-NPC resets from ordinary allotment.
+            // The UI's Undo only cancels edits within the open window; it must
+            // not refund a previously committed allocation through this path.
+            for (int i = 0; i < requested.Length; i++)
+            {
+                if (requested[i] < existing[i])
+                {
+                    DevDiagnostics.Trace("stats.allocation.rejected",
+                        "player", String.Format("0x{0:X}", actorId),
+                        "classId", classId, "level", level,
+                        "reason", "reset-required", "statIndex", i,
+                        "previous", existing[i], "requested", requested[i]);
+                    return false;
+                }
             }
 
             if (!IsDiscipleOfWarOrMagicClass(classId) || spentPoints > earnedPoints)
@@ -5115,7 +5327,7 @@ namespace AetherXIV.Core.Map.Actors
             currentJob = jobId;
             BroadcastPacket(SetCurrentJobPacket.BuildPacket(actorId, jobId), true);
             Database.SavePlayerCurrentJob(this);
-            Database.LoadHotbar(this);
+            RefreshEarnedActions(false);
             SendCharaExpInfo();
             RecalculateStats("job-change");
         }
@@ -5130,20 +5342,52 @@ namespace AetherXIV.Core.Map.Actors
 
         public bool TryChangeToCurrentClassJob()
         {
+            var timer = DevDiagnostics.Enabled ? System.Diagnostics.Stopwatch.StartNew() : null;
+            int previousJob = currentJob;
+            bool success = false;
+            string outcome = "exception";
+            DevDiagnostics.Trace("job.change.begin", "actor", actorId,
+                "classId", GetClass(), "jobId", previousJob);
+            try
+            {
+                success = TryChangeToCurrentClassJobCore(out outcome);
+                return success;
+            }
+            catch (Exception exception)
+            {
+                outcome = "exception:" + exception.GetType().Name + ":" + outcome;
+                throw;
+            }
+            finally
+            {
+                DevDiagnostics.Trace("job.change.end", "actor", actorId,
+                    "classId", GetClass(), "previousJob", previousJob, "jobId", currentJob,
+                    "success", success, "outcome", outcome, "elapsedMs", timer?.Elapsed.TotalMilliseconds);
+            }
+        }
+
+        private bool TryChangeToCurrentClassJobCore(out string outcome)
+        {
+            outcome = "unsupported-base-class";
             byte baseClassId = charaWork.parameterSave.state_mainSkill[0];
             if (!JobProgressionPolicy.TryGetForBaseClass(baseClassId, out JobProgressionRequirement requirement))
                 return false;
 
             if (currentJob == requirement.JobId)
             {
+                outcome = "return-to-base-class";
                 SetCurrentJob(0);
                 return true;
             }
 
-            if (!HasItem(requirement.SoulCrystalItemId)
-                || !JobProgressionPolicy.MeetsLevelRequirements(requirement, GetClassLevel))
+            outcome = "missing-soul-crystal";
+            if (!HasItem(requirement.SoulCrystalItemId))
+                return false;
+            outcome = "level-requirements";
+            if (!JobProgressionPolicy.MeetsLevelRequirements(requirement, GetClassLevel))
                 return false;
 
+            outcome = "job-selected";
             SetCurrentJob(requirement.JobId);
             return true;
         }
@@ -5521,13 +5765,16 @@ namespace AetherXIV.Core.Map.Actors
 
             if (mainHandItem != null)
             {
-                var mainHandWeapon = (Server.GetItemGamedata(mainHandItem.itemId) as WeaponItem);
-                damageAttribute = mainHandWeapon.damageAttributeType1;
-                attackDelay = (int) (mainHandWeapon.damageInterval * 1000);
-                hitCount = mainHandWeapon.frequency;
+                var mainHandWeapon = mainHandItem.itemData as WeaponItem;
+                if (mainHandWeapon != null)
+                {
+                    damageAttribute = mainHandWeapon.damageAttributeType1;
+                    attackDelay = (int)(mainHandWeapon.damageInterval * 1000);
+                    hitCount = mainHandWeapon.frequency;
+                }
             }
 
-            var hasShield = equip.GetItemAtSlot(SLOT_OFFHAND) != null ? 1 : 0;
+            var hasShield = equip.GetItemAtSlot(SLOT_OFFHAND)?.itemData.IsShieldWeapon() == true ? 1 : 0;
             SetMod((uint)Modifier.CanBlock, hasShield);
 
             SetMod((uint)Modifier.AttackType, damageAttribute);

@@ -1,0 +1,33 @@
+name: Verify client patching
+on:
+  push:
+    paths:
+      - 'AetherXIV Launcher/AetherXIV.Launcher.Core/**'
+      - 'tools/Verification/Patching/**'
+      - '.github/workflows/verify-client-patching.yml'
+  pull_request:
+    paths:
+      - 'AetherXIV Launcher/AetherXIV.Launcher.Core/**'
+      - 'tools/Verification/Patching/**'
+      - '.github/workflows/verify-client-patching.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.203'
+      - run: dotnet test tools/Verification/Patching/PatchingVerification.csproj --configuration Release --logger trx
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: patching-results-${{ matrix.os }}
+          path: '**/TestResults/*.trx'

@@ -73,6 +73,11 @@ public sealed record ClientInstallReport(
             state = ClientInstallState.Missing;
             actions.Add("Select the FINAL FANTASY XIV 1.x client root.");
         }
+        else if (Directory.Exists(Path.Combine(install.RootPath, ".aetherxiv-patch-transaction")))
+        {
+            state = ClientInstallState.PatchRequired;
+            actions.Add("Retry Apply Patches to recover or finish the interrupted patch operation.");
+        }
         else if (version.IsTargetVersion && hasDirectGameExecutable)
         {
             state = ClientInstallState.Ready123b;

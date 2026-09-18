@@ -132,6 +132,14 @@ namespace AetherXIV.Core.World
                 //Game Message
                 else if (subpacket.header.type == 0x03)
                 {                
+                    if (subpacket.gameMessage.opcode == AetherXIV.Protocol.UmbraTravelWire.RequestOpcode)
+                    {
+                        UmbraTravelRelay.Process(mServer, client, subpacket);
+                        continue;
+                    }
+                    // Replies are server-owned, never client-relayed.
+                    if (subpacket.gameMessage.opcode == AetherXIV.Protocol.UmbraTravelWire.ReplyOpcode)
+                        continue;
                     //Send to the correct zone server
                     uint targetSession = subpacket.header.targetId;
                     Session target = mServer.GetSession(targetSession);

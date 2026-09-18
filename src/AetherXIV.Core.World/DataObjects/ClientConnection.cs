@@ -22,6 +22,9 @@ namespace AetherXIV.Core.World
 
         //Instance Stuff
         public Session owner;
+        internal readonly UmbraTravelAuthentication TravelAuthentication = new UmbraTravelAuthentication();
+        internal long LastTravelRequestAt;
+        internal int TravelRequestsInWindow;
 
         public void QueuePacket(BasePacket packet)
         {

@@ -94,11 +94,17 @@ function Get-LineEndingChecksums([string]$Path) {
     finally { $sha.Dispose() }
 }
 function Test-AcceptedHistoricMigrationChecksum([string]$Name, [string]$Checksum) {
-    # 000036 was briefly packaged with Limsa's area at id 16 before the
-    # immutable 000037 repair was added. Accept only that exact revision so
-    # it can advance in place; all other migration checksums remain strict.
-    return $Name -eq "20260913_000036_limsa_mini_aetherytes_and_man0l1_escort.sql" `
-        -and $Checksum.ToLowerInvariant() -eq "239bc2af9020040049c86e3ac9797ac93d5a2c65048abaa8e3f2216051e67762"
+    $history = Join-Path $scriptDir "migration-history.sha256"
+    if (-not (Test-Path $history)) { return $false }
+    foreach ($line in Get-Content $history) {
+        if (-not $line.Trim() -or $line.TrimStart().StartsWith('#')) { continue }
+        $fields = $line.Trim() -split '\s+'
+        if ($fields.Count -eq 3 -and $fields[0] -ceq $Name -and $fields[1] -eq $Checksum `
+            -and (Get-LineEndingChecksums (Join-Path $migrations $Name)) -contains $fields[2]) {
+            return $true
+        }
+    }
+    return $false
 }
 function Connection-Args([string]$User, [string]$Password) {
     $result = @("-h", $dbHost, "-P", $dbPort, "-u", $User)

@@ -930,6 +930,33 @@ namespace AetherXIV.Core.Map.Actors
                 SetMod((uint)Modifier.HitCount, 1);
         }
 
+        private int statRecalculationDepth;
+        private string deferredStatReason;
+
+        internal IDisposable DeferStatRecalculation()
+        {
+            statRecalculationDepth++;
+            return new StatRecalculationScope(this);
+        }
+
+        private sealed class StatRecalculationScope : IDisposable
+        {
+            private Character owner;
+            public StatRecalculationScope(Character owner) { this.owner = owner; }
+            public void Dispose()
+            {
+                Character character = owner;
+                if (character == null) return;
+                owner = null;
+                if (--character.statRecalculationDepth == 0 && character.deferredStatReason != null)
+                {
+                    string reason = character.deferredStatReason;
+                    character.deferredStatReason = null;
+                    character.RecalculateStats(reason);
+                }
+            }
+        }
+
         public void RecalculateStats()
         {
             RecalculateStats("unspecified");
@@ -937,6 +964,11 @@ namespace AetherXIV.Core.Map.Actors
 
         public void RecalculateStats(string reason)
         {
+            if (statRecalculationDepth > 0)
+            {
+                deferredStatReason = reason ?? "deferred";
+                return;
+            }
             short previousHp = charaWork.parameterSave.hp[0];
             short previousHpMax = charaWork.parameterSave.hpMax[0];
             short previousMp = charaWork.parameterSave.mp;

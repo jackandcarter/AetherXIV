@@ -205,7 +205,10 @@ public sealed class UmbraThirdPartyPluginHost : IDisposable
         {
             try
             {
-                Invoke(plugin, "draw", instance => instance.Draw(drawContext));
+                var pluginContext = new UmbraPluginDrawContext(drawContext,
+                    Volatile.Read(ref plugin.WindowsAllowed),
+                    () => Volatile.Write(ref plugin.HasRequestedWindow, true));
+                Invoke(plugin, "draw", instance => instance.Draw(pluginContext));
             }
             finally
             {
@@ -213,6 +216,30 @@ public sealed class UmbraThirdPartyPluginHost : IDisposable
                     recovery.RecoverAfterPluginCallback();
             }
         }
+    }
+
+    internal (bool Main, bool Settings) GetUiActions(string pluginId)
+    {
+        lock (gate)
+        {
+            if (!loaded.TryGetValue(pluginId, out var plugin) || plugin.Status.State != UmbraPluginRuntimeState.Running)
+                return (false, false);
+            return (plugin.Instance is IUmbraPluginUi || Volatile.Read(ref plugin.HasRequestedWindow),
+                plugin.Instance is IUmbraPluginSettingsUi);
+        }
+    }
+
+    internal void OpenUi(string pluginId, bool settings)
+    {
+        LoadedPlugin? plugin;
+        lock (gate) loaded.TryGetValue(pluginId, out plugin);
+        if (plugin is null) return;
+        Invoke(plugin, settings ? "open-settings" : "open-ui", instance =>
+        {
+            if (settings) (instance as IUmbraPluginSettingsUi)?.OpenSettingsUi();
+            else (instance as IUmbraPluginUi)?.OpenMainUi();
+            Volatile.Write(ref plugin.WindowsAllowed, true);
+        });
     }
 
     public void Dispose()
@@ -425,5 +452,9 @@ public sealed class UmbraThirdPartyPluginHost : IDisposable
         public UmbraPluginRuntimeStatus Status { get; set; } = CreateStatus(manifest, UmbraPluginRuntimeState.Discovered);
 
         public int ConsecutiveCallbackErrors { get; set; }
+
+        // Each load/reload starts closed, independent of plugin implementation.
+        public bool WindowsAllowed;
+        public bool HasRequestedWindow;
     }
 }

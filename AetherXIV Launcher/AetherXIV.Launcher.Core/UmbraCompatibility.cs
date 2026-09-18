@@ -19,7 +19,7 @@ namespace AetherXIV.Launcher.Core;
 
 public static class UmbraCompatibility
 {
-    public const string CurrentApiVersion = "2.0";
+    public const string CurrentApiVersion = "2.1";
 
     public const string TargetGameVersion = ClientVersionInfo.TargetGameVersion;
 

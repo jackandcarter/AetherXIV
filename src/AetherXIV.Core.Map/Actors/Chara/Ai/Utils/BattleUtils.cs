@@ -281,23 +281,30 @@ namespace AetherXIV.Core.Map.actors.chara.ai.utils
             action.amount = (ushort)(action.amount * percentParry);
         }
 
-        //There are 3 or 4 tiers of resist that are flat 25% decreases in damage. 
-        //It's possible we could just calculate the damage at the same time as we determine the hit type (the same goes for the rest of the hit types)
-        //Or we could have HitTypes for DoubleResist, TripleResist, and FullResist that get used here.
+        // Retail partial resists retain 75%, 50%, or 25% of damage.
+        // https://kanican.livejournal.com/55370.html (5,400-trial resistance study).
+        // Full avoidance is separate from these three ordinary resistance tiers.
         public static void CalculateResistDamage(Character attacker, Character defender, BattleCommand skill, CommandResult action)
         {
-            //Every tier of resist is a 25% reduction in damage. ie SingleResist is 25% damage taken down, Double is 50% damage taken down, etc
-            double percentResist = 0.25 * (action.hitType - HitType.SingleResist + 1);
-
-            action.amountMitigated = (ushort)(action.amount * (1 - percentResist));
-            action.amount = (ushort)(action.amount * percentResist);
+            int retainedQuarters;
+            switch (action.hitType)
+            {
+                case HitType.SingleResist: retainedQuarters = 3; break;
+                case HitType.DoubleResist: retainedQuarters = 2; break;
+                case HitType.TripleResist: retainedQuarters = 1; break;
+                case HitType.FullResist: retainedQuarters = 0; break;
+                default: return;
+            }
+            ushort original = action.amount;
+            action.amount = (ushort)(original * retainedQuarters / 4);
+            action.amountMitigated = (ushort)(original - action.amount);
         }
 
         //It's weird that stoneskin is handled in C# and all other buffs are in scripts right now
         //But it's because stoneskin acts like both a preaction and postaction buff in that it falls off after damage is dealt but impacts how much damage is dealt
         public static void HandleStoneskin(Character defender, CommandResult action)
         {
-            var mitigation = Math.Min(action.amount, defender.GetMod(Modifier.Stoneskin));
+            var mitigation = Math.Min(action.amount, Math.Max(0, defender.GetMod(Modifier.Stoneskin)));
 
             action.amount = (ushort) (action.amount - mitigation).Clamp(0, 9999);
             defender.SubtractMod((uint)Modifier.Stoneskin, mitigation);
@@ -473,18 +480,25 @@ namespace AetherXIV.Core.Map.actors.chara.ai.utils
             return false;
         }
 
-        //This probably isn't totally correct but it's close enough for now. 
-        //Full Resists seem to be calculated in a different way because the resist rates don't seem to line up with kanikan's testing (their tests didn't show any full resists)
+        // Tier damage cuts are recovered; the rate-halving distribution below is
+        // still the existing approximation, not a recovered MACC/MEVA formula.
         //Non-spells with elemental damage can be resisted, it just doesnt say in the chat that they were. As far as I can tell, all mob-specific attacks are considered not to be spells
         public static bool TryResist(Character attacker, Character defender, BattleCommand skill, CommandResult action)
         {
+            if (action.forceFullResist)
+            {
+                action.hitType = HitType.FullResist;
+                CalculateResistDamage(attacker, defender, skill, action);
+                return true;
+            }
             //The rate degrades for each check. Meaning with 100% resist, the attack will always be resisted, but it won't necessarily be a triple or full resist
             //Rates beyond 100 still increase the chance for higher resist tiers though
             double rate = action.resistRate;
 
             int i = -1;
 
-            while ((Program.Random.NextDouble() * 100) <= rate && i < 4)
+            while (i < (int)HitType.TripleResist - (int)HitType.SingleResist &&
+                   (Program.Random.NextDouble() * 100) < rate)
             {
                 rate /= 2;
                 i++;
@@ -527,7 +541,9 @@ namespace AetherXIV.Core.Map.actors.chara.ai.utils
         //TryMiss instead of tryHit because hits are the default and don't change damage
         public static bool TryMiss(Character attacker, Character defender, BattleCommand skill, CommandResult action)
         {
-            if ((Program.Random.NextDouble() * 100) >= GetHitRate(attacker, defender, skill, action))
+            // CalcRates has already populated this value, and pre-action effects
+            // may then change it (for example Decoy). Do not recalculate it here.
+            if ((Program.Random.NextDouble() * 100) >= action.hitRate)
             {
                 action.hitType = (ushort)HitType.Miss;
                 //On misses, the entire amount is considered mitigated
@@ -629,7 +645,8 @@ namespace AetherXIV.Core.Map.actors.chara.ai.utils
         public static void FinishActionSpell(Character attacker, Character defender, BattleCommand skill, CommandResult action, CommandResultContainer actionContainer = null)
         {
             //I'm assuming that like physical attacks stoneskin is taken into account before mitigation
-            HandleStoneskin(defender, action);
+            if (!action.forceFullResist)
+                HandleStoneskin(defender, action);
 
             //Determine the hit type of the action
             //Spells don't seem to be able to miss, instead magic acc/eva is used for resists (which are generally called evades in game)
@@ -645,8 +662,6 @@ namespace AetherXIV.Core.Map.actors.chara.ai.utils
 
             //Set the hit effect
             SetHitEffectSpell(attacker, defender, skill, action);
-
-            HandleStoneskin(defender, action);
 
             CalculateSpellDamageTaken(attacker, defender, skill, action);
 
@@ -727,7 +742,7 @@ namespace AetherXIV.Core.Map.actors.chara.ai.utils
 
             hitEffect |= HitTypeEffectsMagical[hitType];
 
-            if (skill != null && skill.isCombo && !skill.comboEffectAdded)
+            if (skill != null && skill.isCombo && action.ActionLanded() && !skill.comboEffectAdded)
             {
                 hitEffect |= (HitEffect)(skill.comboStep << 15);
                 skill.comboEffectAdded = true;

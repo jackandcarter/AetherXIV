@@ -74,6 +74,9 @@ public sealed record UmbraStoreEntry(
             throw new InvalidDataException($"Umbra store entry is not installable: {Id}");
         if (Sha256.Length != 64 || Sha256.Any(character => !Uri.IsHexDigit(character)))
             throw new InvalidDataException($"Umbra store entry has an invalid SHA256: {Id}");
+        bool localRepository = new UmbraRepositorySource(RepositoryUrl, Source).IsLocalFileSource;
+        if (!localRepository && (BuiltIn || (Uri.TryCreate(DownloadUrl, UriKind.Absolute, out Uri? packageUri) && packageUri.IsFile)))
+            throw new InvalidDataException($"Remote repositories cannot declare local plugin packages: {Id}");
         if (BuiltIn)
         {
             // Built-in entries ship with the app; download_url names the package
@@ -189,6 +192,10 @@ public sealed record UmbraStoreEntry(
             "minimum_framework_version",
             "MinimumFrameworkVersion",
             "minimumFrameworkVersion");
+
+        bool builtIn = ReadBoolean(element, "built_in", "BuiltIn", "is_built_in");
+        if (!builtIn && !string.IsNullOrWhiteSpace(downloadUrl) && !Uri.TryCreate(downloadUrl, UriKind.Absolute, out _))
+            downloadUrl = new Uri(repository.ResolveManifestUri(), downloadUrl).AbsoluteUri;
 
         return new UmbraStoreEntry(
             id,

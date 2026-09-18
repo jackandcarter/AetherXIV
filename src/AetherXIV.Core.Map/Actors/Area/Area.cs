@@ -14,6 +14,18 @@ namespace AetherXIV.Core.Map.Actors
 {
     class Area : Actor
     {
+        private readonly System.Collections.Concurrent.ConcurrentQueue<Action> travelRequests = new();
+        private int travelRequestCount;
+        internal bool QueueTravel(Action action)
+        {
+            if (System.Threading.Interlocked.Increment(ref travelRequestCount) > 32)
+            {
+                System.Threading.Interlocked.Decrement(ref travelRequestCount);
+                return false;
+            }
+            travelRequests.Enqueue(action);
+            return true;
+        }
         public string zoneName;        
         public ushort regionId;
         public bool isIsolated, canStealth, isInn, canRideChocobo, isInstanceRaid;
@@ -1253,6 +1265,11 @@ namespace AetherXIV.Core.Map.Actors
         {
             lock (mActorList)
             {
+                for (int i = 0; i < 8 && travelRequests.TryDequeue(out var travel); i++)
+                {
+                    System.Threading.Interlocked.Decrement(ref travelRequestCount);
+                    travel();
+                }
                 foreach (Actor a in mActorList.Values.ToList())
                     a.Update(tick);
 

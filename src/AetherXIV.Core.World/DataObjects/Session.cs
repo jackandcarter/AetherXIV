@@ -22,6 +22,7 @@ namespace AetherXIV.Core.World.DataObjects
             this.clientConnection = connection;
             this.type = type;
             connection.owner = this;
+            connection.TravelAuthentication.Reset();
             Database.LoadZoneSessionInfo(this);
         }
 

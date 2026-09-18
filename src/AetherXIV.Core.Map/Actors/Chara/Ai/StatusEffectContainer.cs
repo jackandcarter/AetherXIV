@@ -13,14 +13,19 @@ namespace AetherXIV.Core.Map.actors.chara.ai
     class StatusEffectContainer
     {
         private Character owner;
+        private readonly CrowdControlResistancePolicy crowdControl = new();
+        private readonly Func<DateTime> utcNow;
         private readonly Dictionary<uint, StatusEffect> effects;
         public static readonly int MAX_EFFECTS = 20;
         private DateTime lastTick;// Do all effects tick at the same time like regen?
         private List<SubPacket> statusSubpackets;
         private ActorPropertyPacketUtil statusTimerPropPacketUtil;
 
-        public StatusEffectContainer(Character owner)
+        public StatusEffectContainer(Character owner) : this(owner, () => DateTime.UtcNow) { }
+
+        internal StatusEffectContainer(Character owner, Func<DateTime> utcNow)
         {
+            this.utcNow = utcNow;
             this.owner = owner;
             this.effects = new Dictionary<uint, StatusEffect>();
             statusSubpackets = new List<SubPacket>();
@@ -163,7 +168,12 @@ namespace AetherXIV.Core.Map.actors.chara.ai
                 32002 [@SHEET(xtx/status,$E8(11),3)] fails to take effect.
             */
 
+            if (newEffect == null)
+                return false;
+
             var effect = GetStatusEffectById(newEffect.GetStatusEffectId());
+            if (effect == null && effects.Count >= MAX_EFFECTS)
+                return false;
 
             bool canOverwrite = false;
             if (effect != null)
@@ -176,6 +186,11 @@ namespace AetherXIV.Core.Map.actors.chara.ai
 
             if (canOverwrite || effect == null)
             {
+                var applicationTime = utcNow();
+                var effectiveDuration = crowdControl.GetDuration(newEffect.GetStatusEffectId(), newEffect.GetDuration(), applicationTime);
+                if (effectiveDuration < 0)
+                    return false;
+
                 // send packet to client with effect added message
                 if (newEffect != null && !newEffect.GetSilentOnGain())
                 {
@@ -185,17 +200,24 @@ namespace AetherXIV.Core.Map.actors.chara.ai
 
                 // wont send a message about losing effect here
                 if (canOverwrite)
+                {
                     effects.Remove(newEffect.GetStatusEffectId());
+                    // Refresh removes modifiers without firing expiration-only behavior.
+                    effect.CallLuaFunction("onLose", owner, effect, actionContainer, true);
+                }
 
+                newEffect.SetEffectiveDuration(effectiveDuration);
                 newEffect.SetStartTime(DateTime.Now);
                 newEffect.SetEndTime(DateTime.Now.AddSeconds(newEffect.GetDuration()));
                 newEffect.SetOwner(owner);
+                newEffect.SetSource(source);
 
                 if (effects.Count < MAX_EFFECTS)
                 {
                     newEffect.CallLuaFunction("onGain", this.owner, newEffect, actionContainer);
 
                     effects.Add(newEffect.GetStatusEffectId(), newEffect);
+                    crowdControl.RecordSuccess(newEffect.GetStatusEffectId(), applicationTime);
 
                     if (!newEffect.GetHidden())
                     {
@@ -225,7 +247,7 @@ namespace AetherXIV.Core.Map.actors.chara.ai
         public bool RemoveStatusEffect(StatusEffect effect, CommandResultContainer actionContainer = null, ushort worldmasterTextId = 30331, bool playEffect = true)
         {
             bool removedEffect = false;
-            if (effect != null && effects.ContainsKey(effect.GetStatusEffectId()))
+            if (effect != null && effects.TryGetValue(effect.GetStatusEffectId(), out var currentEffect) && ReferenceEquals(effect, currentEffect))
             {
                 // send packet to client with effect remove message
                 if (!effect.GetSilentOnLoss())

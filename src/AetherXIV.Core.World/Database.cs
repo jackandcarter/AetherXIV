@@ -9,6 +9,28 @@ namespace AetherXIV.Core.World
 {
     class Database
     {
+        internal static bool TryGetTravelSession(uint characterId, out string token, out DateTimeOffset expiry)
+        {
+            token = null; expiry = default;
+            try
+            {
+                using var conn = new MySqlConnection(String.Format("Server={0}; Port={1}; Database={2}; UID={3}; Password={4}", ConfigConstants.DATABASE_HOST, ConfigConstants.DATABASE_PORT, ConfigConstants.DATABASE_NAME, ConfigConstants.DATABASE_USERNAME, ConfigConstants.DATABASE_PASSWORD));
+                conn.Open();
+                using var cmd = new MySqlCommand("SELECT s.id, TIMESTAMPDIFF(SECOND, NOW(), s.expiration) AS remaining FROM sessions s JOIN characters c ON c.userId = s.userid WHERE c.id = @character AND s.expiration > NOW() LIMIT 1", conn);
+                cmd.Parameters.AddWithValue("@character", characterId);
+                using var reader = cmd.ExecuteReader();
+                if (!reader.Read()) return false;
+                token = reader.GetString(0);
+                expiry = DateTimeOffset.UtcNow.AddSeconds(reader.GetInt64(1));
+                return !String.IsNullOrWhiteSpace(token);
+            }
+            catch (MySqlException)
+            {
+                // Do not log credentials, proofs, or session rows.
+                Program.Log.Warn("Travel account-session lookup failed.");
+                return false;
+            }
+        }
         public static DBWorld GetServer(uint serverId)
         {
             using (var conn = new MySqlConnection(String.Format("Server={0}; Port={1}; Database={2}; UID={3}; Password={4}", ConfigConstants.DATABASE_HOST, ConfigConstants.DATABASE_PORT, ConfigConstants.DATABASE_NAME, ConfigConstants.DATABASE_USERNAME, ConfigConstants.DATABASE_PASSWORD)))

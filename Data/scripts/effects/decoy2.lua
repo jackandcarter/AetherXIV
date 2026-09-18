@@ -5,12 +5,13 @@ require("battleutils")
 function onPreAction(effect, caster, target, skill, action, actionContainer)
     --Evade single ranged or magic attack
     --Traited allows for physical attacks
-    if  target.allegiance != caster.allegiance and (skill.isRanged or skill.GetActionType() == ActionType.Magic or skill.GetActionType() == ActionType.Physical) then
+    local magic = action.actionType == ActionType.Magic;
+    if target.allegiance != caster.allegiance and (magic or action.actionType == ActionType.Physical) then
         --Set action's hit rate to 0
         action.hitRate = 0.0;
-        action.resistRate = 400;
+        action.forceFullResist = magic;
         --Remove status and add message
-        defender.statusEffects.RemoveStatusEffect(effect, actionContainer, 30331, false);
+        target.statusEffects.RemoveStatusEffect(effect, actionContainer, 30331, false);
     end
 
 end;

@@ -43,6 +43,34 @@ namespace AetherXIV.Core.Map.actors.chara
             toSet.CopyTo(referenceList, 0);
         }
 
+        internal InventoryItem[] Snapshot() => (InventoryItem[])referenceList.Clone();
+
+        internal void ApplyCommittedList(InventoryItem[] items)
+        {
+            // This is the existing package's publication step, after the
+            // database transaction; never toggle the package's write policy.
+            owner.QueuePacket(InventoryBeginChangePacket.BuildPacket(owner.actorId));
+            HashSet<ItemPackage> packages = new HashSet<ItemPackage>();
+            for (ushort slot = 0; slot < referenceList.Length; slot++)
+            {
+                InventoryItem old = referenceList[slot];
+                InventoryItem next = items[slot];
+                if (ReferenceEquals(old, next)) continue;
+                foreach (InventoryItem item in new[] { old, next })
+                {
+                    if (item == null) continue;
+                    ItemPackage package = owner.GetItemPackage(item.itemPackage);
+                    package.MarkDirty(item);
+                    packages.Add(package);
+                }
+                referenceList[slot] = next;
+                TraceEquipmentChange("committed-loadout", slot, old == null ? 0 : old.itemId, next == null ? 0 : next.itemId);
+            }
+            foreach (ItemPackage package in packages) package.SendUpdate();
+            SendUpdate();
+            owner.QueuePacket(InventoryEndChangePacket.BuildPacket(owner.actorId));
+        }
+
         //Legacy script surface (battlenpc.lua: SetEquipment({positions},{slots})).
         //The implementation remains centralized in Set; this is only the
         //legacy method-name adapter used by the Lua binding.

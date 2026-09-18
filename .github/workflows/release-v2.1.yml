@@ -271,9 +271,9 @@ jobs:
             artifacts/AetherXIV-2.1.22042-MacOS-arm64.zip
           core_stage="${RUNNER_TEMP}/AetherXIV-2.1.22042-MacOS-arm64-Core"
           mkdir -p "${core_stage}"
-          ditto "bin/build/Release/MacOS-Core/AetherXIV Core.app" \
+          ditto "bin/build/Release/MacOS/AetherXIV Core.app" \
             "${core_stage}/AetherXIV Core.app"
-          ditto bin/build/Release/MacOS-Core/Database "${core_stage}/Database"
+          ditto bin/build/Release/MacOS/Database "${core_stage}/Database"
           cp LICENSE THIRD_PARTY_NOTICES.md MODIFICATIONS.md TRADEMARKS.md "${core_stage}/"
           printf 'schema=aetherxiv.build.manifest.v1\nproduct_version=2.1\nbuild_number=%s\nscope=core\nplatform=MacOS\n' \
             "${BUILD_NUMBER}" > "${core_stage}/build-manifest.txt"

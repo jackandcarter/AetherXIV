@@ -93,7 +93,7 @@ def main() -> int:
         packaged_names.add(source.name)
         shutil.copy2(source, migrations / source.name)
 
-    for name in ("setup.sh", "setup.ps1"):
+    for name in ("setup.sh", "setup.ps1", "migration-history.sha256"):
         source = root / "db/direct-core" / name
         if not source.is_file():
             raise SystemExit(f"Missing database setup entry: {source}")

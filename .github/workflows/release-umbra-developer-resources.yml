@@ -6,7 +6,7 @@ on:
       sdk_version:
         description: Umbra SDK version
         required: true
-        default: 2.0.0
+        default: 2.1.0
       sample_version:
         description: Sample plugin version
         required: true

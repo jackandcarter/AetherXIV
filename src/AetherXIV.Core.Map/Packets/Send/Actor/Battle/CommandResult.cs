@@ -311,6 +311,9 @@ namespace AetherXIV.Core.Map.packets.send.actor.battle
         public double resistRate = 0.0;
         public double hitRate = 0.0;
         public double critRate = 0.0;
+        // Explicit one-hit avoidance (Decoy), not an inflated resistance rate.
+        // This is action-local state and is not serialized into the packet.
+        public bool forceFullResist = false;
 
         public CommandResult(uint targetId, ushort worldMasterTextId, uint effectId, ushort amount = 0, byte param = 0, byte hitNum = 1)
         {
@@ -398,7 +401,8 @@ namespace AetherXIV.Core.Map.packets.send.actor.battle
         //Whether this action didn't miss, and wasn't evaded or resisted
         public bool ActionLanded()
         {
-            return hitType > HitType.Evade && hitType != HitType.SingleResist && hitType != HitType.DoubleResist && hitType != HitType.FullResist;
+            return hitType == HitType.Hit || hitType == HitType.Crit ||
+                   hitType == HitType.Block || hitType == HitType.Parry;
         }
     }
 }

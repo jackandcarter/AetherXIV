@@ -2,8 +2,9 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <PackageVersion>2.1.0</PackageVersion>
     <PackageId>Aether.Umbra.Sdk</PackageId>
-    <Description>MSBuild SDK for managed Umbra 2.0 plugins.</Description>
+    <Description>MSBuild SDK for managed Umbra 2.1 plugins.</Description>
     <PackageType>MSBuildSdk</PackageType>
     <IncludeBuildOutput>false</IncludeBuildOutput>
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>

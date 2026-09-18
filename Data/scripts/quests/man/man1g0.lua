@@ -236,6 +236,19 @@ function onPush(player, quest, npc)
 	local data = quest:GetData();
 	local sequence = quest:GetSequence();
 	local classId = npc:GetActorClassId();
+	-- Accept only the trigger armed by this sequence's onStateChange.
+	-- The Shroud 30/35 transitions are incomplete and deliberately unarmed;
+	-- do not let a stale or unrelated push skip those missing Echo steps.
+	local expectedTrigger = {
+		[SEQ_005] = PLAYGROUND_TRIGGER,
+		[SEQ_015] = PLAYGROUND_EXIT_TRIGGER,
+		[SEQ_025] = BTN_TRIGGER,
+		[SEQ_055] = GUILD_ARC_INSIDE_TRIGGER
+	};
+	if (expectedTrigger[sequence] ~= classId) then
+		player:EndEvent();
+		return;
+	end
 	
 	if (sequence == SEQ_005) then
 		callClientFunction(player, "delegateEvent", player, quest, "processEvent020");        
@@ -252,15 +265,7 @@ function onPush(player, quest, npc)
 	elseif (sequence == SEQ_025) then
 		callClientFunction(player, "delegateEvent", player, quest, "processEvent050");    
 		quest:StartSequence(SEQ_030);
-	elseif (sequence == SEQ_030) then
-		-- Go to west shroud
-		callClientFunction(player, "delegateEvent", player, quest, "processEvent060");    
-		quest:StartSequence(SEQ_035);
-	elseif (sequence == SEQ_035) then
-		-- Go to moogle
-		callClientFunction(player, "delegateEvent", player, quest, "processEvent070");    
-		quest:StartSequence(SEQ_040);
-	elseif (sequence == SEQ_055) then
+	elseif (sequence == SEQ_055 and classId == GUILD_ARC_INSIDE_TRIGGER) then
 		callClientFunction(player, "delegateEvent", player, quest, "processEvent100"); 
 		quest:NewNpcLsMsg(1);   
 		quest:StartSequence(SEQ_060);

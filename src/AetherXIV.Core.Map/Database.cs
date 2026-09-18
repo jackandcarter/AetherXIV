@@ -2009,9 +2009,6 @@ WHERE id = @characterId", conn))
                         }
                     }
 
-                    //Load Hotbar
-                    LoadHotbar(player);
-
                     //Load Scenario Quests
                     query = @"
                         SELECT 
@@ -2231,7 +2228,12 @@ WHERE id = @characterId", conn))
                     player.GetItemPackage(ItemPackage.MELDREQUEST).InitList(GetItemPackage(player, 0, ItemPackage.MELDREQUEST));
                     player.GetItemPackage(ItemPackage.LOOT).InitList(GetItemPackage(player, 0, ItemPackage.LOOT));
 
-                    player.GetEquipment().SetList(GetEquipment(player, player.charaWork.parameterSave.state_mainSkill[0]));
+                    InventoryItem[] loadedEquipment = GetEquipment(player, player.charaWork.parameterSave.state_mainSkill[0]);
+                    if (loadedEquipment == null)
+                        throw new InvalidOperationException("Equipment could not be loaded; refusing to publish an empty loadout.");
+                    player.GetEquipment().SetList(loadedEquipment);
+                    // Soul crystals and completed quests must be loaded before action restoration.
+                    LoadHotbar(player);
                 }
                 catch (MySqlException e)
                 {
@@ -2289,7 +2291,9 @@ WHERE id = @characterId", conn))
                                     equipSlot,
                                     itemId
                                     FROM characters_inventory_equipment                                    
-                                    WHERE characterId = @charId AND (classId = @classId OR classId = 0) ORDER BY equipSlot";
+                                    WHERE characterId = @charId AND
+                                      ((classId = @classId AND equipSlot NOT IN (9,11))
+                                        OR (classId = 0 AND equipSlot IN (9,11))) ORDER BY equipSlot";
 
                     MySqlCommand cmd = new MySqlCommand(query, conn);
                     cmd.Parameters.AddWithValue("@charId", player.actorId);
@@ -2310,6 +2314,7 @@ WHERE id = @characterId", conn))
                 catch (MySqlException e)
                 {
                     Program.Log.Error(e.ToString());
+                    return null;
                 }
                 finally
                 {
@@ -2318,6 +2323,98 @@ WHERE id = @characterId", conn))
             }
 
             return equipment;
+        }
+
+        // Commit the proposed loadout and its class together. Nothing in the
+        // live Player/package changes until this transaction succeeds.
+        public static bool CommitEquipmentChange(Player player, byte classId, InventoryItem[] items)
+        {
+            using (MySqlConnection conn = new MySqlConnection(String.Format(
+                "Server={0}; Port={1}; Database={2}; UID={3}; Password={4}",
+                ConfigConstants.DATABASE_HOST, ConfigConstants.DATABASE_PORT,
+                ConfigConstants.DATABASE_NAME, ConfigConstants.DATABASE_USERNAME, ConfigConstants.DATABASE_PASSWORD)))
+            {
+                try
+                {
+                    conn.Open();
+                    using (MySqlTransaction transaction = conn.BeginTransaction())
+                    {
+                        using (MySqlCommand ownership = new MySqlCommand(@"
+                            SELECT 1 FROM characters_inventory
+                            WHERE characterId=@characterId AND serverItemId=@itemId
+                              AND itemPackage=@itemPackage AND slot=@itemSlot FOR UPDATE", conn, transaction))
+                        {
+                            ownership.Parameters.AddWithValue("@characterId", player.actorId);
+                            ownership.Parameters.AddWithValue("@itemId", 0UL);
+                            ownership.Parameters.AddWithValue("@itemPackage", 0);
+                            ownership.Parameters.AddWithValue("@itemSlot", 0);
+                            foreach (InventoryItem item in items)
+                            {
+                                if (item == null) continue;
+                                ownership.Parameters["@itemId"].Value = item.uniqueId;
+                                ownership.Parameters["@itemPackage"].Value = item.itemPackage;
+                                ownership.Parameters["@itemSlot"].Value = item.slot;
+                                if (ownership.ExecuteScalar() == null) return false;
+                            }
+                        }
+                        using (MySqlCommand delete = new MySqlCommand(@"
+                            DELETE FROM characters_inventory_equipment
+                            WHERE characterId=@characterId AND
+                              (classId=@classId OR (classId=0 AND equipSlot IN (9,11)))", conn, transaction))
+                        {
+                            delete.Parameters.AddWithValue("@characterId", player.actorId);
+                            delete.Parameters.AddWithValue("@classId", classId);
+                            delete.ExecuteNonQuery();
+                        }
+                        for (int slot = 0; slot < items.Length; slot++)
+                        {
+                            if (items[slot] == null) continue;
+                            using (MySqlCommand insert = new MySqlCommand(@"
+                                INSERT INTO characters_inventory_equipment (characterId,classId,equipSlot,itemId)
+                                VALUES (@characterId,@classId,@slot,@itemId)", conn, transaction))
+                            {
+                                insert.Parameters.AddWithValue("@characterId", player.actorId);
+                                insert.Parameters.AddWithValue("@classId", slot == Player.SLOT_UNDERSHIRT || slot == Player.SLOT_UNDERGARMENT ? 0 : classId);
+                                insert.Parameters.AddWithValue("@slot", slot);
+                                insert.Parameters.AddWithValue("@itemId", items[slot].uniqueId);
+                                insert.ExecuteNonQuery();
+                            }
+                        }
+                        if (classId != player.GetClass())
+                        {
+                            using (MySqlCommand update = new MySqlCommand(@"
+                                UPDATE characters_parametersave SET mainSkill=@classId,mainSkillLevel=@level
+                                WHERE characterId=@characterId", conn, transaction))
+                            {
+                                update.Parameters.AddWithValue("@classId", classId);
+                                update.Parameters.AddWithValue("@level", Math.Max(1, (int)player.GetClassLevel(classId)));
+                                update.Parameters.AddWithValue("@characterId", player.actorId);
+                                if (update.ExecuteNonQuery() != 1) return false;
+                            }
+                            using (MySqlCommand update = new MySqlCommand(
+                                "UPDATE characters SET currentJob=0 WHERE id=@characterId", conn, transaction))
+                            {
+                                update.Parameters.AddWithValue("@characterId", player.actorId);
+                                if (update.ExecuteNonQuery() != 1) return false;
+                            }
+                            using (MySqlCommand update = new MySqlCommand(
+                                "UPDATE characters_class_levels SET " + GetClassLevelColumn(classId) +
+                                "=GREATEST(1,COALESCE(" + GetClassLevelColumn(classId) + ",0)) WHERE characterId=@characterId", conn, transaction))
+                            {
+                                update.Parameters.AddWithValue("@characterId", player.actorId);
+                                if (update.ExecuteNonQuery() != 1) return false;
+                            }
+                        }
+                        transaction.Commit();
+                        return true;
+                    }
+                }
+                catch (MySqlException e)
+                {
+                    Program.Log.Error(e.ToString());
+                    return false;
+                }
+            }
         }
 
         public static bool EquipItem(
@@ -2512,7 +2609,46 @@ WHERE id = @characterId", conn))
 
         }
 
-        public static void LoadHotbar(Player player)
+        private static void RestoreEarnedActions(Player player, MySqlConnection conn)
+        {
+            byte target = player.GetCurrentClassOrJob();
+            byte baseClass = Player.ConvertJobIdToClassId(target);
+            bool hasSoul = JobProgressionPolicy.TryGetForBaseClass(baseClass, out var job)
+                && job.JobId == target && player.HasItem(job.SoulCrystalItemId)
+                && JobProgressionPolicy.MeetsLevelRequirements(job, player.GetClassLevel);
+            var eligible = AbilityUnlockPolicy.GetEligibleActions(target, player.GetClassLevel(baseClass),
+                hasSoul, player.IsQuestCompleted, Server.GetWorldManager().GetBattleCommandIdByLevel);
+            if (eligible.Count == 0) return;
+
+            using (var transaction = conn.BeginTransaction())
+            {
+                var existing = new Dictionary<ushort, uint>();
+                using (var read = new MySqlCommand(@"SELECT hotbarSlot, commandId FROM characters_hotbar
+                    WHERE characterId = @charId AND classId = @classId FOR UPDATE", conn, transaction))
+                {
+                    read.Parameters.AddWithValue("@charId", player.actorId);
+                    read.Parameters.AddWithValue("@classId", target);
+                    using (var reader = read.ExecuteReader())
+                        while (reader.Read()) existing[reader.GetUInt16(0)] = reader.GetUInt32(1);
+                }
+                foreach (var addition in AbilityUnlockPolicy.PlanMissingActions(existing, eligible))
+                {
+                    using (var insert = new MySqlCommand(@"INSERT INTO characters_hotbar
+                        (characterId, classId, hotbarSlot, commandId, recastTime)
+                        VALUES (@charId, @classId, @slot, @command, 0)", conn, transaction))
+                    {
+                        insert.Parameters.AddWithValue("@charId", player.actorId);
+                        insert.Parameters.AddWithValue("@classId", target);
+                        insert.Parameters.AddWithValue("@slot", addition.Key);
+                        insert.Parameters.AddWithValue("@command", addition.Value);
+                        insert.ExecuteNonQuery();
+                    }
+                }
+                transaction.Commit();
+            }
+        }
+
+        public static void LoadHotbar(Player player, bool preserveActiveRecasts = false)
         {
             string query;
             MySqlCommand cmd;
@@ -2522,6 +2658,24 @@ WHERE id = @characterId", conn))
                 try
                 {
                     conn.Open();
+                    RestoreEarnedActions(player, conn);
+                    var activeRecasts = new Dictionary<uint, uint>();
+                    if (preserveActiveRecasts)
+                        for (int slot = 0; slot < AbilityUnlockPolicy.HotbarCapacity; slot++)
+                        {
+                            uint id = player.charaWork.command[32 + slot] & 0xFFFF;
+                            uint endsAt = player.charaWork.parameterSave.commandSlot_recastTime[slot];
+                            if (id != 0 && (!activeRecasts.TryGetValue(id, out uint oldEnd) || endsAt > oldEnd))
+                                activeRecasts[id] = endsAt;
+                        }
+                    // Job changes must not leave commands from the previous bar in memory.
+                    for (int slot = 0; slot < AbilityUnlockPolicy.HotbarCapacity; slot++)
+                    {
+                        player.charaWork.command[32 + slot] = 0;
+                        player.charaWork.commandCategory[32 + slot] = 0;
+                        player.charaWork.parameterSave.commandSlot_recastTime[slot] = 0;
+                        player.charaWork.parameterTemp.maxCommandRecastTime[slot] = 0;
+                    }
                     //Load Hotbar
                     query = @"
                         SELECT 
@@ -2542,10 +2696,14 @@ WHERE id = @characterId", conn))
                         while (reader.Read())
                         {
                             int hotbarSlot = reader.GetUInt16("hotbarSlot");
+                            if (hotbarSlot >= AbilityUnlockPolicy.HotbarCapacity) continue;
                             uint commandId = reader.GetUInt32("commandId");
                             player.charaWork.command[hotbarSlot + player.charaWork.commandBorder] = 0xA0F00000 | commandId;
                             player.charaWork.commandCategory[hotbarSlot + player.charaWork.commandBorder] = 1;
                             player.charaWork.parameterSave.commandSlot_recastTime[hotbarSlot] = reader.GetUInt32("recastTime");
+                            if (activeRecasts.TryGetValue(commandId & 0xFFFF, out uint activeEnd))
+                                player.charaWork.parameterSave.commandSlot_recastTime[hotbarSlot] = Math.Max(
+                                    activeEnd, player.charaWork.parameterSave.commandSlot_recastTime[hotbarSlot]);
 
                             //Recast timer
                             BattleCommand ability = Server.GetWorldManager().GetBattleCommand((ushort)(commandId));
@@ -4190,11 +4348,8 @@ ORDER BY f.slot", conn))
             return 0;
         }
 
-        public static void PlayerCharacterUpdateClassLevel(Player player, byte classId, short level)
+        private static string GetClassLevelColumn(byte classId)
         {
-            string query;
-            MySqlCommand cmd;
-
             string[] classNames = {
                 "",
                 "",
@@ -4239,7 +4394,15 @@ ORDER BY f.slot", conn))
                 "btn",
                 "fsh"
             };
-            
+            if (classId >= classNames.Length || classNames[classId] == "")
+                throw new ArgumentOutOfRangeException(nameof(classId));
+            return classNames[classId];
+        }
+
+        public static void PlayerCharacterUpdateClassLevel(Player player, byte classId, short level)
+        {
+            string query;
+            MySqlCommand cmd;
             using (MySqlConnection conn = new MySqlConnection(String.Format("Server={0}; Port={1}; Database={2}; UID={3}; Password={4}", ConfigConstants.DATABASE_HOST, ConfigConstants.DATABASE_PORT, ConfigConstants.DATABASE_NAME, ConfigConstants.DATABASE_USERNAME, ConfigConstants.DATABASE_PASSWORD)))
             {
                 try
@@ -4251,7 +4414,7 @@ ORDER BY f.slot", conn))
                     SET
                     {0}=@level
                     WHERE
-                    characterId = @characterId", classNames[classId]);
+                    characterId = @characterId", GetClassLevelColumn(classId));
 
                     cmd = new MySqlCommand(query, conn);
                     cmd.Parameters.AddWithValue("@level", level);

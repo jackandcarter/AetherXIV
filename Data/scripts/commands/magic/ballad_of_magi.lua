@@ -44,8 +44,6 @@ function onSkillFinish(caster, target, skill, action, actionContainer)
         oldSong = paeon;
     elseif minuet and minuet.GetSource() == caster then
         oldSong = minuet;
-    elseif ballad and ballad.GetSource() == caster then
-        oldSong = ballad;
     end
 
     if oldSong then

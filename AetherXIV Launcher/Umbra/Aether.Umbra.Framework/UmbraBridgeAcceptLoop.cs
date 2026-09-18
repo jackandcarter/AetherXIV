@@ -27,154 +27,60 @@ internal abstract class UmbraBridgeRequest
 }
 
 /// <summary>
-/// Single-flight accept pump for the dev bridge HTTP listener.
-///
-/// The managed HttpListener accept can stall internally (observed live on
-/// macOS under Wine: GetContextAsync never returns while new requests queue
-/// silently). HttpListener forbids two concurrent accepts on the same
-/// listener, so a timed-out accept must never be abandoned and re-issued on
-/// the same transport — that is exactly the wedge that killed the bridge
-/// mid-observation. The pump therefore:
-///
-///   1. issues one accept at a time per transport (single-flight);
-///   2. when an accept does not complete within the timeout, aborts the
-///      transport (unblocking the pending accept) and recreates it;
-///   3. observes every pending accept to a terminal state so no fault goes
-///      unobserved and no accept is left running on a dead transport.
-///
-/// The exact same source file is compiled into the portable regression test
-/// assembly (Aether.Umbra.Framework.AcceptLoop.Tests) so these recovery
-/// paths are exercised on non-Windows hosts where HttpListener cannot run.
+/// Single-flight accept pump. A pending accept is normal while idle; only an
+/// actual transport failure warrants a restart. Cancellation aborts the listener.
 /// </summary>
 internal sealed class UmbraBridgeAcceptLoop
 {
-    public delegate Task<UmbraBridgeRequest?> AcceptAsync();
-    public delegate bool RestartTransport();
-    public delegate void Notify(string eventName, object? payload);
-
     private readonly Func<Task<UmbraBridgeRequest?>> acceptAsync;
     private readonly Action abort;
-    private readonly RestartTransport restartTransport;
-    private readonly TimeSpan acceptTimeout;
-    private readonly Notify? notify;
+    private readonly Func<bool> restartTransport;
+    private readonly Action<string, object?>? notify;
 
-    public UmbraBridgeAcceptLoop(
-        Func<Task<UmbraBridgeRequest?>> acceptAsync,
-        Action abort,
-        RestartTransport restartTransport,
-        TimeSpan acceptTimeout,
-        Notify? notify = null)
+    public UmbraBridgeAcceptLoop(Func<Task<UmbraBridgeRequest?>> acceptAsync,
+        Action abort, Func<bool> restartTransport, Action<string, object?>? notify = null)
     {
         this.acceptAsync = acceptAsync ?? throw new ArgumentNullException(nameof(acceptAsync));
         this.abort = abort ?? throw new ArgumentNullException(nameof(abort));
         this.restartTransport = restartTransport ?? throw new ArgumentNullException(nameof(restartTransport));
-        this.acceptTimeout = acceptTimeout > TimeSpan.Zero
-            ? acceptTimeout
-            : throw new ArgumentOutOfRangeException(nameof(acceptTimeout));
         this.notify = notify;
     }
 
-    public async Task RunAsync(
-        Func<UmbraBridgeRequest, CancellationToken, Task> handle,
+    public async Task RunAsync(Func<UmbraBridgeRequest, CancellationToken, Task> handle,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(handle);
-
         while (!cancellationToken.IsCancellationRequested)
         {
-            Task<UmbraBridgeRequest?> pending;
+            Task<UmbraBridgeRequest?>? pending = null;
             try
             {
                 pending = acceptAsync();
+                var request = await pending.WaitAsync(cancellationToken).ConfigureAwait(false);
+                if (request is null)
+                {
+                    if (cancellationToken.IsCancellationRequested || !restartTransport()) return;
+                    continue;
+                }
+                _ = Task.Run(() => handle(request, cancellationToken), CancellationToken.None);
             }
             catch (Exception ex)
             {
-                // The transport rejected the accept synchronously (e.g. it
-                // was torn down). Retry after a short delay; stop only when
-                // the server is stopping.
+                // Observe an accept that completes after cancellation, even if
+                // Wine fails to unblock it promptly when the listener is closed.
+                if (pending is not null)
+                    _ = pending.ContinueWith(static t => _ = t.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                try { abort(); } catch { }
+                if (cancellationToken.IsCancellationRequested) return;
                 notify?.Invoke("bridge.accept.failed", new { type = ex.GetType().Name, message = ex.Message });
-                if (cancellationToken.IsCancellationRequested)
-                    return;
-                try
-                {
-                    await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    return;
-                }
-                continue;
+                // Retry on a fresh listener, never spin on a faulted transport.
+                try { await Task.Delay(250, cancellationToken).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
+                if (!restartTransport()) return;
             }
-
-            Task completed = await Task.WhenAny(pending, Task.Delay(acceptTimeout, cancellationToken)).ConfigureAwait(false);
-            if (completed == pending)
-            {
-                UmbraBridgeRequest? request;
-                try
-                {
-                    request = await pending.ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    // The pending accept faulted (e.g. the listener was
-                    // closed under us). Retry; the transport may need a
-                    // restart, which the next accept resolves via null.
-                    notify?.Invoke("bridge.accept.failed", new { type = ex.GetType().Name, message = ex.Message });
-                    if (cancellationToken.IsCancellationRequested)
-                        return;
-                    continue;
-                }
-
-                if (request is null)
-                {
-                    // The transport went away (e.g. StopAsync raced the
-                    // loop). Recreate it unless the server is stopping.
-                    if (cancellationToken.IsCancellationRequested || !restartTransport())
-                        return;
-                    continue;
-                }
-
-                _ = Task.Run(() => handle(request, cancellationToken), CancellationToken.None);
-                continue;
-            }
-
-            // The accept did not complete within the timeout: the transport
-            // stalled. Never issue a second accept on the same transport
-            // while one is still pending — abort it so the pending accept
-            // unblocks, observe it, then recreate the transport and resume.
-            notify?.Invoke("bridge.accept.stalled", new { timeout_ms = acceptTimeout.TotalMilliseconds });
-            try
-            {
-                abort();
-            }
-            catch
-            {
-                // Best effort; the transport is broken either way.
-            }
-
-            try
-            {
-                // An aborted transport unblocks its pending accept quickly.
-                // Bound the wait so a stubborn transport can never wedge the
-                // pump again, and observe the task so no fault is unobserved.
-                _ = pending.ContinueWith(
-                    static t => _ = t.Exception,
-                    CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-                await pending.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
-            }
-            catch
-            {
-                // The aborted accept surfaced its fault; expected during
-                // stall recovery.
-            }
-
-            if (cancellationToken.IsCancellationRequested)
-                return;
-
-            if (!restartTransport())
-                return;
         }
     }
 }

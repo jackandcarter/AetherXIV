@@ -24,6 +24,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <d3d9.h>
+#include <wincodec.h>
 #include <cstdio>
 
 #include "imgui.h"
@@ -288,7 +289,10 @@ namespace
     bool DevUiEnabled = false;
     bool DevBridgeEnabled = false;
     bool DevBridgeControlKnown = false;
-    bool ShowPluginExecutionWarning = false;
+    bool ShowPluginStatusNotifications = true;
+    struct PluginStatusToast { char message[1024]{}; DWORD started = 0; int tone = 0; };
+    PluginStatusToast PluginStatusToasts[4]{};
+    unsigned int NextPluginStatusToast = 0;
     int UmbraThemeIndex = 0;
     int UmbraSettingsSection = 0;
     int UmbraDeveloperLogLevel = 1;
@@ -770,8 +774,40 @@ namespace
         return WriteProtectedBytes(source, patch, sizeof(patch));
     }
 
+    // Installation alone does not prove this model feeds the visible menu.
+    // Capture call counts and last model/control identity without mutating it.
+    volatile LONG LegacyMenuLabelCalls = 0;
+    volatile LONG LegacyMenuEnableCalls = 0;
+    volatile LONG LegacyMenuSelectionCalls = 0;
+    volatile LONG LegacyMenuLastModel = 0;
+    volatile LONG LegacyMenuLastRow = -1;
+    volatile LONG LegacyMenuLastSelection = -1;
+
+    void LogLegacyMenuActivity()
+    {
+        static DWORD lastCheck = 0;
+        static LONG lastLabels = -1, lastEnables = -1, lastSelections = -1;
+        DWORD now = GetTickCount();
+        if (lastCheck != 0 && now - lastCheck < 5000)
+            return;
+        lastCheck = now;
+        LONG labels = InterlockedCompareExchange(&LegacyMenuLabelCalls, 0, 0);
+        LONG enables = InterlockedCompareExchange(&LegacyMenuEnableCalls, 0, 0);
+        LONG selections = InterlockedCompareExchange(&LegacyMenuSelectionCalls, 0, 0);
+        if (labels == lastLabels && enables == lastEnables && selections == lastSelections)
+            return;
+        lastLabels = labels; lastEnables = enables; lastSelections = selections;
+        AppendDx9LogUInt(L"umbra_menu_label_calls", labels);
+        AppendDx9LogUInt(L"umbra_menu_enable_calls", enables);
+        AppendDx9LogUInt(L"umbra_menu_selection_calls", selections);
+        AppendDx9LogHex(L"umbra_menu_last_model", InterlockedCompareExchange(&LegacyMenuLastModel, 0, 0));
+        AppendDx9LogUInt(L"umbra_menu_last_row", InterlockedCompareExchange(&LegacyMenuLastRow, 0, 0));
+        AppendDx9LogUInt(L"umbra_menu_last_selection", InterlockedCompareExchange(&LegacyMenuLastSelection, 0, 0));
+    }
+
     int __cdecl HookedLegacyMainMenuLabel(char* output, unsigned int outputChars, const char* format, int label)
     {
+        InterlockedIncrement(&LegacyMenuLabelCalls);
         const char* replacement = nullptr;
         if (label == LegacyUmbraLabel)
             replacement = "Umbra";
@@ -805,15 +841,19 @@ namespace
         void* field,
         BYTE* enabled)
     {
-        if (index < 2)
-        {
-            if (enabled != nullptr)
-                *enabled = 1;
-            return;
-        }
+        InterlockedIncrement(&LegacyMenuEnableCalls);
+        InterlockedExchange(&LegacyMenuLastModel, static_cast<LONG>(reinterpret_cast<ULONG_PTR>(model)));
+        InterlockedExchange(&LegacyMenuLastRow, index);
+        // 1.23b RVA 0x545ce0 writes a boolean field on model row `index`.
+        // It is not a query of the original command table. The name setter
+        // above has already created the extended rows, so preserve their indices
+        // and always commit MainEnable, including for the two Umbra entries.
+        BYTE umbraEnabled = 1;
+        if (index >= 0 && index < 2)
+            enabled = &umbraEnabled;
 
         if (OriginalLegacyMainMenuEnable != nullptr)
-            OriginalLegacyMainMenuEnable(model, index - 2, field, enabled);
+            OriginalLegacyMainMenuEnable(model, index, field, enabled);
     }
 
     void OpenUmbraFromLegacyMainMenu(bool settings)
@@ -831,6 +871,8 @@ namespace
         DWORD value,
         DWORD index)
     {
+        InterlockedIncrement(&LegacyMenuSelectionCalls);
+        InterlockedExchange(&LegacyMenuLastSelection, index);
         void* mainMenuControl = nullptr;
         if (self != nullptr)
             mainMenuControl = *reinterpret_cast<void**>(static_cast<BYTE*>(self) + 0x33c);
@@ -1138,8 +1180,12 @@ namespace
         UmbraDockLastInteractionTicks = GetTickCount();
     }
 
+    #include "UmbraLuaMainMenu.inl"
+    #include "UmbraMapObservation.inl"
+
     void UpdateOverlayInput()
     {
+        LuaMainMenu::Poll();
         ResolveUser32Input();
 
         MouseClicked = false;
@@ -1165,12 +1211,6 @@ namespace
             OpenUmbraPluginManagerSettings();
         if (IsKeyPressed(VK_F9, LastF9Down))
             OpenUmbraPluginManagerSettings();
-        if (IsKeyPressed(VK_F10, LastF10Down))
-        {
-            PluginInstallerOpen = !PluginInstallerOpen;
-            UmbraDockExpanded = true;
-            UmbraDockLastInteractionTicks = GetTickCount();
-        }
         if (IsKeyPressed(VK_F11, LastF11Down) && DevUiEnabled)
         {
             UmbraDeveloperBarVisible = !UmbraDeveloperBarVisible;
@@ -2334,7 +2374,7 @@ namespace
                     UmbraDeveloperBarVisible = false;
                 ImGui::EndMenu();
             }
-            ImGui::TextColored(theme.mutedText, "Umbra API 2.0");
+            ImGui::TextColored(theme.mutedText, "Umbra API 2.1");
             ImGui::SameLine();
             ImGui::TextColored(ManagedRenderBridge ? theme.accent : theme.warning, "%s", ManagedRenderBridge ? "managed host ready" : "native host / managed waiting");
             if (UmbraDeveloperMetricsVisible)
@@ -2575,7 +2615,7 @@ namespace
             }
             UmbraAppearanceDirty = true;
         }
-        ImGui::Checkbox("Show framework readiness notifications", &ShowPluginExecutionWarning);
+        ImGui::Checkbox("Show plugin status notifications", &ShowPluginStatusNotifications);
         ImGui::Separator();
         ImGui::TextColored(theme.accent, "Plugin manager");
         ImGui::TextWrapped("The library uses responsive columns and enforces minimum and maximum window sizes. Interface scale is controlled per appearance profile.");
@@ -2670,7 +2710,7 @@ namespace
             ImGui::PushFont(nullptr, 21.0f);
             ImGui::TextUnformatted("Settings");
             ImGui::PopFont();
-            ImGui::TextColored(theme.mutedText, "Umbra API 2.0");
+            ImGui::TextColored(theme.mutedText, "Umbra API 2.1");
             ImGui::Spacing();
             if (DrawUmbraSettingsNavigation("##SettingsGeneral", "General", 6, UmbraSettingsSection == 0)) UmbraSettingsSection = 0;
             if (DrawUmbraSettingsNavigation("##SettingsAppearance", "Appearance", 13, UmbraSettingsSection == 1)) UmbraSettingsSection = 1;
@@ -2794,7 +2834,18 @@ namespace
         LONG updateCount = InterlockedCompareExchange(&PluginUpdateCount, 0, 0);
         DWORD updateStarted = static_cast<DWORD>(
             InterlockedCompareExchange(&PluginUpdateToastStartTicks, 0, 0));
-        if (updateCount > 0
+        if (ShowPluginStatusNotifications)
+        {
+            for (const auto& toast : PluginStatusToasts)
+            {
+                if (!toast.started || now - toast.started > ToastVisibleMs) continue;
+                char id[64]{};
+                std::snprintf(id, sizeof(id), "##PluginStatus%u", static_cast<unsigned int>(&toast - PluginStatusToasts));
+                DrawUmbraImGuiToast(id, toast.message, toast.tone == 3 || toast.tone == 4 ? theme.warning : theme.accent, x, y);
+                y -= 50.0f;
+            }
+        }
+        if (ShowPluginStatusNotifications && updateCount > 0
             && updateStarted != 0
             && now - updateStarted <= ToastVisibleMs)
         {
@@ -2824,11 +2875,6 @@ namespace
         DWORD startupElapsed = now - OverlayStartTicks;
         if (startupElapsed <= ToastVisibleMs)
         {
-            if (ShowPluginExecutionWarning)
-            {
-                DrawUmbraImGuiToast("##UmbraToastPlugins", "Plugin execution disabled", theme.warning, x, y);
-                y -= 50.0f;
-            }
             DrawUmbraImGuiToast(
                 "##UmbraToastNative",
                 "Native DX9 UI active",
@@ -2836,7 +2882,10 @@ namespace
                 x,
                 y);
             y -= 50.0f;
-            DrawUmbraImGuiToast("##UmbraToastReady", "Umbra framework ready", theme.accent, x, y);
+            DrawUmbraImGuiToast("##UmbraToastReady",
+                InterlockedCompareExchange(&ManagedRenderBridgeReadyLogged, 0, 0) != 0
+                    ? "Umbra framework ready" : "Umbra managed framework starting",
+                theme.accent, x, y);
         }
     }
 
@@ -2911,6 +2960,8 @@ namespace
         return result;
     }
 
+#include "UmbraPluginImages.inl"
+
     bool RenderUmbraImGui(IDirect3DDevice9* device, const D3DVIEWPORT9& viewport)
     {
         const bool diagnoseFirstFrame =
@@ -2923,6 +2974,7 @@ namespace
         if (diagnoseFirstFrame)
             AppendDx9LogLiteral(L"umbra_imgui_first_frame_stage=initialized");
 
+        PluginImages::SetDevice(device);
         UpdateOverlayInput();
         ConfigureUmbraImGuiStyle();
         if (diagnoseFirstFrame)
@@ -2973,7 +3025,52 @@ namespace
         return true;
     }
 
-    void RenderUmbraOverlay(IDirect3DDevice9* device)
+    void RenderUmbraOverlayContents(IDirect3DDevice9* device);
+
+    void RenderUmbraOverlay(IDirect3DDevice9* device, IDirect3DSwapChain9* swapChain = nullptr)
+    {
+        if (!device) return;
+        IDirect3DSurface9* backbuffer = nullptr;
+        HRESULT acquired = swapChain
+            ? swapChain->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &backbuffer)
+            : device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+        if (FAILED(acquired) || !backbuffer) return;
+        D3DSURFACE_DESC description{};
+        D3DVIEWPORT9 previousViewport{};
+        IDirect3DSurface9* targets[4]{};
+        IDirect3DSurface9* depth = nullptr;
+        D3DCAPS9 capabilities{};
+        if (FAILED(backbuffer->GetDesc(&description)) || FAILED(device->GetViewport(&previousViewport))
+            || FAILED(device->GetDeviceCaps(&capabilities))) { backbuffer->Release(); return; }
+        DWORD targetCount = capabilities.NumSimultaneousRTs < 4 ? capabilities.NumSimultaneousRTs : 4;
+        for (DWORD i = 0; i < targetCount; ++i) device->GetRenderTarget(i, &targets[i]);
+        device->GetDepthStencilSurface(&depth);
+        device->SetDepthStencilSurface(nullptr);
+        for (DWORD i = 1; i < targetCount; ++i) device->SetRenderTarget(i, nullptr);
+        D3DVIEWPORT9 viewport{0, 0, description.Width, description.Height, 0.0f, 1.0f};
+        if (SUCCEEDED(device->SetRenderTarget(0, backbuffer)) && SUCCEEDED(device->SetViewport(&viewport)))
+        {
+            // Present occurs outside the game's scene. Do not inherit its final
+            // offscreen render target or 1x1 post-processing viewport.
+            if (SUCCEEDED(device->BeginScene()))
+            {
+                RenderUmbraOverlayContents(device);
+                if (OriginalEndScene) OriginalEndScene(device);
+                else device->EndScene();
+            }
+        }
+        for (DWORD i = 0; i < targetCount; ++i)
+        {
+            device->SetRenderTarget(i, targets[i]);
+            if (targets[i]) targets[i]->Release();
+        }
+        device->SetDepthStencilSurface(depth);
+        if (depth) depth->Release();
+        device->SetViewport(&previousViewport);
+        backbuffer->Release();
+    }
+
+    void RenderUmbraOverlayContents(IDirect3DDevice9* device)
     {
         if (device == nullptr)
             return;
@@ -3278,7 +3375,7 @@ namespace
         IDirect3DDevice9* device = nullptr;
         if (self != nullptr && SUCCEEDED(self->GetDevice(&device)) && device != nullptr)
         {
-            RenderUmbraOverlay(device);
+            RenderUmbraOverlay(device, self);
             device->Release();
         }
 
@@ -4051,6 +4148,39 @@ namespace
         return *receivedBytes > 0;
     }
 
+    void BuildMapObservationJson(char* body, DWORD capacity)
+    {
+        MapObservation::Snapshot observation{};
+        if (!MapObservation::Read(&observation))
+        {
+            AppendAnsi(body, capacity, "{\"available\":false,\"active_control_verified\":false}");
+            return;
+        }
+        AppendAnsi(body, capacity, "{\"available\":true,\"active_control_verified\":false,\"control_address\":\"");
+        AppendAnsiHex(body, capacity, observation.control);
+        AppendAnsi(body, capacity, "\",\"sequence\":");
+        AppendAnsiUInt(body, capacity, observation.sequence);
+        AppendAnsi(body, capacity, ",\"age_ms\":");
+        AppendAnsiUInt(body, capacity, GetTickCount() - observation.ticks);
+        AppendAnsi(body, capacity, ",\"lifecycle\":{\"bound\":");
+        AppendAnsiUInt(body, capacity, LuaMainMenu::MapLifecycle::bound);
+        AppendAnsi(body, capacity, ",\"opened\":");
+        AppendAnsiUInt(body, capacity, LuaMainMenu::MapLifecycle::opened);
+        AppendAnsi(body, capacity, ",\"closed\":");
+        AppendAnsiUInt(body, capacity, LuaMainMenu::MapLifecycle::closed);
+        AppendAnsi(body, capacity, ",\"generation\":");
+        AppendAnsiUInt(body, capacity, LuaMainMenu::MapLifecycle::generation);
+        AppendAnsi(body, capacity, ",\"active\":");
+        AppendAnsi(body, capacity, LuaMainMenu::MapLifecycle::active ? "true}" : "false}");
+        AppendAnsi(body, capacity, ",\"hex\":\"");
+        char hex[MapObservation::Bytes * 2 + 1]{};
+        const char* digits = "0123456789abcdef";
+        for (DWORD i = 0; i < MapObservation::Bytes; ++i)
+        { hex[i * 2] = digits[observation.bytes[i] >> 4]; hex[i * 2 + 1] = digits[observation.bytes[i] & 15]; }
+        AppendAnsi(body, capacity, hex);
+        AppendAnsi(body, capacity, "\"}");
+    }
+
     void HandleNativeDevBridgeStatus(SOCKET client)
     {
         HMODULE mainModule = GetModuleHandleW(nullptr);
@@ -4276,6 +4406,12 @@ namespace
             SendNativeDevBridgeError(client, 401, "valid bridge token required");
         else if (StartsWithAscii(request, "GET /events"))
             SendNativeDevBridgeJson(client, 200, "{\"events\":[]}");
+        else if (StartsWithAscii(request, "GET /map/observation "))
+        {
+            char body[8192]{};
+            BuildMapObservationJson(body, sizeof(body));
+            SendNativeDevBridgeJson(client, 200, body);
+        }
         else if (StartsWithAscii(request, "POST /memory/peek "))
             HandleNativeDevBridgePeek(client, request, static_cast<DWORD>(requestLength));
         else if (StartsWithAscii(request, "POST /scan/pattern "))
@@ -4705,7 +4841,11 @@ namespace
         // delegates resolve. The managed bridge explicitly takes ownership of
         // the port immediately before it binds, so this fallback cannot race it.
         StartNativeDevBridgeMonitor(log);
-        StartLegacyMainMenuHook(log);
+        // The active 1.23b menu is MainMenuWidget Lua, not this legacy native
+        // 17-row model. Do not report an installed patch as menu integration.
+        AppendLogLiteral(log, LuaMainMenu::installed
+            ? L"umbra_main_menu_integration=lua_binding_installed"
+            : L"umbra_main_menu_integration=unsupported_client");
         StartDx9HookLayer(log);
         bool hosted = StartManagedFrameworkInProcess(log, frameworkPath);
         AppendLogLiteral(log, hosted ? L"umbra_framework_hosted=true" : L"umbra_framework_hosted=false");
@@ -5628,6 +5768,21 @@ extern "C" __declspec(dllexport) void __stdcall UmbraUiBadge(const char* text, i
             reinterpret_cast<LPTOP_LEVEL_EXCEPTION_FILTER>(CrashPreviousUnhandledFilter));
     }
 
+extern "C" __declspec(dllexport) void __stdcall UmbraUiPostNotification(const char* message, int tone)
+{
+    if (!IsManagedUiCallAvailable() || !ShowPluginStatusNotifications || !message) return;
+    auto& toast = PluginStatusToasts[NextPluginStatusToast++ % 4];
+    std::snprintf(toast.message, sizeof(toast.message), "%s", message);
+    toast.tone = tone;
+    toast.started = GetTickCount();
+}
+
+extern "C" __declspec(dllexport) int __stdcall UmbraUiImage(const wchar_t* path, float size)
+{
+    if (!IsManagedUiCallAvailable() || ManagedUiWindowDepth <= 0 || size < 1.0f || size > 512.0f) return 0;
+    return PluginImages::Draw(path, size) ? 1 : 0;
+}
+
 extern "C" __declspec(dllexport) void __stdcall UmbraUiArtwork(const char* seed, int icon, float size)
 {
     if (!IsManagedUiCallAvailable() || ManagedUiWindowDepth <= 0)
@@ -5688,6 +5843,14 @@ extern "C" __declspec(dllexport) void __stdcall UmbraUiSetPluginUpdateCount(int 
     }
 }
 
+extern "C" __declspec(dllexport) int __stdcall UmbraGetMapObservation(char* output, int capacity)
+{
+    if (!output || capacity < 8192) return 0;
+    output[0] = 0;
+    BuildMapObservationJson(output, static_cast<DWORD>(capacity));
+    return 1;
+}
+
 extern "C" BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH)
@@ -5700,11 +5863,9 @@ extern "C" BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID)
         // captured to the bootstrap log before wine's dialog.
         InstallCrashRecorder();
 
-        // The launcher injects this DLL while the client primary thread is
-        // suspended. Install the narrowly scoped legacy menu patch before
-        // returning from LoadLibrary so MainMenuWidget cannot build its
-        // persistent row model from the original 17-entry table.
-        StartLegacyMainMenuHook(INVALID_HANDLE_VALUE);
+        // Bind before the suspended game thread can load MainMenuWidget.
+        LuaMainMenu::Start();
+        MapObservation::Start();
 
         HANDLE thread = CreateThread(nullptr, 0, UmbraBootstrapThread, nullptr, 0, nullptr);
         if (thread != nullptr)

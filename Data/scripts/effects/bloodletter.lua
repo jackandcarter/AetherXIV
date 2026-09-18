@@ -15,7 +15,8 @@ end
 
 --Additional damage is 570 at level 50
 --https://ffxiv.gamerescape.com/w/index.php?title=Bloodletter&oldid=298020
-function onLose(owner, effect, actionContainer)
+function onLose(owner, effect, actionContainer, replacing)
     owner.SubtractMod(modifiersGlobal.RegenDown, 15);
-    owner.DelHP(570, actionContainer);
+    -- Refresh still removes the old DoT modifier, but is not expiration.
+    if not replacing then owner.DelHP(570, actionContainer); end
 end

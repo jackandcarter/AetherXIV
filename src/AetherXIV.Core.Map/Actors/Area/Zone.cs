@@ -21,6 +21,7 @@ namespace AetherXIV.Core.Map.actors.area
 
         public SharpNav.TiledNavMesh tiledNavMesh;
         public SharpNav.NavMeshQuery navMeshQuery;
+        internal string TravelGeometryRevision;
 
         public Int64 pathCalls;
         public Int64 prevPathCalls = 0;
@@ -41,8 +42,13 @@ namespace AetherXIV.Core.Map.actors.area
             {
                 try
                 {
+                    string meshPath = System.IO.Path.Combine(AppContext.BaseDirectory, "navmesh", zoneName + ".snb");
+                    string before = id == 170 ? Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.IO.File.ReadAllBytes(meshPath))) : null;
                     tiledNavMesh = utils.NavmeshUtils.LoadNavmesh(tiledNavMesh, zoneName + ".snb");
                     navMeshQuery = new SharpNav.NavMeshQuery(tiledNavMesh, 100);
+                    const string verified = "A2A3C91B5876FBC64F0DDD1349AA5FA4AF626760D3AEA7F7ABD5AD86D644056A";
+                    if (before == verified && Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.IO.File.ReadAllBytes(meshPath))) == verified)
+                        TravelGeometryRevision = verified;
 
                     if (tiledNavMesh != null && tiledNavMesh.Tiles[0].PolyCount > 0)
                         Program.Log.Info($"Loaded navmesh for {zoneName}");

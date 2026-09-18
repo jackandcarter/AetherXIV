@@ -32,7 +32,7 @@ public sealed record PatchApplyProgress(
 
 public sealed record PatchApplyResult(int AppliedPatchCount, IReadOnlyList<string> Messages)
 {
-    public bool Succeeded => AppliedPatchCount > 0;
+    public bool Succeeded => AppliedPatchCount >= 0; // Zero means already up to date.
 }
 
 public static class LegacyPatchApplier
@@ -62,16 +62,30 @@ public static class LegacyPatchApplier
         if (string.IsNullOrWhiteSpace(clientInstall.RootPath) || !Directory.Exists(clientInstall.RootPath))
             throw new InvalidOperationException("Client root does not exist.");
 
+        cancellationToken.ThrowIfCancellationRequested();
         EnsureClientRootWritable(clientInstall.RootPath);
+        string clientRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(clientInstall.RootPath));
+        using FileStream patchLock = new(Path.Combine(clientRoot, ".aetherxiv-patch.lock"),
+            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
 
-        if (!patchLibraryReport.IsPatchChainReady)
-            throw new InvalidOperationException("Patch library is not ready.");
-
+        PatchTransaction.Recover(clientRoot);
+        IReadOnlyList<PatchEntry> pending = GetPendingPatches(clientInstall.Inspect().Version);
         List<string> messages = new();
-        string clientRoot = Path.GetFullPath(clientInstall.RootPath);
-        IReadOnlyList<PatchFileReport> patches = patchLibraryReport.FileReports
-            .Where(report => report.PatchFileExists)
-            .ToArray();
+        if (pending.Count == 0)
+            return new PatchApplyResult(0, ["Client already reports the target versions."]);
+
+        if (patchLibraryReport.InspectionMode != PatchLibraryInspectionMode.Checksum)
+            throw new InvalidOperationException("Patch library must be verified by checksum before applying patches.");
+
+        // Select from the canonical manifest, never the order supplied by a report.
+        List<PatchFileReport> patches = new();
+        foreach (PatchEntry entry in pending)
+        {
+            PatchFileReport[] matches = patchLibraryReport.FileReports.Where(report => report.Entry == entry).ToArray();
+            if (matches.Length != 1 || !matches[0].IsPatchValid(PatchLibraryInspectionMode.Checksum))
+                throw new InvalidOperationException($"Required patch is missing or invalid: {entry.PatchFileName}.");
+            patches.Add(matches[0]);
+        }
         long totalBytes = patches.Sum(report => new FileInfo(report.PatchPath).Length);
         long completedBytes = 0;
 
@@ -97,7 +111,14 @@ public static class LegacyPatchApplier
 
             try
             {
-                ApplyPatchFile(clientRoot, patch.PatchPath, messages, progress, context, cancellationToken);
+                // A report can outlive the files it verified. Recheck before changing the client.
+                if (new FileInfo(patch.PatchPath).Length != patch.Entry.ExpectedSizeBytes
+                    || Crc32.ComputeFile(patch.PatchPath, cancellationToken) != patch.Entry.ExpectedCrc32)
+                    throw new InvalidDataException("Patch changed since library verification.");
+                string versionFile = patch.Entry.Repository == PatchRepository.Boot ? "boot.ver" : "game.ver";
+                ApplyTransactional(clientRoot, patch.PatchPath, messages, progress, context, cancellationToken,
+                    transaction => WriteVersion(clientRoot, versionFile, patch.Entry.ToVersion, transaction));
+                messages.Add($"Wrote {versionFile} {patch.Entry.ToVersion}.");
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -116,10 +137,6 @@ public static class LegacyPatchApplier
                 true);
         }
 
-        File.WriteAllText(Path.Combine(clientRoot, "boot.ver"), ClientVersionInfo.TargetBootVersion, Encoding.ASCII);
-        File.WriteAllText(Path.Combine(clientRoot, "game.ver"), ClientVersionInfo.TargetGameVersion, Encoding.ASCII);
-        messages.Add($"Wrote boot.ver {ClientVersionInfo.TargetBootVersion}.");
-        messages.Add($"Wrote game.ver {ClientVersionInfo.TargetGameVersion}.");
         progress?.Report(new PatchApplyProgress(
             patches.Count,
             patches.Count,
@@ -132,12 +149,45 @@ public static class LegacyPatchApplier
         return new PatchApplyResult(patches.Count, messages);
     }
 
+    public static IReadOnlyList<PatchEntry> GetPendingPatches(ClientVersionInfo version)
+    {
+        List<PatchEntry> pending = new();
+        foreach (PatchRepository repository in new[] { PatchRepository.Boot, PatchRepository.Game })
+        {
+            PatchEntry[] chain = LegacyPatchManifest.Entries.Where(entry => entry.Repository == repository).ToArray();
+            string? installed = repository == PatchRepository.Boot ? version.BootVersion : version.GameVersion;
+            if (installed == chain[^1].ToVersion)
+                continue;
+            int start = Array.FindIndex(chain, entry => entry.FromVersion == installed);
+            if (start < 0)
+                throw new InvalidOperationException($"Unknown {repository} client version '{installed ?? "missing"}'. Select a supported 1.x installation before patching.");
+            pending.AddRange(chain[start..]);
+        }
+        return pending;
+    }
+
+    private static void WriteVersion(string clientRoot, string name, string version, PatchTransaction transaction)
+    {
+        string path = ResolvePatchPath(clientRoot, name);
+        string temporaryPath = transaction.CreateTemporaryOutputPath();
+        try
+        {
+            File.WriteAllText(temporaryPath, version, Encoding.ASCII);
+            transaction.ReplaceFile(temporaryPath, path);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
+    }
+
     public static void EnsureClientRootWritable(string clientRoot)
     {
         if (string.IsNullOrWhiteSpace(clientRoot) || !Directory.Exists(clientRoot))
             throw new InvalidOperationException("Client root does not exist.");
 
-        string normalizedRoot = Path.GetFullPath(clientRoot);
+        string normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(clientRoot));
         string probePath = Path.Combine(normalizedRoot, $".aetherxiv-write-test-{Guid.NewGuid():N}.tmp");
         try
         {
@@ -175,7 +225,59 @@ public static class LegacyPatchApplier
         PatchApplyContext? context = null,
         CancellationToken cancellationToken = default)
     {
-        string normalizedRoot = Path.GetFullPath(clientRoot);
+        string normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(clientRoot));
+        EnsureClientRootWritable(normalizedRoot);
+        using FileStream patchLock = new(Path.Combine(normalizedRoot, ".aetherxiv-patch.lock"),
+            FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        PatchTransaction.Recover(normalizedRoot);
+        ApplyTransactional(normalizedRoot, patchPath, messages, progress, context, cancellationToken);
+    }
+
+    private static void ApplyTransactional(string root, string patchPath, IList<string>? messages,
+        IProgress<PatchApplyProgress>? progress, PatchApplyContext? context, CancellationToken cancellationToken,
+        Action<PatchTransaction>? finish = null)
+    {
+        PatchTransaction.Recover(root);
+        PatchTransaction transaction = new(root);
+        Log(root, $"Starting {Path.GetFileName(patchPath)} on {System.Runtime.InteropServices.RuntimeInformation.OSDescription}.");
+        try
+        {
+            ApplyPatchContents(root, patchPath, transaction, messages, progress, context, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            finish?.Invoke(transaction);
+            transaction.Commit();
+            Log(root, $"Committed {Path.GetFileName(patchPath)}.");
+        }
+        catch (Exception error)
+        {
+            Log(root, $"Failed {Path.GetFileName(patchPath)}: {error}");
+            try
+            {
+                PatchTransaction.Recover(root);
+                Log(root, "Restored files changed by the failed patch.");
+            }
+            catch (Exception recoveryError)
+            {
+                Log(root, $"Recovery incomplete: {recoveryError}");
+                throw new AggregateException("Patch failed and recovery could not finish. Close the game and retry; recovery backups have been retained.", error, recoveryError);
+            }
+            throw;
+        }
+    }
+
+    private static void Log(string root, string message)
+    {
+        try { File.AppendAllText(Path.Combine(root, ".aetherxiv-patch.log"), $"{DateTimeOffset.UtcNow:O} {message}{Environment.NewLine}"); }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+    }
+
+    private static void ApplyPatchContents(
+        string clientRoot, string patchPath, PatchTransaction transaction,
+        IList<string>? messages, IProgress<PatchApplyProgress>? progress,
+        PatchApplyContext? context, CancellationToken cancellationToken)
+    {
+        string normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(clientRoot));
         using FileStream stream = File.OpenRead(patchPath);
         PatchApplyContext localContext = context ?? new(
             1,
@@ -189,6 +291,9 @@ public static class LegacyPatchApplier
         if (!header.SequenceEqual(PatchMagic))
             throw new InvalidDataException("Invalid ZiPatch header.");
 
+        bool hasFileHeader = false;
+        uint expectedEntries = 0, expectedAddedDirectories = 0, expectedDeletedDirectories = 0;
+        uint entries = 0, addedDirectories = 0, deletedDirectories = 0;
         while (stream.Position < stream.Length)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -201,32 +306,51 @@ public static class LegacyPatchApplier
                 throw new EndOfStreamException("Unexpected end of patch chunk size.");
 
             uint chunkSize = BinaryPrimitives.ReadUInt32BigEndian(chunkSizeData);
-            string command = Encoding.ASCII.GetString(ReadExact(stream, 4));
-            using LimitedReadStream chunkBody = new(stream, chunkSize);
+            byte[] commandBytes = ReadExact(stream, 4);
+            string command = Encoding.ASCII.GetString(commandBytes);
+            if (!hasFileHeader && command != "FHDR")
+                throw new InvalidDataException("ZiPatch file header must be the first chunk.");
+            if (chunkSize > stream.Length - stream.Position - 4)
+                throw new EndOfStreamException("Patch chunk extends beyond the end of the archive.");
+            using LimitedReadStream chunkBody = new(stream, chunkSize,
+                initialCrc: Crc32.Update(0xFFFFFFFFu, commandBytes));
             switch (command)
             {
                 case "FHDR":
-                case "DIFF":
-                case "HIST":
+                    if (hasFileHeader || chunkSize != 20 || ReadUInt32BigEndian(chunkBody) != 0x0200)
+                        throw new InvalidDataException("Unsupported or duplicate ZiPatch file header.");
+                    string patchType = Encoding.ASCII.GetString(ReadExact(chunkBody, 4));
+                    if (patchType is not ("HIST" or "DIFF"))
+                        throw new InvalidDataException($"Unsupported ZiPatch type '{patchType}'.");
+                    expectedEntries = ReadUInt32BigEndian(chunkBody);
+                    expectedAddedDirectories = ReadUInt32BigEndian(chunkBody);
+                    expectedDeletedDirectories = ReadUInt32BigEndian(chunkBody);
+                    hasFileHeader = true;
+                    break;
                 case "APLY":
-                case "APFS":
+                    if (chunkSize != 12)
+                        throw new InvalidDataException("Invalid ZiPatch apply options.");
                     break;
                 case "ADIR":
-                    ExecuteDirectoryCreate(chunkBody, normalizedRoot, messages, progress, localContext);
+                    addedDirectories++;
+                    ExecuteDirectoryCreate(chunkBody, normalizedRoot, transaction, messages, progress, localContext);
                     break;
                 case "DLED":
                 case "DELD":
-                    ExecuteDirectoryDelete(chunkBody, normalizedRoot, messages, progress, localContext);
+                    deletedDirectories++;
+                    ExecuteDirectoryDelete(chunkBody, normalizedRoot, transaction, messages, progress, localContext);
                     break;
                 case "ETRY":
-                    ExecuteFileEntry(chunkBody, normalizedRoot, messages, progress, localContext, cancellationToken);
+                    entries++;
+                    ExecuteFileEntry(chunkBody, normalizedRoot, transaction, messages, progress, localContext, cancellationToken);
                     break;
                 default:
                     throw new InvalidDataException($"Unhandled ZiPatch command '{command}'.");
             }
 
             chunkBody.SkipRemaining();
-            ReadExact(stream, 4);
+            if (ReadUInt32BigEndian(stream) != chunkBody.Checksum)
+                throw new InvalidDataException($"ZiPatch checksum mismatch in {command} at offset {stream.Position}.");
 
             ReportProgress(
                 progress,
@@ -235,11 +359,15 @@ public static class LegacyPatchApplier
                 $"Reading {localContext.PatchFileName}: {FormatByteCount(stream.Position)}/{FormatByteCount(stream.Length)}",
                 false);
         }
+        if (!hasFileHeader || entries != expectedEntries
+            || addedDirectories != expectedAddedDirectories || deletedDirectories != expectedDeletedDirectories)
+            throw new InvalidDataException("ZiPatch archive is incomplete: chunk counts differ from its file header.");
     }
 
     private static void ExecuteDirectoryCreate(
         Stream stream,
         string clientRoot,
+        PatchTransaction transaction,
         IList<string>? messages,
         IProgress<PatchApplyProgress>? progress,
         PatchApplyContext context)
@@ -253,12 +381,13 @@ public static class LegacyPatchApplier
             return;
         }
 
-        Directory.CreateDirectory(directoryPath);
+        transaction.CreateDirectory(directoryPath);
     }
 
     private static void ExecuteDirectoryDelete(
         Stream stream,
         string clientRoot,
+        PatchTransaction transaction,
         IList<string>? messages,
         IProgress<PatchApplyProgress>? progress,
         PatchApplyContext context)
@@ -272,12 +401,13 @@ public static class LegacyPatchApplier
             return;
         }
 
-        Directory.Delete(directoryPath, true);
+        transaction.DeleteDirectory(directoryPath);
     }
 
     private static void ExecuteFileEntry(
         Stream input,
         string clientRoot,
+        PatchTransaction transaction,
         IList<string>? messages,
         IProgress<PatchApplyProgress>? progress,
         PatchApplyContext context,
@@ -286,154 +416,192 @@ public static class LegacyPatchApplier
         string filePath = ReadPatchPath(input, clientRoot);
         string displayPath = ToDisplayPath(clientRoot, filePath);
 
-        uint itemCount = ReadUInt32BigEndian(input);
-        uint? expectedFileSize = null;
-        byte[]? expectedHash = null;
-        byte[]? finalSourceHash = null;
-        byte finalEntryMode = 0;
-        uint finalPreviousFileSize = 0;
-        bool wrotePayload = false;
-
-        ReportProgress(
-            progress,
-            context,
-            input.Position,
-            $"Applying {displayPath} ({itemCount} chunk{(itemCount == 1 ? "" : "s")})",
-            false);
-
-        for (uint index = 0; index < itemCount; index++)
+        try
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            uint itemCount = ReadUInt32BigEndian(input);
+            if (itemCount == 0)
+                throw new InvalidDataException($"File entry has no items: {displayPath}.");
+            uint? expectedFileSize = null;
+            byte[]? expectedHash = null;
+            byte finalEntryMode = 0;
+            bool wrotePayload = false;
 
-            byte entryMode = ReadFourByteMode(input, "entry mode");
-            if (entryMode is not (0x41 or 0x44 or 0x4D))
-                throw new InvalidDataException($"Unknown ZiPatch entry mode 0x{entryMode:X2}.");
+            ReportProgress(
+                progress,
+                context,
+                input.Position,
+                $"Applying {displayPath} ({itemCount} chunk{(itemCount == 1 ? "" : "s")})",
+                false);
 
-            byte[] sourceHash = ReadExact(input, 0x14);
-            byte[] destinationHash = ReadExact(input, 0x14);
-
-            byte compressionMode = ReadFourByteMode(input, "compression mode");
-            uint compressedSize = ReadUInt32BigEndian(input);
-            uint previousFileSize = ReadUInt32BigEndian(input);
-            uint newFileSize = ReadUInt32BigEndian(input);
-
-            if (index == itemCount - 1)
+            for (uint index = 0; index < itemCount; index++)
             {
-                finalEntryMode = entryMode;
-                finalPreviousFileSize = previousFileSize;
-                finalSourceHash = sourceHash;
-                expectedFileSize = newFileSize;
-                expectedHash = destinationHash;
-            }
+                cancellationToken.ThrowIfCancellationRequested();
 
-            if (index != itemCount - 1 && compressedSize != 0)
-                throw new InvalidDataException($"Non-final ZiPatch entry contains file data: {displayPath}.");
+                byte entryMode = ReadFourByteMode(input, "entry mode");
+                if (entryMode is not (0x41 or 0x44 or 0x4D))
+                    throw new InvalidDataException($"Unknown ZiPatch entry mode 0x{entryMode:X2}.");
 
-            if (compressedSize == 0)
-                continue;
+                ReadExact(input, 0x14); // Historical source hash; payloads are complete replacement files.
+                byte[] destinationHash = ReadExact(input, 0x14);
 
-            string temporaryPath = CreateTemporaryOutputPath(filePath);
-            try
-            {
-                using (FileStream output = File.Create(temporaryPath))
+                byte compressionMode = ReadFourByteMode(input, "compression mode");
+                if (compressionMode is not (0x4E or 0x5A))
+                    throw new InvalidDataException($"Unknown ZiPatch compression mode 0x{compressionMode:X2}.");
+                uint compressedSize = ReadUInt32BigEndian(input);
+                ReadUInt32BigEndian(input); // Historical source size.
+                uint newFileSize = ReadUInt32BigEndian(input);
+
+                if (index == itemCount - 1)
                 {
-                    if (compressionMode == 0x4E)
-                    {
-                        using LimitedReadStream limitedInput = new(
-                            input,
-                            compressedSize,
-                            bytesRead => ReportProgress(
-                                progress,
-                                context,
-                                input.Position,
-                                $"Writing {displayPath}: {FormatByteCount(bytesRead)}/{FormatByteCount(compressedSize)} raw chunk {index + 1}/{itemCount}",
-                                false));
-                        CopyToWithCancellation(limitedInput, output, cancellationToken);
-                        limitedInput.SkipRemaining();
-                    }
-                    else if (compressionMode == 0x5A)
-                    {
-                        using LimitedReadStream limitedInput = new(
-                            input,
-                            compressedSize,
-                            bytesRead => ReportProgress(
-                                progress,
-                                context,
-                                input.Position,
-                                $"Writing {displayPath}: {FormatByteCount(bytesRead)}/{FormatByteCount(compressedSize)} compressed chunk {index + 1}/{itemCount}",
-                                false));
-                        using ZLibStream zlib = new(limitedInput, CompressionMode.Decompress);
-                        CopyToWithCancellation(zlib, output, cancellationToken);
-                        limitedInput.SkipRemaining();
-                    }
-                    else
-                    {
-                        throw new InvalidDataException($"Unknown ZiPatch compression mode 0x{compressionMode:X2}.");
-                    }
+                    finalEntryMode = entryMode;
+                    expectedFileSize = newFileSize;
+                    expectedHash = destinationHash;
                 }
 
-                ValidatePatchedFile(temporaryPath, displayPath, newFileSize, destinationHash);
-                File.Move(temporaryPath, filePath, true);
-                wrotePayload = true;
-            }
-            finally
-            {
-                if (File.Exists(temporaryPath))
-                    File.Delete(temporaryPath);
-            }
-        }
+                if (index != itemCount - 1 && compressedSize != 0)
+                    throw new InvalidDataException($"Non-final ZiPatch entry contains file data: {displayPath}.");
 
-        // Mode 0x44 is the ZiPatch delete form when the terminal item has
-        // no body and transitions a real source file to size zero.  Both the
-        // earlier community implementations skip body-less items, but retail
-        // patch D2010.09.19.0000 uses exactly
-        // this record shape for thousands of removals.
-        bool deleteFile = finalEntryMode == 0x44
-            && !wrotePayload
-            && expectedFileSize == 0
-            && finalPreviousFileSize != 0;
-        if (deleteFile)
+                if (compressedSize == 0)
+                    continue;
+
+                transaction.CreateDirectory(Path.GetDirectoryName(filePath)!);
+                string temporaryPath = transaction.CreateTemporaryOutputPath();
+                try
+                {
+                    using (FileStream output = File.Create(temporaryPath))
+                    {
+                        if (compressionMode == 0x4E)
+                        {
+                            using LimitedReadStream limitedInput = new(
+                                input,
+                                compressedSize,
+                                bytesRead => ReportProgress(
+                                    progress,
+                                    context,
+                                    input.Position,
+                                    $"Writing {displayPath}: {FormatByteCount(bytesRead)}/{FormatByteCount(compressedSize)} raw chunk {index + 1}/{itemCount}",
+                                    false));
+                            CopyToWithCancellation(limitedInput, output, newFileSize, cancellationToken);
+                            limitedInput.SkipRemaining();
+                        }
+                        else if (compressionMode == 0x5A)
+                        {
+                            using LimitedReadStream limitedInput = new(
+                                input,
+                                compressedSize,
+                                bytesRead => ReportProgress(
+                                    progress,
+                                    context,
+                                    input.Position,
+                                    $"Writing {displayPath}: {FormatByteCount(bytesRead)}/{FormatByteCount(compressedSize)} compressed chunk {index + 1}/{itemCount}",
+                                    false));
+                            using ZLibStream zlib = new(limitedInput, CompressionMode.Decompress);
+                            CopyToWithCancellation(zlib, output, newFileSize, cancellationToken);
+                            limitedInput.SkipRemaining();
+                        }
+                        else
+                        {
+                            throw new InvalidDataException($"Unknown ZiPatch compression mode 0x{compressionMode:X2}.");
+                        }
+                    }
+
+                    ValidatePatchedFile(temporaryPath, displayPath, newFileSize, destinationHash);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    transaction.ReplaceFile(temporaryPath, filePath);
+                    wrotePayload = true;
+                }
+                finally
+                {
+                    if (File.Exists(temporaryPath))
+                        File.Delete(temporaryPath);
+                }
+            }
+
+            // Mode 0x44 is the ZiPatch delete form when the terminal item has
+            // no body and transitions a source file to size zero. Retail patch
+            // D2010.09.19.0000 uses this shape for thousands of removals.
+            bool deleteFile = finalEntryMode == 0x44
+                && !wrotePayload
+                && expectedFileSize == 0;
+            if (deleteFile)
+            {
+                if (File.Exists(filePath))
+                {
+                    // HIST records describe past file states, not a required current
+                    // source. Meteor deletes regardless of source hash. Preserve the
+                    // original in the transaction rather than rejecting older clients.
+                    transaction.DeleteFile(filePath);
+                }
+                messages?.Add($"Deleted file: {filePath}");
+                return;
+            }
+
+            if (!wrotePayload && expectedFileSize == 0)
+            {
+                transaction.CreateDirectory(Path.GetDirectoryName(filePath)!);
+                string temporaryPath = transaction.CreateTemporaryOutputPath();
+                try
+                {
+                    File.WriteAllBytes(temporaryPath, []);
+                    ValidatePatchedFile(temporaryPath, displayPath, 0, expectedHash!);
+                    transaction.ReplaceFile(temporaryPath, filePath);
+                }
+                finally
+                {
+                    if (File.Exists(temporaryPath))
+                        File.Delete(temporaryPath);
+                }
+            }
+            if (expectedFileSize.HasValue && expectedHash is not null)
+                ValidatePatchedFile(filePath, displayPath, expectedFileSize.Value, expectedHash);
+        }
+        catch (Exception error)
         {
-            if (File.Exists(filePath))
-            {
-                ValidateSourceFileForDeletion(
-                    filePath,
-                    displayPath,
-                    finalPreviousFileSize,
-                    finalSourceHash!);
-                File.Delete(filePath);
-            }
-            messages?.Add($"Deleted file: {filePath}");
-            return;
+            Log(clientRoot, $"File entry {displayPath}: {error.Message}");
+            throw;
         }
-
-        if (wrotePayload && expectedFileSize.HasValue && expectedHash is not null)
-            ValidatePatchedFile(filePath, displayPath, expectedFileSize.Value, expectedHash);
     }
 
     private static string ReadPatchPath(Stream stream, string clientRoot)
     {
         uint pathSize = ReadUInt32BigEndian(stream);
         string relativePath = Encoding.UTF8.GetString(ReadExact(stream, checked((int)pathSize)));
-        string[] pathParts = relativePath
-            .Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
-        string fullPath = Path.GetFullPath(Path.Combine([clientRoot, .. pathParts]));
-
-        if (!fullPath.StartsWith(clientRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal)
-            && !string.Equals(fullPath, clientRoot, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException($"Patch path escapes client root: {relativePath}");
-        }
-
-        return fullPath;
+        return ResolvePatchPath(clientRoot, relativePath);
     }
 
-    private static string CreateTemporaryOutputPath(string filePath)
+    internal static string ResolvePatchPath(string clientRoot, string relativePath)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
-        return Path.Combine(
-            Path.GetDirectoryName(filePath)!,
-            $".{Path.GetFileName(filePath)}.aetherxiv-{Guid.NewGuid():N}.tmp");
+        string[] parts = relativePath.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0 || parts[0].StartsWith(".aetherxiv-", StringComparison.OrdinalIgnoreCase)
+            || relativePath.StartsWith('/') || relativePath.StartsWith('\\')
+            || parts.Any(part => part is "." or ".." || part.IndexOfAny([':', '\0', '*', '?', '<', '>', '|', '"']) >= 0 || part.EndsWith('.') || part.EndsWith(' ')))
+            throw new InvalidDataException($"Invalid patch path: {relativePath}");
+
+        // The archives describe Windows paths, even when applied on Linux or macOS.
+        // Reuse existing casing so that an update does not create a second data tree.
+        string path = clientRoot;
+        foreach (string part in parts)
+        {
+            if (Directory.Exists(path))
+            {
+                string[] matches = Directory.EnumerateFileSystemEntries(path)
+                    .Where(entry => string.Equals(Path.GetFileName(entry), part, StringComparison.OrdinalIgnoreCase))
+                    .Take(2).ToArray();
+                if (matches.Length > 1)
+                    throw new InvalidDataException($"Ambiguous client path: {relativePath}");
+                path = matches.Length == 1 ? matches[0] : Path.Combine(path, part);
+            }
+            else
+            {
+                path = Path.Combine(path, part);
+            }
+            // Never follow a client subdirectory or file link outside the selected tree.
+            if (new FileInfo(path).LinkTarget is not null
+                || (File.Exists(path) || Directory.Exists(path))
+                    && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException($"Patch path contains a symbolic link or reparse point: {relativePath}");
+        }
+        return path;
     }
 
     private static void ValidatePatchedFile(
@@ -453,27 +621,6 @@ public static class LegacyPatchApplier
             byte[] actualHash = SHA1.HashData(verifyInput);
             if (!actualHash.SequenceEqual(expectedHash))
                 throw new InvalidDataException($"Patched file hash differs from manifest for {displayPath}.");
-        }
-    }
-
-    private static void ValidateSourceFileForDeletion(
-        string filePath,
-        string displayPath,
-        uint expectedFileSize,
-        byte[] expectedHash)
-    {
-        long actualSize = new FileInfo(filePath).Length;
-        if (actualSize != expectedFileSize)
-            throw new InvalidDataException(
-                $"File scheduled for deletion differs from the patch source for {displayPath}: expected size {expectedFileSize}, got {actualSize}.");
-
-        if (!IsAllZero(expectedHash))
-        {
-            using FileStream verifyInput = File.OpenRead(filePath);
-            byte[] actualHash = SHA1.HashData(verifyInput);
-            if (!actualHash.SequenceEqual(expectedHash))
-                throw new InvalidDataException(
-                    $"File scheduled for deletion differs from the patch source for {displayPath}.");
         }
     }
 
@@ -512,9 +659,10 @@ public static class LegacyPatchApplier
         }
     }
 
-    private static void CopyToWithCancellation(Stream input, Stream output, CancellationToken cancellationToken)
+    private static void CopyToWithCancellation(Stream input, Stream output, uint expectedSize, CancellationToken cancellationToken)
     {
         byte[] buffer = new byte[128 * 1024];
+        long written = 0;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -522,6 +670,9 @@ public static class LegacyPatchApplier
             if (read == 0)
                 return;
 
+            written += read;
+            if (written > expectedSize)
+                throw new InvalidDataException("Patch payload exceeds its declared output size.");
             output.Write(buffer, 0, read);
         }
     }
@@ -676,12 +827,16 @@ internal sealed class LimitedReadStream : Stream
     private readonly Action<long>? onRead;
     private long remainingBytes;
     private long totalBytesRead;
+    private uint? crc;
 
-    public LimitedReadStream(Stream inner, long byteLimit, Action<long>? onRead = null)
+    public uint? Checksum => crc.HasValue ? ~crc.Value : null;
+
+    public LimitedReadStream(Stream inner, long byteLimit, Action<long>? onRead = null, uint? initialCrc = null)
     {
         this.inner = inner;
         this.onRead = onRead;
         remainingBytes = byteLimit;
+        crc = initialCrc;
     }
 
     public override bool CanRead => true;
@@ -694,7 +849,7 @@ internal sealed class LimitedReadStream : Stream
 
     public override long Position
     {
-        get => totalBytesRead;
+        get => inner.Position;
         set => throw new NotSupportedException();
     }
 
@@ -711,6 +866,8 @@ internal sealed class LimitedReadStream : Stream
         int read = inner.Read(buffer, offset, toRead);
         remainingBytes -= read;
         totalBytesRead += read;
+        if (crc.HasValue)
+            crc = Crc32.Update(crc.Value, buffer.AsSpan(offset, read));
         if (read > 0)
             onRead?.Invoke(totalBytesRead);
 

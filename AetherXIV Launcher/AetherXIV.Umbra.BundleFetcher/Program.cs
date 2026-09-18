@@ -26,7 +26,7 @@ if (args.Length >= 1 && string.Equals(args[0], "--stamp-local", StringComparison
     }
 
     string localFrameworkRoot = Path.GetFullPath(args[1]);
-    string localVersion = args.Length == 3 ? args[2].Trim() : "2.0.0";
+    string localVersion = args.Length == 3 ? args[2].Trim() : "2.1.0";
     try
     {
         StampLocalBundle(localFrameworkRoot, localVersion);

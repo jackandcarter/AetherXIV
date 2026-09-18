@@ -70,6 +70,15 @@ public static class UmbraPluginInstaller
         string temporaryArchivePath = archivePath + $".{Guid.NewGuid():N}.download";
         try
         {
+            if (Uri.TryCreate(entry.DownloadUrl, UriKind.Absolute, out Uri? localPackage) && localPackage.IsFile)
+            {
+                await using (FileStream localSource = File.OpenRead(localPackage.LocalPath))
+                await using (FileStream destination = File.Create(temporaryArchivePath))
+                    await CopyExactAsync(localSource, destination, entry.SizeBytes, cancellationToken);
+                ValidateArchive(entry, temporaryArchivePath);
+                File.Move(temporaryArchivePath, archivePath, overwrite: true);
+                return archivePath;
+            }
             using HttpClient client = new() { Timeout = TimeSpan.FromMinutes(2) };
             using HttpResponseMessage response = await client.GetAsync(
                 entry.DownloadUrl,
@@ -86,8 +95,8 @@ public static class UmbraPluginInstaller
             await using Stream source = await response.Content.ReadAsStreamAsync(cancellationToken);
             await using (FileStream destination = File.Create(temporaryArchivePath))
                 await CopyExactAsync(source, destination, entry.SizeBytes, cancellationToken);
+            ValidateArchive(entry, temporaryArchivePath);
             File.Move(temporaryArchivePath, archivePath, overwrite: true);
-            ValidateArchive(entry, archivePath);
             return archivePath;
         }
         finally

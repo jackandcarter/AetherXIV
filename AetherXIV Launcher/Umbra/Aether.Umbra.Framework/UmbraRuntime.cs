@@ -40,6 +40,8 @@ public sealed class UmbraRuntime : IDisposable
         Commands = new UmbraCommandService(log);
         Chat = new UmbraChatService(log);
         ActorAppearance = new UmbraActorAppearanceService();
+        Maps = new UmbraMapService();
+        Travel = new UmbraTravelService();
         systemPlugins = new UmbraSystemPluginHost(this);
         Plugins = new UmbraThirdPartyPluginHost(this);
         RenderBridge = new UmbraRenderBridge(this);
@@ -64,9 +66,15 @@ public sealed class UmbraRuntime : IDisposable
 
     public UmbraDevBridgeService DevBridge { get; }
 
+    internal UmbraNotificationService Notifications { get; } = new();
+
     internal UmbraCommandService Commands { get; }
 
     internal UmbraChatService Chat { get; }
+
+    internal UmbraMapService Maps { get; }
+
+    internal UmbraTravelService Travel { get; }
 
     internal UmbraActorAppearanceService ActorAppearance { get; }
 
@@ -246,6 +254,24 @@ public sealed class UmbraRuntime : IDisposable
         finally
         {
             pluginMutationGate.Release();
+        }
+    }
+
+    internal async Task<UmbraPluginActionResult> AddLocalPluginLocationAsync(bool folder)
+    {
+        try
+        {
+            string? location = await UmbraPluginLocationPicker.PickAsync(folder).ConfigureAwait(false);
+            if (location is null)
+                return UmbraPluginActionResult.Success("No location added.");
+            string catalog = await Task.Run(() => UmbraLocalPluginCatalog.Create(
+                location, Options.CacheDirectory, shutdown.Token), shutdown.Token).ConfigureAwait(false);
+            return await AddCustomRepositoryAsync(catalog).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("umbra_local_plugin_discovery_failed", ex);
+            return UmbraPluginActionResult.Failure($"Local plugin discovery failed: {ex.Message}");
         }
     }
 

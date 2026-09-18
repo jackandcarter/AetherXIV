@@ -43,20 +43,23 @@ while (($# > 0)); do
       INSTALL_DEPENDENCIES=1
       ;;
     *)
-      echo "Usage: $0 [Debug|Release] [--launcher-only]" >&2
+      echo "Usage: $0 [Release] [--scope core|full] [--launcher-only]" >&2
       exit 2
       ;;
   esac
   shift
 done
+if [[ "${CONFIGURATION}" != Release ]]; then
+  echo "macOS packages are Release-only; use Release." >&2
+  exit 2
+fi
 if (( INSTALL_DEPENDENCIES )); then
   "${ROOT_DIR}/tools/MacOS/install-build-dependencies.sh"
 fi
 if [[ "${BUILD_SCOPE}" == core ]]; then
   exec "${ROOT_DIR}/tools/MacOS/build-core-only.sh" "${CONFIGURATION}"
 fi
-case "${CONFIGURATION}" in Debug|Release) ;; *) echo "Configuration must be Debug or Release." >&2; exit 2 ;; esac
-FINAL_OUTPUT_ROOT="${ROOT_DIR}/bin/build/${CONFIGURATION}/MacOS"
+FINAL_OUTPUT_ROOT="${ROOT_DIR}/bin/build/Release/MacOS"
 if [[ "${BUILD_SCOPE}" == launcher ]]; then
   OUTPUT_ROOT="${ROOT_DIR}/bin/build/${CONFIGURATION}/.MacOS.launcher.staging"
 else
@@ -66,7 +69,7 @@ STAGING_ROOT="${OUTPUT_ROOT}/.components"
 SERVER_RID="${AETHERXIV_SERVER_RID:-osx-arm64}"
 LAUNCHER_RID="${AETHERXIV_LAUNCHER_RID:-${SERVER_RID}}"
 UMBRA_RID="${AETHERXIV_UMBRA_RID:-win-x86}"
-UMBRA_VERSION="${AETHERXIV_UMBRA_VERSION:-2.0.0}"
+UMBRA_VERSION="${AETHERXIV_UMBRA_VERSION:-2.1.0}"
 CODESIGN_IDENTITY="${AETHERXIV_CODESIGN_IDENTITY:--}"
 COMPATIBILITY_RUNTIME_ROOT="${AETHERXIV_WINE_RUNTIME_ROOT:-}"
 LAUNCHER_ROOT="${ROOT_DIR}/AetherXIV Launcher"

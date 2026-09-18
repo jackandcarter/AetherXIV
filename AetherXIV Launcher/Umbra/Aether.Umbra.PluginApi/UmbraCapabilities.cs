@@ -17,11 +17,19 @@ namespace Aether.Umbra.PluginApi;
 
 public static class UmbraCapabilities
 {
+    public const string NotificationsPost = "notifications.post";
+
     public const string CommandRegistration = "commands.register";
 
     public const string ChatPrint = "chat.print";
 
     public const string ChatSubmit = "chat.submit";
+
+    public const string MapRead = "client.map.read";
+
+    public const string TravelPreview = "travel.preview";
+
+    public const string TravelWarp = "travel.warp";
 
     public const string ActorAppearanceRead = "client.appearance.read";
 }

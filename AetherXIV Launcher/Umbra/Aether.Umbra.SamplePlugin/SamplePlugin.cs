@@ -17,16 +17,18 @@ using Aether.Umbra.PluginApi;
 
 namespace Aether.Umbra.SamplePlugin;
 
-public sealed class SamplePlugin : IUmbraPlugin
+public sealed class SamplePlugin : IUmbraPlugin, IUmbraPluginUi
 {
     private IUmbraPluginContext? context;
     private TimeSpan elapsed;
-    private bool windowOpen = true;
+    private bool windowOpen;
     private bool showHeartbeat = true;
     private IUmbraChat? chat;
     private IDisposable? commandRegistration;
 
     public string Name => "Umbra SDK Sample";
+
+    public void OpenMainUi() => windowOpen = true;
 
     public void Initialize(IUmbraPluginContext context)
     {

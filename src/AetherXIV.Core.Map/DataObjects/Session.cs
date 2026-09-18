@@ -17,6 +17,8 @@ namespace AetherXIV.Core.Map.dataobjects
         public uint languageCode = 1;        
         private uint lastPingPacket = Utils.UnixTimeStampUTC();
         private uint sessionEndMarkedAt = 0;
+        // Bound to this server session object, never to a client-supplied ID.
+        internal readonly AetherXIV.Core.Map.utils.TravelPreviewStore TravelPreviews = new();
 
         public bool isUpdatesLocked = true;
         public bool isEnding = false;
@@ -57,6 +59,7 @@ namespace AetherXIV.Core.Map.dataobjects
                 return;
 
             isEnding = true;
+            TravelPreviews.Close();
             isUpdatesLocked = true;
             sessionEndMarkedAt = Utils.UnixTimeStampUTC();
         }

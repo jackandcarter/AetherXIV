@@ -28,7 +28,7 @@ def validate(framework_root: Path) -> None:
 
     expected_identity = {
         "Name": "Aether Umbra",
-        "ApiVersion": "2.0",
+        "ApiVersion": "2.1",
         "PlatformRid": "win-x86",
         "InstallPath": ".",
         "BootstrapPath": "Aether.Umbra.Bootstrap.x86.dll",

@@ -13,18 +13,18 @@ if (($# > 0)); then
   shift
 fi
 if (($# > 0)); then
-  echo "Usage: $0 [Debug|Release]" >&2
+  echo "Usage: $0 [Release]" >&2
   exit 2
 fi
 case "${CONFIGURATION}" in
-  Debug|Release) ;;
-  *) echo "Configuration must be Debug or Release." >&2; exit 2 ;;
+  Release) ;;
+  *) echo "macOS packages are Release-only; use Release." >&2; exit 2 ;;
 esac
 
 SERVER_RID="${AETHERXIV_SERVER_RID:-osx-arm64}"
 CODESIGN_IDENTITY="${AETHERXIV_CODESIGN_IDENTITY:--}"
 BUILD_NUMBER="$(tr -d '[:space:]' < "${ROOT_DIR}/build-number.txt")"
-FINAL_OUTPUT_ROOT="${ROOT_DIR}/bin/build/${CONFIGURATION}/MacOS-Core"
+FINAL_OUTPUT_ROOT="${ROOT_DIR}/bin/build/Release/MacOS"
 TARGET_APP="${FINAL_OUTPUT_ROOT}/AetherXIV Core.app"
 TARGET_DATABASE="${FINAL_OUTPUT_ROOT}/Database"
 WORK_ROOT="${ROOT_DIR}/bin/build/.work/${CONFIGURATION}/MacOS-core-only"
@@ -331,6 +331,22 @@ verify_core_app() {
   }
 }
 
+write_build_manifest() {
+  local existing_manifest="${FINAL_OUTPUT_ROOT}/build-manifest.txt"
+  [[ -f "${existing_manifest}" ]] || existing_manifest=/dev/null
+  # Retain Launcher/runtime provenance when updating only Core in a full package.
+  awk -F= '!($1 ~ /^(schema|built_at_utc|configuration|product_version|build_number|server_rid|map_core_sha256|map_core_path|last_build_scope)$/)' \
+    "${existing_manifest}" > "${TEMP_ROOT}/build-manifest.txt"
+  {
+    printf 'schema=aetherxiv.build.manifest.v1\n'
+    printf 'built_at_utc=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'configuration=Release\nproduct_version=2.1\n'
+    printf 'build_number=%s\nserver_rid=%s\n' "${BUILD_NUMBER}" "${SERVER_RID}"
+    printf 'last_build_scope=core\nmap_core_sha256=%s\n' "${MAP_SHA256}"
+    printf 'map_core_path=AetherXIV Core.app/Contents/Resources/servers/map/AetherXIV.Core.Map.dll\n'
+  } >> "${TEMP_ROOT}/build-manifest.txt"
+}
+
 promote_core_release() {
   mkdir -p "${FINAL_OUTPUT_ROOT}"
   rm -rf "${PREVIOUS_APP}" "${PREVIOUS_DATABASE}"
@@ -353,6 +369,12 @@ promote_core_release() {
     exit 53
   fi
 
+  if ! mv "${TEMP_ROOT}/build-manifest.txt" "${FINAL_OUTPUT_ROOT}/build-manifest.txt"; then
+    rm -rf "${TARGET_APP}" "${TARGET_DATABASE}"
+    [[ -d "${PREVIOUS_APP}" ]] && mv "${PREVIOUS_APP}" "${TARGET_APP}"
+    [[ -d "${PREVIOUS_DATABASE}" ]] && mv "${PREVIOUS_DATABASE}" "${TARGET_DATABASE}"
+    exit 53
+  fi
   rm -rf "${PREVIOUS_APP}" "${PREVIOUS_DATABASE}"
   BUILD_COMPLETED=1
 }
@@ -381,6 +403,7 @@ verify_core_app
 MAP_SHA256="$(shasum -a 256 "${TEMP_APP}/Contents/Resources/servers/map/AetherXIV.Core.Map.dll" | awk '{print $1}')"
 UI_SHA256="$(shasum -a 256 "${TEMP_APP}/Contents/MacOS/AetherXIV.Core.App.dll" | awk '{print $1}')"
 SCRIPT_SHA256="$(shasum -a 256 "${TEMP_APP}/Contents/Resources/servers/map/scripts.manifest.json" | awk '{print $1}')"
+write_build_manifest
 promote_core_release
 
 cat <<EOF

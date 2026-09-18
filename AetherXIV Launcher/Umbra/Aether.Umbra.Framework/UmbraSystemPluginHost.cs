@@ -111,6 +111,7 @@ public sealed class UmbraPluginContext(
         : new HashSet<string>(capabilities.Where(value => !string.IsNullOrWhiteSpace(value)), StringComparer.OrdinalIgnoreCase);
     private IUmbraCommandManager? commandManager;
     private IUmbraChat? chat;
+    private IUmbraTravelService? travel;
 
     public string PluginId { get; } = pluginId;
 
@@ -131,6 +132,9 @@ public sealed class UmbraPluginContext(
 
     public TService? GetService<TService>() where TService : class
     {
+        if (typeof(TService) == typeof(IUmbraNotificationService))
+            return HasCapability(UmbraCapabilities.NotificationsPost) ? (TService)(object)runtime.Notifications.CreateScope(PluginId) : null;
+
         if (typeof(TService) == typeof(IUmbraCommandManager))
         {
             if (!HasCapability(UmbraCapabilities.CommandRegistration))
@@ -147,6 +151,17 @@ public sealed class UmbraPluginContext(
                 return null;
             chat ??= runtime.Chat.CreateScope(PluginId, allowPrint, allowSubmit);
             return (TService)chat;
+        }
+
+        if (typeof(TService) == typeof(IUmbraMapService))
+            return HasCapability(UmbraCapabilities.MapRead) ? (TService)(object)runtime.Maps : null;
+
+        if (typeof(TService) == typeof(IUmbraTravelService))
+        {
+            if (!HasCapability(UmbraCapabilities.TravelPreview))
+                return null;
+            travel ??= runtime.Travel.CreateScope(HasCapability(UmbraCapabilities.TravelWarp));
+            return (TService)travel;
         }
 
         if (typeof(TService) == typeof(IUmbraActorAppearanceService))

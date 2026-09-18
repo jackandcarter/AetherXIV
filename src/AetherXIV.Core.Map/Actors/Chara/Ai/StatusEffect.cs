@@ -389,7 +389,7 @@ namespace AetherXIV.Core.Map.actors.chara.ai
         private DateTime startTime;                 // when was this effect added
         private DateTime endTime;                   // when this status falls off
         private DateTime lastTick;                  // when did this effect last tick
-        private uint duration;                      // how long should this effect last in seconds
+        private double duration;                      // how long should this effect last in seconds
         private uint tickMs;                        // how often should this effect proc
         private double magnitude;                   // a value specified by scripter which is guaranteed to be used by all effects
         private byte tier;                          // same effect with higher tier overwrites this
@@ -522,7 +522,7 @@ namespace AetherXIV.Core.Map.actors.chara.ai
             return name;
         }
 
-        public uint GetDuration()
+        public double GetDuration()
         {
             return duration;
         }
@@ -634,6 +634,12 @@ namespace AetherXIV.Core.Map.actors.chara.ai
         public void SetDuration(uint duration)
         {
             this.duration = duration;
+        }
+
+        // Preserve fractional seconds from crowd-control duration reductions.
+        internal void SetEffectiveDuration(double seconds)
+        {
+            duration = seconds;
         }
 
         public void SetTickMs(uint tickMs)

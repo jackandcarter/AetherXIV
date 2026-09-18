@@ -7,13 +7,13 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings Condition="'$(ImplicitUsings)' == ''">enable</ImplicitUsings>
     <Nullable Condition="'$(Nullable)' == ''">enable</Nullable>
-    <UmbraApiVersion>2.0</UmbraApiVersion>
+    <UmbraApiVersion>2.1</UmbraApiVersion>
     <UmbraPluginManifest Condition="'$(UmbraPluginManifest)' == ''">$(MSBuildProjectDirectory)/umbra-plugin.json</UmbraPluginManifest>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Aether.Umbra.PluginApi"
-                      Version="2.0.0"
+                      Version="2.1.0"
                       ExcludeAssets="runtime"
                       PrivateAssets="all" />
     <None Include="$(UmbraPluginManifest)"

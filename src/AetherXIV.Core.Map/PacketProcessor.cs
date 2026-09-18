@@ -39,6 +39,15 @@ namespace AetherXIV.Core.Map
         {
             DevDiagnostics.TraceWireSubPacket("Map", "client-to-map", subpacket);
                 Session session = mServer.GetSession(subpacket.header.sourceId);
+                if (subpacket.gameMessage.opcode == AetherXIV.Protocol.UmbraTravelWire.RequestOpcode)
+                {
+                    if (subpacket.header.type == 3 && session != null && subpacket.header.targetId == session.id &&
+                        AetherXIV.Protocol.UmbraTravelWire.TryDecode(subpacket.data, out var travel) &&
+                        travel.Operation is AetherXIV.Protocol.UmbraTravelOperation.Preview or AetherXIV.Protocol.UmbraTravelOperation.Commit)
+                        utils.UmbraTravelHandler.Enqueue(client, session, travel);
+                    return;
+                }
+                if (subpacket.gameMessage.opcode == AetherXIV.Protocol.UmbraTravelWire.ReplyOpcode) return;
 
                 if (session == null && subpacket.gameMessage.opcode != 0x1000)
                 {

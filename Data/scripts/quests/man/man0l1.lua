@@ -177,6 +177,7 @@ function onStateChange(player, quest, sequence)
 		-- server never issued.
 		local area = player:GetZone();
 		local inMusketeersEcho = area ~= nil
+			and area:GetTerritoryId() == 230
 			and area:IsPrivate()
 			and area:GetPrivateAreaName() == "PrivateAreaMasterPast"
 			and area:GetPrivateAreaType() == 3;

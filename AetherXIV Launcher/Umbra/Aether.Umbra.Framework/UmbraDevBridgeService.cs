@@ -26,7 +26,6 @@ public sealed class UmbraDevBridgeService : IDisposable
     public const int ProtocolVersion = 2;
     public const int MaximumRequestBytes = 64 * 1024;
     public const int MaximumLongPollMilliseconds = 30_000;
-    public const int AcceptTimeoutSeconds = 15;
 
     private readonly UmbraRuntimeOptions options;
     private readonly UmbraRuntimeLog log;
@@ -65,7 +64,7 @@ public sealed class UmbraDevBridgeService : IDisposable
         get
         {
             lock (gate)
-                return listener is not null;
+                return listener?.IsListening == true && serverTask is { IsCompleted: false };
         }
     }
 
@@ -102,11 +101,14 @@ public sealed class UmbraDevBridgeService : IDisposable
 
         lock (gate)
         {
-            if (listener is not null)
+            if (listener?.IsListening == true && serverTask is { IsCompleted: false })
             {
                 activeToken = token;
                 return Task.CompletedTask;
             }
+            serverStop?.Cancel();
+            listener?.Close();
+            serverStop?.Dispose();
 
             activePort = port is >= 1024 and <= 65535 ? port : options.DevBridgePort;
             activeToken = token;
@@ -181,9 +183,16 @@ public sealed class UmbraDevBridgeService : IDisposable
             acceptAsync: AcceptCurrentAsync,
             abort: AbortListener,
             restartTransport: RestartListener,
-            acceptTimeout: TimeSpan.FromSeconds(AcceptTimeoutSeconds),
             notify: (name, payload) => events.Record(name, payload));
-        await pump.RunAsync(SafeHandleAsync, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await pump.RunAsync(SafeHandleAsync, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // A failed restart must not leave a dead listener advertised as running.
+            log.Info("umbra_dev_bridge_accept_loop_ended=true");
+        }
     }
 
     /// <summary>
@@ -221,6 +230,7 @@ public sealed class UmbraDevBridgeService : IDisposable
         try
         {
             http?.Abort();
+            http?.Close();
         }
         catch
         {
@@ -368,6 +378,13 @@ public sealed class UmbraDevBridgeService : IDisposable
             if (context.Request.HttpMethod == "GET" && path == "/status")
             {
                 await WriteJsonAsync(context, 200, Status, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (context.Request.HttpMethod == "GET" && path == "/map/observation")
+            {
+                using var observation = JsonDocument.Parse(UmbraNativeUi.GetMapObservation());
+                await WriteJsonAsync(context, 200, observation.RootElement, cancellationToken).ConfigureAwait(false);
                 return;
             }
 

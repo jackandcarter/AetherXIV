@@ -14,10 +14,12 @@ function onSkillFinish(caster, target, skill, action, actionContainer)
     if caster == target then
         local effect = GetWorldManager():GetStatusEffect(223253);
         effect.SetDuration(30);
+        effect.SetSource(caster);
         caster.statusEffects.AddStatusEffect(effect, caster, actionContainer);
     end
 
     local effect = GetWorldManager():GetStatusEffect(223029);
     effect.SetDuration(60);
-    caster.statusEffects.AddStatusEffect(effect, caster, actionContainer);
+    effect.SetSource(caster);
+    target.statusEffects.AddStatusEffect(effect, caster, actionContainer);
 end;

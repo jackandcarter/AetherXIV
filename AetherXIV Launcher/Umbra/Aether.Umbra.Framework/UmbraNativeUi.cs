@@ -23,6 +23,17 @@ internal static class UmbraNativeUi
 {
     private const string BootstrapLibrary = "Aether.Umbra.Bootstrap.x86.dll";
 
+    internal static string GetMapObservation()
+    {
+        var json = new StringBuilder(8192);
+        try { return GetMapObservationNative(json, json.Capacity) != 0 ? json.ToString() : "{\"available\":false}"; }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        { return "{\"available\":false,\"reason\":\"Native map observation is unavailable in this build.\"}"; }
+    }
+
+    [DllImport(BootstrapLibrary, EntryPoint = "UmbraGetMapObservation", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Ansi)]
+    private static extern int GetMapObservationNative(StringBuilder output, int capacity);
+
     internal static bool BeginWindow(string title, ref int isOpen) =>
         BeginWindowNative(title, ref isOpen) != 0;
 
@@ -106,6 +117,12 @@ internal static class UmbraNativeUi
 
     internal static void Badge(string text, UmbraTextTone tone, UmbraIcon icon) =>
         BadgeNative(text, (int)tone, (int)icon);
+
+    [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiImage", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode)]
+    internal static extern int Image(string path, float size);
+
+    [DllImport(BootstrapLibrary, EntryPoint = "UmbraUiPostNotification", CallingConvention = CallingConvention.StdCall)]
+    internal static extern void PostNotification([MarshalAs(UnmanagedType.LPUTF8Str)] string message, int tone);
 
     internal static void Artwork(string seed, UmbraIcon icon, float size) =>
         ArtworkNative(seed, (int)icon, size);

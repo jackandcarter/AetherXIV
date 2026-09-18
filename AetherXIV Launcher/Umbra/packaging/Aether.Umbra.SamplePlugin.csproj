@@ -1,4 +1,4 @@
-<Project Sdk="Aether.Umbra.Sdk/2.0.0">
+<Project Sdk="Aether.Umbra.Sdk/2.1.0">
   <PropertyGroup>
     <AssemblyName>Aether.Umbra.SamplePlugin</AssemblyName>
   </PropertyGroup>

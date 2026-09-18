@@ -132,6 +132,7 @@ public sealed class UmbraRenderBridge
             runtime.Log.Info("umbra_plugin_manager_settings_requested=true");
         }
         PublishPluginUpdateCount();
+        runtime.Notifications.PublishFrame();
         ulong frameNumber = renderEvent.FrameNumber;
         Interlocked.Exchange(ref frameCount, renderEvent.FrameNumber);
         Volatile.Write(ref viewportWidth, (int)Math.Min(renderEvent.ViewportWidth, int.MaxValue));

@@ -823,6 +823,7 @@ public sealed partial class MainWindow : Window
             return;
 
         patchCancellation = new CancellationTokenSource();
+        UpdateLaunchButtonState(false);
         ApplyPatchesButton.IsEnabled = false;
         DownloadPatchesButton.IsEnabled = false;
         CancelPatchButton.IsEnabled = true;
@@ -882,6 +883,7 @@ public sealed partial class MainWindow : Window
             CancelPatchButton.IsEnabled = false;
             patchCancellation.Dispose();
             patchCancellation = null;
+            UpdateHomeState();
         }
     }
 
@@ -891,6 +893,7 @@ public sealed partial class MainWindow : Window
             return;
 
         patchCancellation = new CancellationTokenSource();
+        UpdateLaunchButtonState(false);
         ApplyPatchesButton.IsEnabled = false;
         DownloadPatchesButton.IsEnabled = false;
         CancelPatchButton.IsEnabled = true;
@@ -903,14 +906,6 @@ public sealed partial class MainWindow : Window
         {
             CancellationToken cancellationToken = patchCancellation.Token;
             ClientInstall clientInstall = ClientInstall.FromPath(ClientPathBox.Text ?? "");
-            ClientInstallReport clientReport = clientInstall.Inspect();
-            if (clientReport.State == ClientInstallState.Ready123b)
-            {
-                AppendLog("Patch apply skipped: client already reports 1.23b.");
-                PatchApplyStatus.Text = "Client already reports 1.23b.";
-                return;
-            }
-
             string patchLibraryPath = PatchLibraryPathBox.Text ?? "";
             PatchApplyStatus.Text = "Verifying patch library checksums...";
             PatchApplyProgressBar.IsIndeterminate = true;
@@ -919,7 +914,7 @@ public sealed partial class MainWindow : Window
             PatchLibraryReport patchReport = await Task.Run(
                 () => LegacyPatchManifest.InspectLibrary(
                     patchLibraryPath,
-                    PatchLibraryInspectionMode.Checksum),
+                    PatchLibraryInspectionMode.Checksum, cancellationToken),
                 cancellationToken);
 
             PatchLibraryStatus.Text = patchReport.Summary;
@@ -927,15 +922,6 @@ public sealed partial class MainWindow : Window
             AppendLog($"Patch base: {patchReport.PatchBasePath}");
             PatchApplyProgressBar.IsIndeterminate = false;
             PatchApplyProgressBar.Value = 0;
-
-            if (!patchReport.IsPatchChainReady)
-            {
-                LogMissingEntries("Missing patch", patchReport.MissingPatchFiles);
-                LogInvalidEntries(patchReport.InvalidPatchFiles);
-                AppendLog("Patch apply blocked: patch library is not checksum-ready.");
-                PatchApplyStatus.Text = "Patch library is not checksum-ready.";
-                return;
-            }
 
             Progress<PatchApplyProgress> progress = new(update =>
             {
@@ -979,12 +965,13 @@ public sealed partial class MainWindow : Window
         }
         catch (OperationCanceledException)
         {
-            AppendLog("Patch apply cancelled.");
+            AppendLog("Patch apply cancelled. Retry to continue from the last completed patch.");
             PatchApplyStatus.Text = "Patch apply cancelled.";
         }
         catch (Exception ex)
         {
             AppendLog($"Patch apply failed: {ex.Message}");
+            AppendLog("Patch diagnostics: .aetherxiv-patch.log in the selected client folder. Retry Apply Patches to recover an interrupted operation.");
             PatchApplyStatus.Text = "Patch apply failed.";
         }
         finally
@@ -1527,7 +1514,7 @@ public sealed partial class MainWindow : Window
 
     private async void LaunchGame_Click(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
-        if (launchInProgress)
+        if (launchInProgress || patchCancellation is not null)
             return;
 
         SetLaunchInProgress("Preparing...", "Preparing launch...");
@@ -2041,7 +2028,7 @@ public sealed partial class MainWindow : Window
 
     private void UpdateLaunchButtonState(bool? clientReady = null)
     {
-        if (launchInProgress)
+        if (launchInProgress || patchCancellation is not null)
         {
             PlayGameButton.IsEnabled = false;
             return;

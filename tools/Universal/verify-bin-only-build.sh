@@ -74,11 +74,11 @@ for configuration in "${configurations[@]}"; do
   while IFS= read -r path; do
     entry_name="$(basename "${path}")"
     case "${entry_name}" in
-      # Core-only packages are intentional siblings of the corresponding
+      # Non-macOS Core-only packages are intentional siblings of the corresponding
       # full platform package. Each platform builder verifies its Core output
       # before promotion; do not make a Full verification fail merely because
       # that valid sibling already exists.
-      MacOS|Windows|Linux|SteamOS|MacOS-Core|Windows-Core|Linux-Core|SteamOS-Core) ;;
+      MacOS|Windows|Linux|SteamOS|Windows-Core|Linux-Core|SteamOS-Core) ;;
       .DS_Store) ;;
       ".${TARGET_PLATFORM}.staging")
         if [[ "${TARGET_IS_STAGING}" != 1 ]]; then

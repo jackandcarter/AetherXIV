@@ -3,7 +3,7 @@
 
   <Target Name="ValidateUmbraPluginProject" BeforeTargets="PrepareForBuild">
     <Error Condition="'$(TargetFramework)' != 'net10.0-windows'"
-           Text="Umbra 2.0 plugins must target net10.0-windows." />
+           Text="Umbra 2.1 plugins must target net10.0-windows." />
     <Error Condition="!Exists('$(UmbraPluginManifest)')"
            Text="Umbra plugin manifest not found: $(UmbraPluginManifest)" />
   </Target>
