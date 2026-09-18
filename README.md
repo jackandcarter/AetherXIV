@@ -1,11 +1,13 @@
 # AetherXIV 2.1
 
-AetherXIV is a cross-platform server, launcher, and Umbra framework stack for
+AetherXIV is a cross-platform server, launcher, and Umbra Plugin framework stack for
 a user-owned Final Fantasy XIV 1.23b client. The 2.1 release candidate combines
 the Lobby, World, Map, and Launcher Services hosts; AetherXIV Core; AetherXIV
 Launcher; Direct Core database tooling; and Umbra in one workspace.
 
-The Main branch has the latest stable release, while 2.0 is archival, and 2.1 is work currently in development.
+Main branch: Current Stable Release
+2.0 branch: Archival
+2.1 branch: Current Development
 
 ## Supported targets
 
