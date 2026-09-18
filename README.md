@@ -1,9 +1,10 @@
 # AetherXIV 2.1
 
 AetherXIV is a cross-platform server, launcher, and Umbra Plugin framework stack for
-a user-owned Final Fantasy XIV 1.23b client. The 2.1 release candidate combines
-the Lobby, World, Map, and Launcher Services hosts; AetherXIV Core; AetherXIV
-Launcher; Direct Core database tooling; and Umbra in one workspace.
+a user-owned Final Fantasy XIV 1.23b client. 
+
+The 2.1 release candidate combines the Lobby, World, Map, and Launcher Services; AetherXIV Core UI App; AetherXIV
+Launcher; Direct Core database tooling; and Umbra Frameworks in one workspace.
 
 - Main branch: Current Stable Release
 - 2.0 branch: Archival
@@ -78,3 +79,6 @@ any required patch library. AetherXIV is licensed under the
 - [Third-party notices](THIRD_PARTY_NOTICES.md)
 - [Contribution policy](CONTRIBUTING.md)
 - [Name and branding policy](TRADEMARKS.md)
+
+
+If you are interested in becoming part of the team feel free to reach out on Discord!
