@@ -1,11 +1,3 @@
-# Local legacy/reference material
-/Legacy Meteor:Aether/
-/ffxiv_traces/
-/Complete Audit/
-/map-*.jsonl
-/world-*.jsonl
-/lobby-*.jsonl
-
 # Generated build and test output
 /bin/
 /build/
@@ -14,29 +6,7 @@
 TestResults/
 **/TestResults/
 
-# Local database backups and dumps
-/.local-backups/
-/db/character-backup-*.sql
-/backtrace.txt
-
-# Local-only evidence, trace captures, and restoration research. These files are
-# retained for development review but are not part of the public release tree.
-/.local-evidence/
-/tests/
-/AetherXIV Launcher/AetherXIV.Launcher.Tests/
-/AetherXIV Launcher/Umbra/Aether.Umbra.Framework.Tests/
-**/*Tests*/
-/tests/fixtures/trace-evidence/
-/tools/Development/snapshots/
-/docs/development/CLIENT_REVERSE_ENGINEERING.md
-/docs/development/UMBRA_LIVE_OBSERVATION_BRIDGE.md
-/docs/development/*_AUDIT.md
-/docs/AETHERXIV_2.0_RELEASE_NOTES.md
-/Data/sql/migrations/20260627_client_decode_staging.sql
-/Data/sql/migrations/20260627_zz_client_decode_display_names.sql
-
-# Repository-local NuGet feed for the bundled Umbra plugin build
-/.umbra-nuget/
+# Database dumps
 dump-*.sql
 *.sql.gz
 *.sql.bz2
@@ -67,9 +37,6 @@ appsettings.*.local.json
 # OS and editor metadata
 .DS_Store
 **/.DS_Store
-
-# Local Codex/desktop state
-/.freebuff/
 
 # Python caches
 **/__pycache__/
