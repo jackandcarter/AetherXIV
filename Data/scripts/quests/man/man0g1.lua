@@ -139,13 +139,10 @@ end
 
 function onNotice(player, quest, target)
 	if (quest:GetSequence() == SEQ_005) then
-		-- Open the linkpearl tutorial widget from the notice coroutine via
-		-- the coroutine-capable client-function path (the direct
-		-- RunEventFunction call bypasses the event waiter that owns the
-		-- response transaction), then close the notice session. The widget
-		-- lives beyond the event; the later NPC-linkshell click owns
-		-- tutorial completion.
-		callClientFunction(player, "delegateEvent", player, quest, "processEventTu_001");
+		-- Use the glowing Adventurers' Guild linkpearl and NPC chat, as in
+		-- Limsa/Ul'dah. The private-area Miounne handoff already queues it.
+		-- Tutorial widget restoration is parked until its flow is reliable.
+		-- callClientFunction(player, "delegateEvent", player, quest, "processEventTu_001");
 		player:EndEvent();
 		quest:UpdateENPCs();
 	end
@@ -153,7 +150,7 @@ end
 
 function onStateChange(player, quest, sequence)
 	-- Phase 5 is the post-Bentbranch return at the Canopy Roost. Miounne
-	-- remains the quest ENPC while the separate Linkpearl tutorial is shown.
+	-- remains the quest ENPC while the queued Linkpearl message is available.
 	if (sequence == SEQ_005) then
 		quest:SetENpc(MIOUNNE);
 	elseif (sequence == SEQ_010 or sequence == SEQ_012) then
@@ -536,12 +533,14 @@ function onNpcLS(player, quest, from, msgStep)
 		end
 	end
 
+	--[[ Widget completion is parked with processEventTu_001 above.
 	if (sequence == SEQ_005) then
 		showTutorialSuccessWidget(player, 9080);
 		wait(3);
 		closeTutorialWidget(player);
 		endTutorialMode(player);
 	end
+	--]]
 
 	player:EndEvent();
 end

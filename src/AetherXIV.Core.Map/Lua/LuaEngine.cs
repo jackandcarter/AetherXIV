@@ -1,4 +1,4 @@
-﻿using AetherXIV.Core.Map.actors.director;
+using AetherXIV.Core.Map.actors.director;
 using AetherXIV.Core.Map.Actors;
 using AetherXIV.Core.Map.dataobjects;
 using AetherXIV.Core.Map.packets.receive.events;
@@ -1297,6 +1297,7 @@ namespace AetherXIV.Core.Map.lua
                         if (permissions > 0 && !player.isGM)
                         {
                             Program.Log.Info("LuaEngine.RunGMCommand: {0}'s GM level is too low to use command {1}.", player.actorName, cmd);
+                            player.SendMessage(SendMessagePacket.MESSAGE_TYPE_SYSTEM_ERROR, "[Commands]", "This command requires GM access.");
                             return;
                         }
                         // i hate to do this, but cant think of a better way to keep !help

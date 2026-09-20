@@ -2,9 +2,9 @@ namespace AetherXIV.Core.Map.Actors
 {
     static class NpcPropertyPolicy
     {
-        // Property 2 is player-owned state in the 1.23b actor work contract.
-        // Replaying it on generic/tutorial NPC construction corrupts the
-        // client's actor state while the opening battle roster is installed.
+        // Keep generic NPCs out of the combat presentation path. Actual
+        // BattleNpc instances enable this bit after base construction;
+        // the client calls it property 3 (its property indices are one-based).
         private const uint ForbiddenNpcPropertyMask = 1u << 2;
 
         public static uint Sanitize(uint propertyFlags) =>

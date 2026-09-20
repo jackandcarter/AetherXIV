@@ -144,6 +144,14 @@ end
 function onFinish(player, quest)
 end
 
+-- Echo classes also exist in public Limsa. Arm them only in their instance.
+local function inLimsaEcho(player, kind)
+ local area = player:GetZone();
+ return area ~= nil and area:GetTerritoryId() == 230 and area:IsPrivate()
+  and area:GetPrivateAreaName() == "PrivateAreaMasterPast"
+  and area:GetPrivateAreaType() == kind;
+end
+
 function onStateChange(player, quest, sequence)
 	local data = quest:GetData();
 
@@ -209,8 +217,12 @@ function onStateChange(player, quest, sequence)
 	elseif (sequence == SEQ_035) then
 		quest:SetENpc(NNMULIKA, QFLAG_TALK);
 	elseif (sequence == SEQ_040) then
-		quest:SetENpc(SISIPU_EMOTE, QFLAG_TALK, true, false, true);
-		quest:SetENpc(NNMULIKA);
+		if (inLimsaEcho(player, 5)) then
+            quest:SetENpc(SISIPU_EMOTE, QFLAG_TALK, true, false, true);
+            quest:SetENpc(NNMULIKA);
+        else
+            quest:SetENpc(NNMULIKA, QFLAG_TALK);
+        end
 	elseif (sequence == SEQ_048) then
 		quest:SetENpc(BADERON);
 		quest:SetENpc(ZEPHYR_TRIGGER, QFLAG_PUSH, false, true);
@@ -252,6 +264,9 @@ function onStateChange(player, quest, sequence)
 	elseif (sequence == SEQ_075) then	
 		quest:SetENpc(BODENOLF, QFLAG_TALK);
 	elseif (sequence == SEQ_080) then	
+		if (not inLimsaEcho(player, 4)) then
+			quest:SetENpc(BODENOLF, QFLAG_TALK);
+		else
 		quest:SetENpc(HNAANZA, QFLAG_TALK);
 		quest:SetENpc(TATTOOED_PIRATE);
 		quest:SetENpc(IOFA);
@@ -261,13 +276,18 @@ function onStateChange(player, quest, sequence)
 		quest:SetENpc(WERNER);
 		quest:SetENpc(HIHINE);
 		quest:SetENpc(TRINNE);
+		end
 	elseif (sequence == SEQ_085) then	
+		if (not inLimsaEcho(player, 4)) then
+			quest:SetENpc(BODENOLF, QFLAG_TALK);
+		else
 		quest:SetENpc(HNAANZA);
 		quest:SetENpc(TATTOOED_PIRATE);
 		quest:SetENpc(WERNER);
 		quest:SetENpc(HIHINE);
 		quest:SetENpc(TRINNE);
 		quest:SetENpc(ECHO_EXIT_TRIGGER2, QFLAG_PUSH, false, true);
+		end
 	elseif (sequence == SEQ_092) then	
 		quest:SetENpc(BADERON, QFLAG_REWARD);
 	end	
@@ -277,6 +297,14 @@ end
 function onTalk(player, quest, npc)
 	local sequence = quest:GetSequence();
 	local classId = npc:GetActorClassId();
+
+    if ((sequence == SEQ_080 or sequence == SEQ_085) and classId == BODENOLF
+        and not inLimsaEcho(player, 4)) then
+        callClientFunction(player, "delegateEvent", player, quest, "processEvent630");
+        player:EndEvent();
+        GetWorldManager():WarpToPrivateArea(player, "PrivateAreaMasterPast", 4, -504.985, 42.490, 433.712, 2.35);
+        return;
+    end
 	
 	if (sequence == SEQ_000) then
 		seq000_onTalk(player, quest, npc, classId);
@@ -309,6 +337,7 @@ function onTalk(player, quest, npc)
 	elseif (sequence == SEQ_035) then
 		if (classId == NNMULIKA) then
 			callClientFunction(player, "delegateEvent", player, quest, "processEvent600");
+			quest:EndOfNpcLsMsgs();
 			quest:StartSequence(SEQ_040);
 			player:EndEvent();
 			GetWorldManager():WarpToPrivateArea(player, "PrivateAreaMasterPast", 5);
@@ -339,7 +368,15 @@ function onTalk(player, quest, npc)
 				player:SendGameMessage(GetWorldMaster(), 25083, MESSAGE_TYPE_SYSTEM, 1);
 			end			
 		elseif (classId == NNMULIKA) then
-			callClientFunction(player, "delegateEvent", player, quest, "processEvent600_2");
+			if (not inLimsaEcho(player, 5)) then
+                -- Replay the entry cutscene for saves left outside by a failed warp.
+                callClientFunction(player, "delegateEvent", player, quest, "processEvent600");
+                quest:EndOfNpcLsMsgs();
+                player:EndEvent();
+                GetWorldManager():WarpToPrivateArea(player, "PrivateAreaMasterPast", 5);
+                return;
+            end
+            callClientFunction(player, "delegateEvent", player, quest, "processEvent600_2");
 		end
 		player:EndEvent();
 	elseif (sequence == SEQ_048) then
@@ -396,6 +433,7 @@ function onTalk(player, quest, npc)
 	elseif (sequence == SEQ_085) then
 		if (classId == HNAANZA) then
 			callClientFunction(player, "delegateEvent", player, quest, "processEvent632_2");
+			player:EndEvent();
 		else
 			seq080_085_onTalk(player, quest, npc, classId);
 		end
@@ -697,8 +735,8 @@ function onEmote(player, quest, npc, eventName)
 				if (eventName == "emoteDefault6") then
 					callClientFunction(player, "delegateEvent", player, quest, "processEvent602");
 					player:EndEvent();					
-					GetWorldManager():WarpToPublicArea(player);
 					quest:StartSequence(SEQ_048);
+					GetWorldManager():WarpToPublicArea(player);
 					return;
 				else
 					callClientFunction(player, "delegateEvent", player, quest, "processEvent601_8");					
@@ -742,6 +780,13 @@ function onNpcLS(player, quest, from, msgStep)
 			msgPack = 4;
 		end	
 				
+        -- A saved alert can outlive its dialogue stage (e.g. entering the guild
+        -- after reading only the first message). Drain it without advancing.
+        if (msgPack == nil or NPCLS_MSGS[msgPack][msgStep] == nil) then
+            quest:EndOfNpcLsMsgs();
+            player:EndEvent();
+            return;
+        end
 		-- Quick way to handle all msgs nicely.
 		player:SendGameMessageLocalizedDisplayName(quest, NPCLS_MSGS[msgPack][msgStep], MESSAGE_TYPE_NPC_LINKSHELL, 1000015);
 		if (msgStep >= #NPCLS_MSGS[msgPack]) then

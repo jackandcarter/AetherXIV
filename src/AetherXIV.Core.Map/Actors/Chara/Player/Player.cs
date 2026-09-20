@@ -389,6 +389,7 @@ namespace AetherXIV.Core.Map.Actors
             charaWork.parameterTemp.tp = 0;
 
             Database.LoadPlayerCharacter(this);
+            isGM = ConfigConstants.GM_CHARACTER_IDS.Contains(actorId);
             if (equipment.GetItemAtSlot(SLOT_MAINHAND) != null)
                 RefreshEquipmentAppearance(false);
             lastPlayTimeUpdate = Utils.UnixTimeStampUTC();
@@ -697,11 +698,25 @@ namespace AetherXIV.Core.Map.Actors
             return propPacketUtil.Done();
         }
 
-        public void SendSeamlessZoneInPackets()
+        public void SendSeamlessZoneInPackets(Director previousWeatherDirector)
         {
+            QueuePacket(SetDalamudPacket.BuildPacket(actorId, zone.GetDalamudLevel()));
             QueuePacket(SetMusicPacket.BuildPacket(actorId, zone.bgmDay, SetMusicPacket.EFFECT_FADEIN));
-            QueuePacket(SetWeatherPacket.BuildPacket(actorId, SetWeatherPacket.WEATHER_CLEAR, 1));
+            // Bootstrap is required: the local WeatherDirector skips _setWeather when its prior ID is zero.
+            QueuePacket(SetWeatherPacket.BuildPacket(actorId, zone.GetCurrentWeather(), NormalWeatherPolicy.EntryTransition));
             QueuePacket(SetMapPacket.BuildPacket(actorId, zone.regionId, zone.GetTerritoryId()));
+            Director currentWeatherDirector = zone.GetWeatherDirector();
+            if (previousWeatherDirector != currentWeatherDirector)
+            {
+                if (previousWeatherDirector != null)
+                    QueuePacket(RemoveActorPacket.BuildPacket(previousWeatherDirector.actorId));
+                if (currentWeatherDirector != null)
+                {
+                    QueuePackets(currentWeatherDirector.GetSpawnPackets());
+                    QueuePackets(currentWeatherDirector.GetInitPackets());
+                }
+            }
+
         }
 
         public void SendZoneInPackets(
@@ -710,7 +725,7 @@ namespace AetherXIV.Core.Map.Actors
             ZoneInventoryRefreshMode inventoryRefreshMode = ZoneInventoryRefreshMode.Full)
         {
             QueuePacket(SetActorIsZoningPacket.BuildPacket(actorId, false));
-            QueuePacket(SetDalamudPacket.BuildPacket(actorId, 0));
+            QueuePacket(SetDalamudPacket.BuildPacket(actorId, zone.GetDalamudLevel()));
 
             //Music Packets
             if (currentMainState == SetActorStatePacket.MAIN_STATE_MOUNTED)
@@ -728,7 +743,8 @@ namespace AetherXIV.Core.Map.Actors
             else
                 QueuePacket(SetMusicPacket.BuildPacket(actorId, zone.bgmDay, 0x01)); //Zone
 
-            QueuePacket(SetWeatherPacket.BuildPacket(actorId, SetWeatherPacket.WEATHER_CLEAR, 1));
+            // Bootstrap is required: the local WeatherDirector skips _setWeather when its prior ID is zero.
+            QueuePacket(SetWeatherPacket.BuildPacket(actorId, zone.GetCurrentWeather(), NormalWeatherPolicy.EntryTransition));
 
             QueuePacket(SetMapPacket.BuildPacket(actorId, zone.regionId, zone.GetTerritoryId()));
 
@@ -805,6 +821,7 @@ namespace AetherXIV.Core.Map.Actors
                 List<SubPacket> weatherDirectorSpawn = zone.GetWeatherDirector().GetSpawnPackets();
                 weatherDirectorPackets = weatherDirectorSpawn.Count;
                 playerSession.QueuePacket(weatherDirectorSpawn);
+                playerSession.QueuePacket(zone.GetWeatherDirector().GetInitPackets());
             }
 
             int ownedDirectorSpawnPackets = 0;

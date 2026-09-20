@@ -1,4 +1,4 @@
-﻿using AetherXIV.Core.Common;
+using AetherXIV.Core.Common;
 using AetherXIV.Core.Map.Actors;
 using AetherXIV.Core.Map.lua;
 using AetherXIV.Core.Map.packets.send.actor;
@@ -37,6 +37,11 @@ namespace AetherXIV.Core.Map.actors.area
                 out _,
                 out _))
                 mWeatherDirector = CreateDirector("WeatherDirector", false);
+            else if (!isInn && !isInstanceRaid &&
+                (regionId == 101 || regionId == 103 || regionId == 104) &&
+                (zoneName.Contains("Field") || zoneName.Contains("Town")))
+                mWeatherDirector = CreateDirector("WeatherDirector", false);
+
 
             if (loadNavMesh)
             {

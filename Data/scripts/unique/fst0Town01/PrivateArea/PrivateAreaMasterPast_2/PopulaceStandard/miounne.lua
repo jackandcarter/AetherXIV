@@ -12,7 +12,7 @@ function onEventStarted(player, npc, triggerName)
 		-- The first Canopy briefing is owned by the private-area Miounne
 		-- handler, matching Legacy Meteor and Garlemald. The quest is advanced
 		-- and the Linkpearl is armed before the same-zone reload; the director
-		-- notice then invokes only the later tutorial handoff.
+		-- notice then closes its event; the Guild message is read through the menu.
 		callClientFunction(player, "delegateEvent", player, man0g1Quest, "processEvent110");
 		man0g1Quest:NewNpcLsMsg(1);
 		man0g1Quest:StartSequence(5);

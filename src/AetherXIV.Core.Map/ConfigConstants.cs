@@ -1,6 +1,7 @@
 using AetherXIV.Core.Common;
 using System;
 using System.IO;
+using System.Collections.Generic;
 using System.Net;
 
 namespace AetherXIV.Core.Map
@@ -10,6 +11,7 @@ namespace AetherXIV.Core.Map
         public static String OPTIONS_BINDIP;
         public static String OPTIONS_PORT;
         public static bool OPTIONS_TIMESTAMP = false;
+        public static readonly HashSet<uint> GM_CHARACTER_IDS = new HashSet<uint>();
 
         public static uint DATABASE_WORLDID;
         public static String DATABASE_HOST;
@@ -29,6 +31,11 @@ namespace AetherXIV.Core.Map
             }
 
             INIFile configIni = new INIFile("./map_config.ini");
+            GM_CHARACTER_IDS.Clear();
+            foreach (string entry in configIni.GetValue("General", "gm_character_ids", "").Split(','))
+                if (UInt32.TryParse(entry.Trim(), out uint characterId) && characterId != 0)
+                    GM_CHARACTER_IDS.Add(characterId);
+
 
             ConfigConstants.OPTIONS_BINDIP =        configIni.GetValue("General", "server_ip", "127.0.0.1");
             ConfigConstants.OPTIONS_PORT =          configIni.GetValue("General", "server_port", "1989");

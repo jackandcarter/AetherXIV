@@ -75,8 +75,10 @@ namespace AetherXIV.Core.Map.Actors
             //this.currentSubState = SetActorStatePacket.SUB_STATE_MONSTER;
             //this.currentMainState = SetActorStatePacket.MAIN_STATE_ACTIVE;
 
-            //charaWork.property[2] = 1;
-            //npcWork.hateType = 1;
+            // The client depiction judge tests property 3 (one-based) for
+            // combat nameplates and aggro icons. Generic NPC sanitization
+            // must not remove this flag from actual BattleNpc instances.
+            charaWork.property[2] = 1;
             
             this.hateContainer = new HateContainer(this);
             this.allegiance = CharacterTargetingAllegiance.BattleNpcs;

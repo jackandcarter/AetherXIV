@@ -1,4 +1,4 @@
-﻿using AetherXIV.Core.Common;
+using AetherXIV.Core.Common;
 using AetherXIV.Core.Map.actors.area;
 using AetherXIV.Core.Map.actors.chara.npc;
 using AetherXIV.Core.Map.lua;
@@ -29,7 +29,58 @@ namespace AetherXIV.Core.Map.Actors
         public string zoneName;        
         public ushort regionId;
         public bool isIsolated, canStealth, isInn, canRideChocobo, isInstanceRaid;
-        public ushort weatherNormal, weatherCommon, weatherRare;
+        public ushort weatherNormal = 8001, weatherCommon, weatherRare;
+        private ushort? weatherOverride;
+        private sbyte dalamudOverride;
+        private ushort lastBroadcastWeather;
+
+        public ushort GetCurrentWeather()
+        {
+            bool outdoors = this is Zone && !isInn && !isInstanceRaid &&
+                (zoneName.Contains("Field") || zoneName.Contains("Town"));
+            return weatherOverride ?? NormalWeatherPolicy.Select(regionId, outdoors,
+                DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        }
+
+        public sbyte GetDalamudLevel() => dalamudOverride;
+
+        private void BroadcastEnvironment(ushort transitionTime, ushort? selectedWeather = null)
+        {
+            lock (mActorList)
+            {
+                lastBroadcastWeather = selectedWeather ?? GetCurrentWeather();
+                AetherXIV.Core.Common.DevDiagnostics.Trace("environment.broadcast",
+                    "zone", GetTerritoryId(), "weather", lastBroadcastWeather,
+                    "dalamud", dalamudOverride, "override", weatherOverride.HasValue);
+                foreach (Player target in mActorList.Values.OfType<Player>())
+                {
+                    // Border visibility also registers players in an adjacent area.
+                    // Only their primary area owns their environment.
+                    if (target.isZoneChanging || target.zone != this) continue;
+                    target.QueuePacket(SetDalamudPacket.BuildPacket(target.actorId, dalamudOverride));
+                    target.QueuePacket(CreateWeatherChangePacket(target.actorId, lastBroadcastWeather, transitionTime));
+                }
+            }
+        }
+
+        public bool ResetWeather(Player gm)
+        {
+            if (gm == null || !gm.isGM) return false;
+            weatherOverride = null;
+            dalamudOverride = 0;
+            BroadcastEnvironment(NormalWeatherPolicy.UpdateTransition);
+            return true;
+        }
+
+        public bool SetEventWeather(ushort weather, sbyte dalamudLevel, Player gm)
+        {
+            // Match the existing GM command contract even for direct Lua/C# callers.
+            if (gm == null || !gm.isGM || !NormalWeatherPolicy.IsEvent(weather) || dalamudLevel < -1) return false;
+            weatherOverride = weather;
+            dalamudOverride = dalamudLevel;
+            BroadcastEnvironment(NormalWeatherPolicy.UpdateTransition);
+            return true;
+        }
         public ushort bgmDay, bgmNight, bgmBattle;
 
         protected new string classPath;
@@ -1072,29 +1123,30 @@ namespace AetherXIV.Core.Map.Actors
             return mWeatherDirector;
         }
 
+        // The client owns the normal transition through weatherInfo. A GM's explicit
+        // custom transition uses the existing direct packet instead, never both.
+        internal SubPacket CreateWeatherChangePacket(uint playerId, ushort weather, ushort transitionTime)
+        {
+            if (mWeatherDirector != null && transitionTime == NormalWeatherPolicy.UpdateTransition)
+                return mWeatherDirector.CreateWeatherUpdatePacket(weather);
+            return SetWeatherPacket.BuildPacket(playerId, weather, transitionTime);
+        }
+
         public void ChangeWeather(ushort weather, ushort transitionTime, Player player, bool zoneWide = false)
         {
-            weatherNormal = weather;
-
-            if (player != null && !zoneWide)
+            if (player == null || !player.isGM || !NormalWeatherPolicy.IsNormal(weather))
+                return;
+            if (!zoneWide)
             {
-                player.QueuePacket(SetWeatherPacket.BuildPacket(player.actorId, weather, transitionTime));
+                // Personal preview must never change the area's shared state.
+                player.QueuePacket(SetDalamudPacket.BuildPacket(player.actorId, 0));
+                player.QueuePacket(CreateWeatherChangePacket(player.actorId, weather, transitionTime));
+                return;
             }
-            if (zoneWide)
-            {
-                lock (mActorList)
-                {
-                    foreach (var actor in mActorList)
-                    {
-                        if (actor.Value is Player)
-                        {
-                            player = ((Player)actor.Value);
-                            player.QueuePacket(SetWeatherPacket.BuildPacket(player.actorId, weather, transitionTime));
-                        }
-                    }
-                }
-            }
-        }                
+            weatherOverride = weather;
+            dalamudOverride = 0;
+            BroadcastEnvironment(transitionTime);
+        }
 
         public Director CreateDirector(string path, bool hasContentGroup, params object[] args)
         {
@@ -1163,7 +1215,12 @@ namespace AetherXIV.Core.Map.Actors
                     return residentDirector;
                 }
 
-                Director director = new Director(AllocateSpawnedActorNumber(), this, path, hasContentGroup, args);
+                // The client weather class is recovered, but unreviewed territories
+                // must use the runtime allocator rather than a guessed retail slot.
+                Director director = path == "WeatherDirector"
+                    ? new Director(AllocateSpawnedActorNumber("weather-director"), this, path,
+                        hasContentGroup, 80003, "/Director/Weather/WeatherDirector", false, args)
+                    : new Director(AllocateSpawnedActorNumber(), this, path, hasContentGroup, args);
                 currentDirectors.Add(director);
                 TraceDirectorCreated(director, "created-runtime");
                 return director;
@@ -1263,6 +1320,9 @@ namespace AetherXIV.Core.Map.Actors
 
         public override void Update(DateTime tick)
         {
+            ushort currentWeather = GetCurrentWeather();
+            if (currentWeather != lastBroadcastWeather)
+                BroadcastEnvironment(NormalWeatherPolicy.UpdateTransition, currentWeather);
             lock (mActorList)
             {
                 for (int i = 0; i < 8 && travelRequests.TryDequeue(out var travel); i++)

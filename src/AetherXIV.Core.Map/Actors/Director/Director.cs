@@ -1,4 +1,4 @@
-﻿using AetherXIV.Core.Common;
+using AetherXIV.Core.Common;
 using AetherXIV.Core.Map.actors.area;
 using AetherXIV.Core.Map.actors.group;
 using AetherXIV.Core.Map.Actors;
@@ -27,6 +27,11 @@ namespace AetherXIV.Core.Map.actors.director
         }
 
         public Director(uint id, Area zone, string directorPath, bool hasContentGroup, uint nativeClassId, string nativeClassPath, params object[] args)
+            : this(id, zone, directorPath, hasContentGroup, nativeClassId, nativeClassPath, nativeClassId != 0, args)
+        {
+        }
+
+        public Director(uint id, Area zone, string directorPath, bool hasContentGroup, uint nativeClassId, string nativeClassPath, bool cataloguedSlot, params object[] args)
             : base(NativeActorId.ComposeNonPlayer(zone.GetActorNamespaceId(), id))
         {
             directorId = id;
@@ -34,13 +39,13 @@ namespace AetherXIV.Core.Map.actors.director
             this.zoneId = zone.GetTerritoryId();
             directorScriptPath = directorPath;
             this.nativeClassId = nativeClassId;
-            hasNativeSlot = nativeClassId != 0;
+            hasNativeSlot = cataloguedSlot;
 
             if (!String.IsNullOrWhiteSpace(nativeClassPath))
             {
                 classPath = nativeClassPath;
                 className = nativeClassPath.Substring(nativeClassPath.LastIndexOf("/") + 1);
-                GenerateActorName(zone.ResolveObjectNameOrdinal(id, true));
+                GenerateActorName(zone.ResolveObjectNameOrdinal(id, cataloguedSlot));
                 isCreated = true;
             }
 
@@ -75,7 +80,7 @@ namespace AetherXIV.Core.Map.actors.director
             // ends at that id, so do not append script-derived compatibility
             // parameters. Non-native directors still obtain their extra
             // construction values from Lua.
-            if (!hasNativeSlot)
+            if (nativeClassId == 0)
             {
                 List<LuaParam> lparams = LuaEngine.GetInstance()
                     .CallLuaFunctionForReturn(null, this, "init", false);
@@ -113,9 +118,20 @@ namespace AetherXIV.Core.Map.actors.director
         {
             List<SubPacket> subpackets = new List<SubPacket>();
             SetActorPropetyPacket initProperties = new SetActorPropetyPacket("/_init");
+            if (directorScriptPath == "WeatherDirector")
+                initProperties.AddShort(Utils.MurmurHash2("weatherDirectorWork.weatherId", 0), zone.GetCurrentWeather());
             initProperties.AddTarget();
             subpackets.Add(initProperties.BuildPacket(actorId));
             return subpackets;
+        }
+
+        public SubPacket CreateWeatherUpdatePacket(ushort weather)
+        {
+            // WeatherDirectorBaseClass tags this integer16 as weatherInfo.
+            var properties = new SetActorPropetyPacket("weatherDirectorWork/weatherInfo");
+            properties.AddShort(Utils.MurmurHash2("weatherDirectorWork.weatherId", 0), weather);
+            properties.AddTarget();
+            return properties.BuildPacket(actorId);
         }
 
         public void OnTalkEvent(Player player, Npc npc)

@@ -145,6 +145,11 @@ namespace AetherXIV.Core.Map.Actors
             uint safeFlags = NpcPropertyPolicy.Sanitize(propertyFlags);
             for (int i = 0; i < 32; i++)
                 charaWork.property[i] = (byte)((safeFlags >> i) & 1);
+            // Caravan guards are friendly monster-class actors (client battalion
+            // 1). They need the combat depiction branch to render green even
+            // though these stationary placements have no talk event.
+            if (className == "ChocoboCaravanGuard")
+                charaWork.property[2] = 1;
         }
 
         public SubPacket CreateAddActorPacket()

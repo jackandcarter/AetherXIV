@@ -998,7 +998,7 @@ namespace AetherXIV.Core.Map
             player.privateArea = null;
             player.privateAreaType = 0;
 
-            player.SendSeamlessZoneInPackets();
+            player.SendSeamlessZoneInPackets(oldZone?.GetWeatherDirector());
             Database.SavePlayerPosition(player);
 
             DevDiagnostics.Trace(
