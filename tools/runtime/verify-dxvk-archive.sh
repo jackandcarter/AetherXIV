@@ -12,7 +12,9 @@ if [[ ! -f "${archive}" ]]; then
   exit 3
 fi
 
-if ! tar -tzf "${archive}" | grep -Eq '(^|/)(x32/d3d9\.dll)$'; then
+# Consume the entire listing: grep -q can close the pipe early, causing GNU
+# tar to fail under pipefail even when the DLL is present.
+if ! tar -tzf "${archive}" | grep -E '(^|/)(x32/d3d9\.dll)$' >/dev/null; then
   echo "DXVK archive is missing x32/d3d9.dll." >&2
   exit 4
 fi
