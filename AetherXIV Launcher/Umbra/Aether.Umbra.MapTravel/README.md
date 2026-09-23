@@ -8,8 +8,7 @@ Open it from Installed → Map Travel → Open, or through `/maptravel` when nat
 command dispatch is available.
 
 **Not yet connected to live map selection or server travel.** The window reports
-unavailable bindings. See [development status](../../../docs/UMBRA_MAP_TRAVEL.md)
-for builds, tests, and the remaining native/server integration.
+unavailable bindings until native map selection and server travel are connected.
 
 
 This is an installable third-party plugin, not a system plugin or bundled entry.

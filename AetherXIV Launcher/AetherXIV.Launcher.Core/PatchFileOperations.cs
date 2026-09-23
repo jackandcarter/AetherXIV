@@ -12,7 +12,7 @@ namespace AetherXIV.Launcher.Core;
 
 internal static class PatchFileOperations
 {
-    // One initial attempt plus five retries, matching Seventh Umbral's limit.
+    // One initial attempt plus five retries for temporary file locks.
     internal static void RetrySharingViolation(
         Action operation,
         CancellationToken cancellationToken = default,

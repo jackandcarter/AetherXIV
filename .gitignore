@@ -41,3 +41,12 @@ appsettings.*.local.json
 # Python caches
 **/__pycache__/
 *.py[cod]
+
+# Local research and working records
+/local-notes/
+/evidence/
+/outputs/
+/docs/*_20??-??-??.md
+/docs/*_VERIFICATION.md
+/docs/*_EVIDENCE.md
+/docs/*_AUDIT.md

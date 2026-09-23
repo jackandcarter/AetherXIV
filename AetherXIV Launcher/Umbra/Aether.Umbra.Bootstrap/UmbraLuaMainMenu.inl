@@ -1,6 +1,5 @@
 // Framework-owned MainMenuWidget binding for the verified 1.23b client.
 // Included inside dllmain.cpp's anonymous namespace. No client assets are edited.
-// See docs/UMBRA_CLIENT_API_INVENTORY.md for layout and address evidence.
 namespace LuaMainMenu
 {
     using State = void;

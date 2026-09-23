@@ -37,3 +37,11 @@ files you modify.
 
 Generated files, third-party files, and binary assets should retain their
 native notices and should not receive an AetherXIV authorship claim.
+
+## Public documentation
+
+Keep public documentation focused on installation, usage, supported APIs, builds,
+and user-facing release changes. Keep internal audits, investigation logs,
+implementation diaries, and source-comparison notes in the ignored `local-notes/`
+directory or outside the repository. Do not include them in commits or releases.
+Preserve all required third-party license and attribution notices.

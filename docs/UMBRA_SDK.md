@@ -193,8 +193,7 @@ the base lifecycle rather than a gated service.
 
 The Map Travel plugin and API contracts are implemented, but the native map
 selection adapter and authenticated server travel transport are not connected.
-Service availability remains false until those bindings are supplied. See
-[Map Travel development](UMBRA_MAP_TRAVEL.md) for the boundary and remaining work.
+Service availability remains false until those bindings are supplied.
 
 `IUmbraMapService.SelectedPin` contains zone/map/floor identity, world X/Z,
 a session identifier and a selection revision. It does not invent a height.
