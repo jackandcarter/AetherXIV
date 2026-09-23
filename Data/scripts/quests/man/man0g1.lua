@@ -139,10 +139,10 @@ end
 
 function onNotice(player, quest, target)
 	if (quest:GetSequence() == SEQ_005) then
-		-- Use the glowing Adventurers' Guild linkpearl and NPC chat, as in
-		-- Limsa/Ul'dah. The private-area Miounne handoff already queues it.
-		-- Tutorial widget restoration is parked until its flow is reliable.
-		-- callClientFunction(player, "delegateEvent", player, quest, "processEventTu_001");
+		-- The private-area Miounne handoff already queues the normal
+		-- Adventurers' Guild linkpearl message. Do not dispatch the separate
+		-- tutorial-widget event here; Gridania should follow the same
+		-- linkpearl-icon path as Limsa and Ul'dah.
 		player:EndEvent();
 		quest:UpdateENPCs();
 	end
@@ -212,9 +212,12 @@ function onStateChange(player, quest, sequence)
 			end
 		end
 	elseif (sequence == SEQ_060) then
-		if (player:GetZoneID() == 155) then
-			quest:SetENpc(GATE_TRIGGER, QFLAG_PUSH, false, true);
-		end
+		-- The White Wolf Gate is reached from Gridania's public 206 half,
+		-- while its quest-owned trigger is resolved through the seamless
+		-- Gridania zone set. Arm it for the quest phase rather than requiring
+		-- the player to already be in zone 155; this matches the reference
+		-- Man0g1 policy and keeps the trigger recoverable after a public reload.
+		quest:SetENpc(GATE_TRIGGER, QFLAG_PUSH, false, true);
 	elseif (sequence == SEQ_065) then
 		local data = quest:GetData();
 		if (player:GetPrivateAreaName() == "SimpleContentMan0g101") then
@@ -533,14 +536,8 @@ function onNpcLS(player, quest, from, msgStep)
 		end
 	end
 
-	--[[ Widget completion is parked with processEventTu_001 above.
-	if (sequence == SEQ_005) then
-		showTutorialSuccessWidget(player, 9080);
-		wait(3);
-		closeTutorialWidget(player);
-		endTutorialMode(player);
-	end
-	--]]
+	-- Gridania uses the normal NPC-linkshell icon/menu path here; the
+	-- tutorial-widget completion path is intentionally not part of this flow.
 
 	player:EndEvent();
 end

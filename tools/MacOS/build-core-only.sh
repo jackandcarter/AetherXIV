@@ -297,14 +297,14 @@ verify_core_app() {
     echo "Core package still dispatches the Linkpearl tutorial from the director instead of the owning quest." >&2
     exit 50
   fi
-  grep -Fq 'callClientFunction(player, "delegateEvent", player, quest, "processEventTu_001")' \
+  grep -Fq 'quest:NewNpcLsMsg(1)' \
     "${resources}/servers/map/scripts/quests/man/man0g1.lua" || {
-    echo "Core package does not contain the quest's opening-tutorial dispatch." >&2
+    echo "Core package does not contain Gridania's NPC-linkshell message handoff." >&2
     exit 50
   }
-  if grep -Fq 'player:RunEventFunction("delegateEvent", player, quest, "processEventTu_001")' \
+  if grep -Fq 'processEventTu_001' \
     "${resources}/servers/map/scripts/quests/man/man0g1.lua"; then
-    echo "Core package bypasses the parked Linkpearl tutorial dispatch." >&2
+    echo "Core package still contains the retired Gridania tutorial-widget dispatch." >&2
     exit 50
   fi
   if grep -Fq 'endTutorialMode(player);' "${resources}/servers/map/scripts/directors/AfterQuestWarpDirector.lua"; then

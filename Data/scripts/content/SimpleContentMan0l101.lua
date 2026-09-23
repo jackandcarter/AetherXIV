@@ -166,31 +166,59 @@ BARKS = {
 	arrival    = 290,   -- "We've finally arrived...and in one piece!"
 };
 
--- Per-player escort state, keyed by actor id: the VM is process-cached
--- per script path, so a plain scalar would interleave concurrent runs
--- (same rationale as the tutorial scripts' tutorialLiveHostiles).
-escortState = {};
+-- Lifecycle state must live on the content instance. The engine invokes
+-- onCreate and onUpdate through separate Lua VM contexts, so a Lua-global
+-- table is not a valid persistence boundary. This proxy deliberately keeps
+-- scalar fields out of the VM and in PrivateAreaContent.SetScriptState /
+-- GetScriptState, while retaining the existing Zone.Update scheduler.
+local function newState(area)
+	return setmetatable({
+		mobsLive = {},       -- rebuilt from the live roster for this callback
+		mobsEngaged = {},    -- engagement announcements for this callback
+	}, {
+		__index = function(_, key)
+			local value = area:GetScriptState(key);
+			if key == "done" or key == "reminded20" or key == "reminded10" or
+				key == "reminded5" or key == "sawEscort" or key == "waveEscortFought" or
+				key == "trailInit" then
+				return value ~= 0;
+			end
+			if value == 0 and (key == "startTick" or key == "lastBarkTick" or
+				key == "lastRingTick" or key == "lastOwnerX" or key == "lastOwnerZ") then
+				return nil;
+			end
+			return value;
+		end,
+		__newindex = function(_, key, value)
+			if value == nil then
+				value = 0;
+			elseif value == true then
+				value = 1;
+			elseif value == false then
+				value = 0;
+			end
+			area:SetScriptState(key, value);
+		end,
+	});
+end
 
 function onCreate(starterPlayer, contentArea, director)
-	escortState[starterPlayer.actorId] = {
-		done = false,        -- terminal latch (arrival signalled OR failed)
-		wpIndex = 1,         -- next TRAIL breadcrumb (re-seated to nearest on first tick)
-		startTick = nil,     -- latched on the first onUpdate tick (post-warp)
-		lastBarkTick = nil,
-		lastRingTick = nil,
-		lastNear = 0,        -- live-mob count near the party last tick (wave-outcome beat)
-		reminded20 = false,
-		reminded10 = false,
-		reminded5 = false,
-		sawEscort = false,   -- Sisipu observed alive at least once (death detection)
-		waveEscortFought = false,   -- Sisipu engaged during the current wave
-		trailInit = false,
-		lastOwnerX = nil,
-		lastOwnerZ = nil,
-		mobsLive = {},       -- actorId → true for position-synced live biters
-		mobsEngaged = {},    -- actorId → true once "<mob> is engaged." was announced
-		ringActorId = nil,   -- minimap-halo object id (re-acquired from the roster per tick)
-	};
+	local state = newState(contentArea);
+	state.done = false;        -- terminal latch (arrival signalled OR failed)
+	state.wpIndex = 1;        -- next TRAIL breadcrumb (re-seated to nearest on first tick)
+	state.startTick = nil;    -- latched on the first onUpdate tick (post-warp)
+	state.lastBarkTick = nil;
+	state.lastRingTick = nil;
+	state.lastNear = 0;       -- live-mob count near the party last tick (wave-outcome beat)
+	state.reminded20 = false;
+	state.reminded10 = false;
+	state.reminded5 = false;
+	state.sawEscort = false;  -- Sisipu observed alive at least once (death detection)
+	state.waveEscortFought = false;
+	state.trailInit = false;
+	state.lastOwnerX = nil;
+	state.lastOwnerZ = nil;
+	state.ringActorId = 0;    -- minimap-halo object id (re-acquired from the roster per tick)
 
 	-- Zone-128 route spawns (migration 000036: Sisipu bnpc 25 beside the
 	-- gate-side warp-in point; biters 26-33 one per ambush point).
@@ -204,7 +232,7 @@ function onCreate(starterPlayer, contentArea, director)
 	-- alongside her every frame in onUpdate. Only the ID is stored —
 	-- each tick re-acquires a queue-bound handle from the roster.
 	local ring = contentArea:SpawnActor(ESCORT_RING_CLASS, "escortAreaRange", -49.0, 36.43, 162.0, 0);
-	escortState[starterPlayer.actorId].ringActorId = ring.actorId;
+	state.ringActorId = ring.actorId;
 
 	-- Active MainState so Sisipu stands and the ankle biters render
 	-- hostile (tutorial-fight pattern).
@@ -292,8 +320,21 @@ function onUpdate(tick, area)
 		if player then owner = owner or player end
 	end
 	if not owner then return end
-	local state = escortState[owner.actorId]
-	if not state or state.done then return end
+	local state = newState(area)
+	if not state then
+		GetLuaInstance():TraceContentEscort(
+			"missing-state", owner, nil, #players, #allies, #mobs,
+			0, 0, 0, 0, false)
+		return
+	end
+	if state.done then return end
+	local escort = nil
+	for ally in allies do
+		escort = escort or ally
+	end
+	GetLuaInstance():TraceContentEscort(
+		"roster", owner, escort, #players, #allies, #mobs,
+		0, state.wpIndex or 0, 0, 0, false)
 
 	-- The ticker already parks the content driver on the post-warp ack,
 	-- so the escort runs from the first post-ack tick. No cross-VM
@@ -322,7 +363,12 @@ function onUpdate(tick, area)
 
 	-- ---- Sisipu death = fail (rosters are live-only, so a dead
 	-- escort simply vanishes from GetAllies) ----
-	local escort = allies[1]
+	-- CLR actor collections are iterated directly; they are not Lua
+	-- one-based arrays.
+	local escort = nil
+	for ally in allies do
+		escort = escort or ally
+	end
 	if escort then
 		if not state.sawEscort then
 			-- First live sighting = the duty is underway. Retail entry
@@ -341,6 +387,9 @@ function onUpdate(tick, area)
 		return;
 	else
 		-- Pre-onCreate tick (roster not populated yet) — wait.
+		GetLuaInstance():TraceContentEscort(
+			"missing-escort", owner, nil, #players, #allies, #mobs,
+			0, state.wpIndex or 0, 0, 0, false)
 		return;
 	end
 
@@ -354,6 +403,9 @@ function onUpdate(tick, area)
 		return a and not (a.positionX == 0 and a.positionY == 0 and a.positionZ == 0);
 	end
 	if not positionLive(escort) or not positionLive(owner) then
+		GetLuaInstance():TraceContentEscort(
+			"unsynchronized-position", owner, escort, #players, #allies, #mobs,
+			0, state.wpIndex or 0, 0, 0, false)
 		return;
 	end
 
@@ -362,8 +414,9 @@ function onUpdate(tick, area)
 	local nearestMob, nearestD = nil, math.huge
 	local ring = nil
 	local liveIds = {}
-	for i = 1, #mobs do
-		local mob = mobs[i]
+	local mobIndex = 0
+	for mob in mobs do
+		mobIndex = mobIndex + 1
 		if mob and state.ringActorId ~= nil and mob.actorId == state.ringActorId then
 			ring = mob;
 		elseif mob and positionLive(mob) then
@@ -385,7 +438,7 @@ function onUpdate(tick, area)
 				nearestMob, nearestD = mob, dMob
 			end
 			if dMob <= ENGAGE_RADIUS and not mob:IsEngaged() then
-				allyGlobal.EngageTarget(mob, (i % 2 == 0) and escort or owner)
+				allyGlobal.EngageTarget(mob, (mobIndex % 2 == 0) and escort or owner)
 			end
 		end
 	end
@@ -396,7 +449,9 @@ function onUpdate(tick, area)
 			owner:SendGameMessageLocalizedDisplayName(GetWorldMaster(), TEXT_MOB_DEFEATED, 0x20, ANKLE_BITER_DISPLAY_ID);
 		end
 	end
-	state.mobsLive = liveIds;
+	-- The live roster is authoritative for this tick; lifecycle scalar
+	-- state remains on the content area. Do not assign this temporary Lua
+	-- table through the scalar state proxy.
 
 	-- Minimap halo follows Sisipu EVERY tick, hoisted before the movement
 	-- early-returns so the halo tracks her while walking AND while pinned
@@ -436,10 +491,17 @@ function onUpdate(tick, area)
 		state.waveEscortFought = false;
 	end
 	state.lastNear = nearLive;
+	local dPlayer = dist2d(escort.positionX, escort.positionZ, owner.positionX, owner.positionZ);
+	GetLuaInstance():TraceContentEscort(
+		"combat-evaluated", owner, escort, #players, #allies, #mobs,
+		dPlayer, state.wpIndex or 0, 0, nearLive, anyEngaged or escort:IsEngaged())
 
 	-- ---- Hold while contested: any live mob engaged with the party, or
 	-- still lurking inside the hold radius, pins her ----
 	if nearLive > 0 or anyEngaged or escort:IsEngaged() then
+		GetLuaInstance():TraceContentEscort(
+			"hold-combat", owner, escort, #players, #allies, #mobs,
+			dPlayer, state.wpIndex or 0, 0, nearLive, anyEngaged or escort:IsEngaged())
 		return
 	end
 
@@ -455,7 +517,6 @@ function onUpdate(tick, area)
 	end
 
 	-- ---- Sisipu TRACES the player's recorded footsteps ----
-	local dPlayer = dist2d(escort.positionX, escort.positionZ, owner.positionX, owner.positionZ);
 
 	-- One-time: start from the trail point nearest her spawn (the first
 	-- breadcrumb is the warp-in spot behind her seed position).
@@ -470,6 +531,9 @@ function onUpdate(tick, area)
 	end
 
 	if dPlayer > PLAYER_LEASH then
+		GetLuaInstance():TraceContentEscort(
+			"hold-leash", owner, escort, #players, #allies, #mobs,
+			dPlayer, state.wpIndex or 0, 0, nearLive, false)
 		-- Player lagging (fight, detour) — she holds and (rate-limited)
 		-- chides rather than walking off.
 		if state.lastBarkTick == nil or tick - state.lastBarkTick >= BARK_INTERVAL_TICKS then
@@ -493,6 +557,9 @@ function onUpdate(tick, area)
 			end
 		until wp == nil or d == nil or d > WAYPOINT_RADIUS or state.wpIndex > #TRAIL;
 		if wp ~= nil and d ~= nil and d > WAYPOINT_RADIUS then
+			GetLuaInstance():TraceContentEscort(
+				"move-command", owner, escort, #players, #allies, #mobs,
+				dPlayer, state.wpIndex or 0, d, nearLive, false)
 			local dx = (wp.x - escort.positionX) / d;
 			local dz = (wp.z - escort.positionZ) / d;
 			local step = math.min(RUN_STEP, d);
@@ -515,8 +582,9 @@ function onUpdate(tick, area)
 				math.atan(dx, dz), 2);
 		end
 	end
-	state.lastOwnerX = owner.positionX;
-	state.lastOwnerZ = owner.positionZ;
+	-- The content-area state API stores integral lifecycle values. The
+	-- trail normally reaches arrival before the player-relative fallback;
+	-- do not persist floating-point coordinates through that API.
 
 	-- Guidance bark ("Oschon's Torch is due south...") every ~20 s while
 	-- escorting — man0l1 sheet row 283.
@@ -529,11 +597,7 @@ end
 -- Leave-duty teardown (the confirmed-leave command path): the same
 -- eject-and-retry flow as a timeout/death fail.
 function onAbort(player, contentArea, director)
-	local state = escortState[player.actorId];
-	if state == nil then
-		state = { done = false };
-		escortState[player.actorId] = state;
-	end
+	local state = newState(contentArea);
 	if state.done then
 		return;
 	end

@@ -78,11 +78,7 @@ compatibility runtime automatically):
 AETHERXIV_WINE_RUNTIME_ROOT="$runtime_root" ./tools/MacOS/build-aetherxiv.sh Release
 ```
 
-Use `Debug` instead of `Release` for a symbol-bearing development package:
-
-```bash
-AETHERXIV_WINE_RUNTIME_ROOT="$runtime_root" ./tools/MacOS/build-aetherxiv.sh Debug
-```
+macOS packaging accepts only `Release`; Debug package requests are rejected.
 
 To rebuild only the Launcher, its Windows helper, Umbra, and the bundled
 compatibility runtime while leaving all Core and server outputs untouched:
@@ -117,13 +113,19 @@ x64 managed helper, the native x86 Umbra injector, and the integrity-pinned
 Umbra base framework. The 32-bit game and Umbra do not require a user-installed
 Wine provider or a separately installed 32-bit .NET runtime.
 
-A core-only build is written separately and never alters the full package:
+A core-only build updates only Core and Database in the same Release directory,
+preserving the existing Launcher, Wine runtime, and Umbra payload:
 
 ```text
-bin/build/Release/MacOS-Core/
+bin/build/Release/MacOS/
 ├── AetherXIV Core.app
 └── Database/
 ```
+
+All macOS packaging modes (full, core-only, and launcher-only) are Release-only
+and publish to `bin/build/Release/MacOS`. Debug configuration requests, including
+environment overrides, are rejected. Temporary build/staging files are removed
+after packaging; no parallel `MacOS-Core` release directory is created.
 
 The standalone Launcher download is assembled from the verified Launcher app
 inside the full build; it contains no Core app, server hosts, or database

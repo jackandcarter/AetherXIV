@@ -15,6 +15,12 @@ MAN0U1_MARKER_MOMODI = 11001001;
 MAN0U1_MARKER_CAMP_BLACK_BRUSH = 11001002;
 MAN0U1_ITEM_COLISEUM_PASS = 11000126;
 
+-- These are the two Momodi rows historically emitted by the Ul'dah
+-- opening-exit script. They belong to the Adventurers' Guild linkpearl
+-- response, so publish them when the player selects that NPC-linkshell
+-- message rather than before the public-zone reload.
+MAN0U1_INITIAL_NPCLS_ROWS = { 329, 330 };
+
 -- Shipped Man0u1.processEvent013 calls tellByNpcLinkshellChat with these
 -- Momodi rows. That client routine yields after each line; a server
 -- callClientFunction resumes on its first EventUpdate and tears the pearl
@@ -78,7 +84,12 @@ function onNpcLS(player, quest, from, msgStep)
 		quest:StartSequenceForNpcLs(MAN0U1_SEQ_RETURN);
 	else
 		-- The pearl is granted during Momodi's briefing and can be tried before
-		-- leaving. Retail answers with her Camp Black Brush reminder.
+		-- leaving. The recovered Momodi rows are part of this click response;
+		-- keep the client event for its progression behavior as well.
+		for _, textId in ipairs(MAN0U1_INITIAL_NPCLS_ROWS) do
+			player:SendGameMessageLocalizedDisplayName(
+				quest, textId, MESSAGE_TYPE_NPC_LINKSHELL, MAN0U1_MOMODI_DISPLAY_ID);
+		end
 		callClientFunction(player, "delegateEvent", player, quest, "processEvent010_2");
 		quest:EndOfNpcLsMsgs();
 	end

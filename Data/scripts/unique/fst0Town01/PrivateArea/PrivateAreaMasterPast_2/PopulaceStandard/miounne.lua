@@ -18,11 +18,11 @@ function onEventStarted(player, npc, triggerName)
 		man0g1Quest:StartSequence(5);
 		player:EndEvent();
 
-		local director = GetWorldManager():GetZone(155):CreateDirector("AfterQuestWarpDirector", false);
-		director:StartDirector(true);
-		player:AddDirector(director);
-		player:SetLoginDirector(director);
-		player:DeferContentKickEvent(director, "noticeEvent", true);
+		-- This no-widget handoff follows the working Ul'dah/Limsa contract:
+		-- publish the NPC-linkshell state, close the private event, and reload
+		-- the public zone. Do not create a deferred notice director here; its
+		-- type-5 kick is not a linkpearl click and leaves the client without
+		-- the normal icon/menu transaction.
 		man0g1Quest:UpdateENPCs();
 		GetWorldManager():DoZoneChange(player, 155, nil, 0, 15,
 			pos[0], pos[1], pos[2], pos[3]);

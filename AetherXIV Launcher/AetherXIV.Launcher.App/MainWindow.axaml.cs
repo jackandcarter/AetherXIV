@@ -69,6 +69,8 @@ public sealed partial class MainWindow : Window
     private bool homeReelTextEnabled;
     private int homeReelIndex;
     private bool showBuildNumber;
+    private GraphicsCapabilitySnapshot? graphicsCapability;
+    private Task<GraphicsCapabilityProbeResult>? graphicsCapabilityTask;
 
     private const int ServerPresetLocalhost = 0;
     private const int ServerPresetDemiDevUnit = 1;
@@ -317,6 +319,8 @@ public sealed partial class MainWindow : Window
             return;
 
         ApplyWindowSizeForSelectedTab();
+        if (MainTabs.SelectedIndex == 2)
+            _ = RefreshGraphicsCapabilityAsync();
     }
 
     private void ApplyWindowSizeForSelectedTab()
@@ -1520,6 +1524,8 @@ public sealed partial class MainWindow : Window
         SetLaunchInProgress("Preparing...", "Preparing launch...");
         try
         {
+            if (ReadGraphicsTarget() == ClientGraphicsTarget.DxvkD3D9)
+                await RefreshGraphicsCapabilityAsync();
             SaveCurrentProfile();
             ClientInstall clientInstall = ClientInstall.FromPath(ClientPathBox.Text ?? "");
             ClientInstallReport report = clientInstall.Inspect();
@@ -2128,7 +2134,23 @@ public sealed partial class MainWindow : Window
         if (!platform.RequiresCompatibilityRuntime || profile.Kind == WineRuntimeKind.NativeWindows)
             return profile;
 
-        return profile.WithGraphicsTarget(ReadGraphicsTarget());
+        ClientGraphicsTarget target = ReadGraphicsTarget();
+        if (target != ClientGraphicsTarget.DxvkD3D9)
+            return profile.WithGraphicsTarget(target);
+
+        if (managedRuntimeInstall is null
+            || graphicsCapability is null
+            || !graphicsCapability.DxvkD3D9Available
+            || !string.Equals(graphicsCapability.RuntimeVersion, managedRuntimeInstall.Version, StringComparison.Ordinal))
+        {
+            return profile.WithGraphicsTarget(ClientGraphicsTarget.WineDefault);
+        }
+
+        string dxvkDllPath = Path.Combine(managedRuntimeInstall.InstallPath, "dxvk", "x32", "d3d9.dll");
+        return DxvkRuntimeConfigurator.ApplyD3D9(
+            profile.WithGraphicsTarget(ClientGraphicsTarget.WineDefault),
+            RuntimeInstallStore.ManagedPrefixPath,
+            dxvkDllPath);
     }
 
     private RuntimeSelectionMode ReadRuntimeMode()
@@ -2590,6 +2612,7 @@ public sealed partial class MainWindow : Window
             LoginUserBox.Text = profile.RememberUsername ? profile.SavedUsername : "";
             SelectServerPresetForProfile(profile);
             ApplyLaunchHelperMode(profile.LaunchHelperMode);
+            graphicsCapability = profile.GraphicsCapability;
             ApplyGraphicsTarget(profile.GraphicsTarget);
             ApplyUmbraSettings(profile.EffectiveUmbra);
         }
@@ -2625,6 +2648,7 @@ public sealed partial class MainWindow : Window
         GraphicsTargetBox.SelectedIndex = graphicsTarget switch
         {
             ClientGraphicsTarget.OpenGLThreaded => 1,
+            ClientGraphicsTarget.DxvkD3D9 => 2,
             // Wine default, and the legacy OpenGLCompatibility value that is
             // normalized to it, both map to the top entry.
             _ => 0
@@ -2655,7 +2679,8 @@ public sealed partial class MainWindow : Window
                 ReadGraphicsTarget(),
                 RememberUsernameBox.IsChecked == true ? (LoginUserBox.Text ?? "").Trim() : "",
                 RememberUsernameBox.IsChecked == true,
-                ReadUmbraSettings());
+                ReadUmbraSettings(),
+                graphicsCapability);
             ProfileStore.SaveDefault(profile);
         }
         catch (Exception ex)
@@ -2787,7 +2812,57 @@ public sealed partial class MainWindow : Window
         ManagedRuntimeStatus.Text = managedRuntimeInstall is null
             ? error
             : "Bundle found. Validate it before launch to check Rosetta or Linux libraries, the isolated prefix, client helper, and Umbra.";
+        DxvkGraphicsTargetItem.IsVisible = false;
         UpdateRuntimeUiState();
+        if (managedRuntimeInstall is not null)
+            _ = RefreshGraphicsCapabilityAsync();
+    }
+
+    private async Task RefreshGraphicsCapabilityAsync()
+    {
+        if (!GraphicsCapabilityProbe.IsSupportedPlatform(platform) || managedRuntimeInstall is null)
+        {
+            DxvkGraphicsTargetItem.IsVisible = false;
+            if (ReadGraphicsTarget() == ClientGraphicsTarget.DxvkD3D9)
+                ApplyGraphicsTarget(ClientGraphicsTarget.WineDefault);
+            return;
+        }
+
+        (string fingerprint, _) = await GraphicsCapabilityProbe.GetCurrentFingerprintAsync(managedRuntimeInstall);
+        if (graphicsCapability is not null
+            && (graphicsCapability.DxvkD3D9Available
+                || DateTimeOffset.UtcNow - graphicsCapability.ValidatedAtUtc < TimeSpan.FromMinutes(1))
+            && graphicsCapability.SchemaVersion == GraphicsCapabilityFingerprint.CurrentSchemaVersion
+            && string.Equals(graphicsCapability.Fingerprint, fingerprint, StringComparison.Ordinal))
+        {
+            DxvkGraphicsTargetItem.IsVisible = graphicsCapability.DxvkD3D9Available;
+            return;
+        }
+
+        if (graphicsCapabilityTask is null)
+        {
+            graphicsCapabilityTask = GraphicsCapabilityProbe.ProbeAsync(managedRuntimeInstall);
+        }
+
+        GraphicsCapabilityProbeResult result;
+        try
+        {
+            result = await graphicsCapabilityTask;
+        }
+        catch (Exception ex)
+        {
+            graphicsCapabilityTask = null;
+            DxvkGraphicsTargetItem.IsVisible = false;
+            graphicsCapability = null;
+            AppendLog($"DXVK capability probe failed: {ex.Message}");
+            return;
+        }
+
+        graphicsCapabilityTask = null;
+        graphicsCapability = result.Snapshot;
+        DxvkGraphicsTargetItem.IsVisible = result.Snapshot.DxvkD3D9Available;
+        AppendLog($"DXVK capability: {result.Snapshot.Summary}");
+        SaveCurrentProfile();
     }
 
     private void RefreshInstalledUmbraFrameworkStatus()
@@ -2900,6 +2975,7 @@ public sealed partial class MainWindow : Window
         return GraphicsTargetBox.SelectedIndex switch
         {
             1 => ClientGraphicsTarget.OpenGLThreaded,
+            2 => ClientGraphicsTarget.DxvkD3D9,
             _ => ClientGraphicsTarget.WineDefault
         };
     }
@@ -2920,6 +2996,7 @@ public sealed partial class MainWindow : Window
         return target switch
         {
             ClientGraphicsTarget.OpenGLThreaded => "OpenGL threaded",
+            ClientGraphicsTarget.DxvkD3D9 => "DXVK / Vulkan",
             _ => "Wine default"
         };
     }

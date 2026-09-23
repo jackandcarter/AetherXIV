@@ -1259,7 +1259,9 @@ WHERE id = @characterId", conn))
             }
         }
 
-        public static void MarkGuildleve(Player player, uint glId, bool isAbandoned, bool isCompleted)
+        // Legacy column names are retained: abandoned stores work.done, completed
+        // stores work.checked. Do not reinterpret persisted rows as reward state.
+        public static bool MarkGuildleve(Player player, uint glId, bool done, bool checkedLeve)
         {
             string query;
             MySqlCommand cmd;
@@ -1279,14 +1281,15 @@ WHERE id = @characterId", conn))
                     cmd = new MySqlCommand(query, conn);
                     cmd.Parameters.AddWithValue("@charaId", player.actorId);
                     cmd.Parameters.AddWithValue("@guildleveId", glId);
-                    cmd.Parameters.AddWithValue("@abandoned", isAbandoned);
-                    cmd.Parameters.AddWithValue("@completed", isCompleted);
+                    cmd.Parameters.AddWithValue("@abandoned", done);
+                    cmd.Parameters.AddWithValue("@completed", checkedLeve);
 
-                    cmd.ExecuteNonQuery();
+                    return cmd.ExecuteNonQuery() > 0;
                 }
                 catch (MySqlException e)
                 {
                     Program.Log.Error(e.ToString());
+                    return false;
                 }
                 finally
                 {
@@ -1401,7 +1404,7 @@ WHERE id = @characterId", conn))
             }
         }
 
-        public static void RemoveGuildleve(Player player, uint glId)
+        public static bool RemoveGuildleve(Player player, uint glId)
         {
             string query;
             MySqlCommand cmd;
@@ -1422,10 +1425,12 @@ WHERE id = @characterId", conn))
                     cmd.Parameters.AddWithValue("@guildleveId", glId);
 
                     cmd.ExecuteNonQuery();
+                    return true;
                 }
                 catch (MySqlException e)
                 {
                     Program.Log.Error(e.ToString());
+                    return false;
                 }
                 finally
                 {

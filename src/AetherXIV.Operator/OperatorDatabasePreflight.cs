@@ -42,7 +42,7 @@ public static class AetherXivDatabaseCompatibility
     public const string CompatibilityId = "aetherxiv-direct-core-v2";
     public const string BaselineId = "20260716_000001_ffxiv_server_v2_baseline";
     public const string GuildleveContentMigration = "20260716_000005_guildleve_content_contract.sql";
-    public const string LatestDirectCoreMigration = "20260916_000040_gridania_qzamqo_restoration.sql";
+    public const string LatestDirectCoreMigration = "20260920_000053_limsa_man0l1_zephyr_trigger_spawn.sql";
     public static readonly IReadOnlyList<string> RequiredDirectCoreMigrations =
     [
         "20260627_battlenpc_spawn_audit_pins.sql",
@@ -86,7 +86,20 @@ public static class AetherXivDatabaseCompatibility
         "20260914_000037_repair_limsa_private_area_identity.sql",
         "20260914_000038_limsa_man0l1_musketeers_echo.sql",
         "20260914_000039_restore_launcher_news_post.sql",
-        "20260916_000040_gridania_qzamqo_restoration.sql"
+        "20260916_000040_gridania_qzamqo_restoration.sql",
+        "20260917_000041_bard_quest_progression.sql",
+        "20260918_000042_limsa_echo_actor_definitions.sql",
+        "20260918_000043_man1g0_captured_triggers.sql",
+        "20260918_000044_captured_shroud_thanalan_enemies.sql",
+        "20260919_000045_thanalan_west_central_boundary.sql",
+        "20260919_000046_blackbrush_named_pin_npcs.sql",
+        "20260919_000047_blackbrush_identified_pin_npcs.sql",
+        "20260919_000048_horizon_named_pin_spawns.sql",
+        "20260919_000049_horizon_wistsunn_shop_event.sql",
+        "20260919_000050_horizon_caravan_guide.sql",
+        "20260919_000051_limsa_man0l1_guild_echoes.sql",
+        "20260920_000052_thanalan_enemy_and_mining_pins.sql",
+        "20260920_000053_limsa_man0l1_zephyr_trigger_spawn.sql"
     ];
     public const string NpcServiceCatalogId = "zone-service-npcs-1.23b";
     public const string NpcServiceCatalogVersion = "2026.07.19.1";

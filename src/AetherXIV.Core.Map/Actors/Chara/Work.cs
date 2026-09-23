@@ -6,6 +6,14 @@
         public bool[] guildleveDone = new bool[16];
         public bool[] guildleveChecked = new bool[16];
 
+        // Reusing or clearing a journal slot must clear all three wire fields.
+        internal void ResetGuildleveSlot(int slot, ushort id = 0)
+        {
+            guildleveId[slot] = id;
+            guildleveDone[slot] = false;
+            guildleveChecked[slot] = false;
+        }
+
         public bool betacheck = false;        
 
         public bool[] event_achieve_aetheryte = new bool[128];

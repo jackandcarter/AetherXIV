@@ -27,7 +27,8 @@ public sealed record LauncherProfile(
     ClientGraphicsTarget GraphicsTarget = ClientGraphicsTarget.WineDefault,
     string SavedUsername = "",
     bool RememberUsername = false,
-    UmbraSettings? Umbra = null)
+    UmbraSettings? Umbra = null,
+    GraphicsCapabilitySnapshot? GraphicsCapability = null)
 {
     public const string DemiDevUnitLauncherServiceUrl = "https://launcher.dev.demidevunit.com/launcher";
     public const string DemiDevUnitUmbraServiceUrl = "https://launcher.dev.demidevunit.com/umbra/v1";

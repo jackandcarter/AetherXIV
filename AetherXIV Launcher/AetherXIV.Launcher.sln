@@ -21,6 +21,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Umbra", "Umbra", "{C5DD1B41
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aether.Umbra.DiscordRichPresence", "Umbra\Aether.Umbra.DiscordRichPresence\Aether.Umbra.DiscordRichPresence.csproj", "{CE3E961C-BE55-43ED-97FC-7A50A7680CDF}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aether.Umbra.MapTravel", "Umbra\Aether.Umbra.MapTravel\Aether.Umbra.MapTravel.csproj", "{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -151,11 +153,24 @@ Global
 		{CE3E961C-BE55-43ED-97FC-7A50A7680CDF}.Release|x64.Build.0 = Release|Any CPU
 		{CE3E961C-BE55-43ED-97FC-7A50A7680CDF}.Release|x86.ActiveCfg = Release|Any CPU
 		{CE3E961C-BE55-43ED-97FC-7A50A7680CDF}.Release|x86.Build.0 = Release|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Debug|x64.Build.0 = Debug|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Debug|x86.Build.0 = Debug|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Release|x64.ActiveCfg = Release|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Release|x64.Build.0 = Release|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Release|x86.ActiveCfg = Release|Any CPU
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{CE3E961C-BE55-43ED-97FC-7A50A7680CDF} = {C5DD1B41-91AA-8D3B-BEAF-72AC0831C118}
+		{EEF15DA8-468C-4FA6-AAAE-5BA3E92E6365} = {C5DD1B41-91AA-8D3B-BEAF-72AC0831C118}
 	EndGlobalSection
 EndGlobal

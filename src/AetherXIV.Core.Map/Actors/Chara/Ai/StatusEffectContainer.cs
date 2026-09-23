@@ -149,15 +149,17 @@ namespace AetherXIV.Core.Map.actors.chara.ai
 
         public bool AddStatusEffect(uint id, byte tier, double magnitude, uint duration, int tickMs, CommandResultContainer actionContainer = null, ushort worldmasterTextId = 30328)
         {
+            if (tickMs < 0) return false;
             var se = Server.GetWorldManager().GetStatusEffect(id);
-
             if (se != null)
             {
                 se.SetDuration(duration);
-                se.SetOwner(owner);
+                se.SetMagnitude(magnitude);
+                se.SetTier(tier);
+                se.SetTickMs((uint)tickMs);
                 worldmasterTextId = se.GetStatusGainTextId();
             }
-            return AddStatusEffect(se ?? new StatusEffect(this.owner, id, magnitude, 3000, duration, tier), owner, actionContainer, worldmasterTextId);
+            return AddStatusEffect(se ?? new StatusEffect(owner, id, magnitude, (uint)tickMs, duration, tier), owner, actionContainer, worldmasterTextId);
         }
 
         public bool AddStatusEffect(StatusEffect newEffect, Character source, CommandResultContainer actionContainer = null, ushort worldmasterTextId = 30328)

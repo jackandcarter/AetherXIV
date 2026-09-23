@@ -457,6 +457,18 @@ namespace AetherXIV.Core.Map
                                         ownerActor = rootZone.FindActorInZone(eventStart.ownerActorID);
                                 }
                             }
+
+                            // Seamless transitions stream destination-side actors while
+                            // the player remains in the source zone during the merge
+                            // corridor. Resolve an event owner from that partner area
+                            // before closing the client event as missing.
+                            if (ownerActor == null
+                                && eventPlayer.zone2 != null
+                                && eventPlayer.zone2 != eventPlayer.zone)
+                            {
+                                ownerActor = eventPlayer.zone2.FindActorInArea(eventStart.ownerActorID);
+                            }
+
                             if (ownerActor == null)
                             {
                                 //Is it a Director?

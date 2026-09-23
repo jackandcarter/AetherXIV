@@ -15,6 +15,7 @@ namespace AetherXIV.Core.Map.actors.area
     {
         private Director currentDirector;
         private bool isContentFinished = false;
+        private bool contentWarpReady = false;
         private bool battleCompletionSignaled = false;
         private bool isDestroyRequested = false;
         private DateTime lastContentUpdate = DateTime.MinValue;
@@ -44,6 +45,29 @@ namespace AetherXIV.Core.Map.actors.area
         public Director GetContentDirector()
         {
             return currentDirector;
+        }
+
+        /// <summary>
+        /// Marks this content instance runnable after the normal client zone-in
+        /// acknowledgement. Zone.Update remains the sole content scheduler;
+        /// this flag only enforces the existing transition boundary.
+        /// </summary>
+        public void MarkContentWarpReady()
+        {
+            if (contentWarpReady)
+                return;
+
+            contentWarpReady = true;
+            DevDiagnostics.Trace(
+                "content.area.warp.ready",
+                "zone", zoneName,
+                "privateArea", GetPrivateAreaName(),
+                "privateAreaType", GetPrivateAreaType());
+        }
+
+        public bool IsContentWarpReady()
+        {
+            return contentWarpReady;
         }
 
         public void ContentFinished()
@@ -99,7 +123,7 @@ namespace AetherXIV.Core.Map.actors.area
             battleCompletionSignaled = true;
             foreach (Player player in currentDirector.GetPlayerMembers().OfType<Player>())
             {
-                string signal = GridaniaOpeningTutorialPolicy.BuildBattleCompleteSignal(player.actorId);
+                string signal = ContentSignalPolicy.BuildPlayerSignal("battleComplete", player.actorId);
                 DevDiagnostics.Trace(
                     "tutorial.gridania.battleComplete",
                     "player", player.customDisplayName,
@@ -117,12 +141,12 @@ namespace AetherXIV.Core.Map.actors.area
 
         public string GetBattleCompleteSignal(Player player)
         {
-            return GridaniaOpeningTutorialPolicy.BuildBattleCompleteSignal(player.actorId);
+            return ContentSignalPolicy.BuildPlayerSignal("battleComplete", player.actorId);
         }
 
         public string GetPlayerSignal(Player player, string signal)
         {
-            return GridaniaOpeningTutorialPolicy.BuildPlayerSignal(signal, player.actorId);
+            return ContentSignalPolicy.BuildPlayerSignal(signal, player.actorId);
         }
 
         /// <summary>
@@ -172,21 +196,43 @@ namespace AetherXIV.Core.Map.actors.area
 
         public override void Update(DateTime tick)
         {
+            DevDiagnostics.Trace(
+                "content.area.update.enter",
+                "zone", zoneName,
+                "privateArea", GetPrivateAreaName(),
+                "privateAreaType", GetPrivateAreaType(),
+                "contentWarpReady", contentWarpReady,
+                "contentFinished", isContentFinished,
+                "contentUpdateTick", contentUpdateTick);
+
             base.Update(tick);
 
             // Content scripts own time-sensitive duty behavior such as escort
             // movement. Keep this hook scoped to content instances; enabling
             // the dormant Area-wide callback would unexpectedly activate old
             // zone scripts that were never part of the modern runtime.
-            if (isContentFinished || (tick - lastContentUpdate).TotalMilliseconds < 500)
+            if (isContentFinished || !contentWarpReady ||
+                (tick - lastContentUpdate).TotalMilliseconds < 500)
                 return;
 
             lastContentUpdate = tick;
             contentUpdateTick++;
+            DevDiagnostics.Trace(
+                "content.area.update.callback.begin",
+                "zone", zoneName,
+                "privateArea", GetPrivateAreaName(),
+                "privateAreaType", GetPrivateAreaType(),
+                "tick", contentUpdateTick);
             try
             {
                 LuaEngine.GetInstance().CallLuaFunctionForReturn(
                     LuaEngine.GetScriptPath(this), "onUpdate", true, contentUpdateTick, this);
+                DevDiagnostics.Trace(
+                    "content.area.update.callback.end",
+                    "zone", zoneName,
+                    "privateArea", GetPrivateAreaName(),
+                    "privateAreaType", GetPrivateAreaType(),
+                    "tick", contentUpdateTick);
             }
             catch (Exception exception)
             {

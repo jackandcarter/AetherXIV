@@ -4,6 +4,7 @@ using AetherXIV.Core.Map.lua;
 using AetherXIV.Core.Map.packets.send.actor;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using AetherXIV.Core.Map.actors.director;
 
 namespace AetherXIV.Core.Map.actors.area
@@ -416,8 +417,18 @@ namespace AetherXIV.Core.Map.actors.area
                 foreach(var b in a.Values)
                     b.Update(tick);
 
-            foreach (PrivateAreaContent contentArea in
-                GetContentAreaSnapshot())
+            PrivateAreaContent[] contentAreaSnapshot = GetContentAreaSnapshot();
+            if (contentAreaSnapshot.Length > 0)
+            {
+                DevDiagnostics.Trace(
+                    "zone.content.update.dispatch",
+                    "zone", zoneName,
+                    "zoneId", GetTerritoryId(),
+                    "contentAreaCount", contentAreaSnapshot.Length,
+                    "contentAreas", String.Join(",", contentAreaSnapshot.Select(area => area.GetPrivateAreaName())));
+            }
+
+            foreach (PrivateAreaContent contentArea in contentAreaSnapshot)
             {
                 contentArea.Update(tick);
             }

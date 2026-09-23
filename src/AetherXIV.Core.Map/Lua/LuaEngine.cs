@@ -1400,6 +1400,40 @@ namespace AetherXIV.Core.Map.lua
             return script;
         }
 
+        public void TraceContentEscort(
+            string stage,
+            Actor owner,
+            Actor escort,
+            int playerCount,
+            int allyCount,
+            int monsterCount,
+            double playerDistance,
+            int waypointIndex,
+            double waypointDistance,
+            int nearLive,
+            bool anyEngaged)
+        {
+            DevDiagnostics.Trace(
+                "content.escort.guard",
+                "stage", stage ?? "",
+                "owner", owner == null ? "0x0" : String.Format("0x{0:X}", owner.actorId),
+                "ownerX", owner?.positionX ?? 0,
+                "ownerY", owner?.positionY ?? 0,
+                "ownerZ", owner?.positionZ ?? 0,
+                "escort", escort == null ? "0x0" : String.Format("0x{0:X}", escort.actorId),
+                "escortX", escort?.positionX ?? 0,
+                "escortY", escort?.positionY ?? 0,
+                "escortZ", escort?.positionZ ?? 0,
+                "playerCount", playerCount,
+                "allyCount", allyCount,
+                "monsterCount", monsterCount,
+                "playerDistance", playerDistance,
+                "waypointIndex", waypointIndex,
+                "waypointDistance", waypointDistance,
+                "nearLive", nearLive,
+                "anyEngaged", anyEngaged);
+        }
+
         public static LuaScript LoadGlobals(LuaScript script = null)
         {
             script = script ?? new LuaScript();

@@ -393,6 +393,7 @@
             <ComboBox x:Name="GraphicsTargetBox" Grid.Row="3" Grid.Column="1" Grid.ColumnSpan="2" SelectedIndex="0" SelectionChanged="ClientLaunchSettings_SelectionChanged">
               <ComboBoxItem>Wine default (recommended)</ComboBoxItem>
               <ComboBoxItem>OpenGL threaded (experimental)</ComboBoxItem>
+              <ComboBoxItem x:Name="DxvkGraphicsTargetItem" IsVisible="False">DXVK / Vulkan (validated)</ComboBoxItem>
             </ComboBox>
 
             <TextBlock Grid.Row="4" Text="Version" VerticalAlignment="Center" />

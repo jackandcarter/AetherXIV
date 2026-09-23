@@ -1,5 +1,4 @@
 using System;
-using System.Globalization;
 using AetherXIV.Core.Map.Actors;
 
 namespace AetherXIV.Core.Map.actors.area
@@ -51,6 +50,6 @@ namespace AetherXIV.Core.Map.actors.area
         }
 
         public static string BuildPlayerSignal(string signal, uint playerActorId) =>
-            signal + ":" + playerActorId.ToString(CultureInfo.InvariantCulture);
+            ContentSignalPolicy.BuildPlayerSignal(signal, playerActorId);
     }
 }

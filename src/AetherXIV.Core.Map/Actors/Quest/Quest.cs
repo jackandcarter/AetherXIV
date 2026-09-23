@@ -210,7 +210,7 @@ namespace AetherXIV.Core.Map.Actors
                 "oldPhase", oldPhase,
                 "newPhase", currentPhase);
             if (sendJournalUpdate)
-                owner.SendGameMessage(Server.GetWorldManager().GetActor(), 25116, 0x20, (object)GetQuestId());
+                owner.SendGameMessage(Server.GetWorldManager().GetActor(), 25116, 0x20, (object)(int)GetQuestId());
             SaveData();
             questState.UpdateState();
         }
@@ -283,7 +283,7 @@ namespace AetherXIV.Core.Map.Actors
         public void DoAbandon()
         {
             LuaEngine.GetInstance().CallLuaFunctionForReturn(owner, this, "onAbandonQuest", true);
-            owner.SendGameMessage(owner, Server.GetWorldManager().GetActor(), 25236, 0x20, (object)GetQuestId());
+            owner.SendGameMessage(owner, Server.GetWorldManager().GetActor(), 25236, 0x20, (object)(int)GetQuestId());
         }
 
         public void SetENpc(
@@ -410,12 +410,16 @@ namespace AetherXIV.Core.Map.Actors
                 "npcClassId", npc.GetActorClassId(),
                 "npcActor", String.Format("0x{0:X}", npc.actorId),
                 "hook", hook);
+            // Quest hooks receive the same event-name contract as the generic
+            // event dispatcher. Emote quests use this condition name to
+            // distinguish emoteDefault1..6; eventType only selects the hook.
             LuaEngine.GetInstance().CallLuaFunction(
                 player ?? owner,
                 this,
                 hook,
                 false,
-                npc);
+                npc,
+                start.eventName);
             return true;
         }
 
@@ -430,8 +434,8 @@ namespace AetherXIV.Core.Map.Actors
             List<LuaParam> returned = LuaEngine.GetInstance().CallLuaFunctionForReturn(owner, this, "isObjectivesComplete", true);
             if (returned != null && returned.Count >= 1 && returned[0].typeID == 3)
             {
-                owner.SendDataPacket("attention", Server.GetWorldManager().GetActor(), "", 25225, (object)GetQuestId());
-                owner.SendGameMessage(Server.GetWorldManager().GetActor(), 25225, 0x20, (object)GetQuestId());
+                owner.SendDataPacket("attention", Server.GetWorldManager().GetActor(), "", 25225, (object)(int)GetQuestId());
+                owner.SendGameMessage(Server.GetWorldManager().GetActor(), 25225, 0x20, (object)(int)GetQuestId());
             }
         }
 

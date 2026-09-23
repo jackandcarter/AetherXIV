@@ -8,9 +8,9 @@ diagnostics, and a loopback-only development bridge.
 This document describes the development contract and bundled base runtime
 distributed with AetherXIV:
 
-- Umbra API: `2.0` (the currently shipped API contract)
-- Framework implementation: read the package receipt; do not infer a 2.1 API
-  version from the AetherXIV product version.
+- Umbra API: `2.1` in this source tree; API 2.0 plugins remain supported.
+- Framework implementation: `2.1.0`. Previously installed bundles may still
+  provide API 2.0; check the package receipt before using new contracts.
 - Plugin target framework: `net10.0-windows` (managed IL, x86 client compatible)
 - Recognized client: Final Fantasy XIV 1.23b build `2012.09.19.0001`, x86
 
@@ -45,7 +45,7 @@ notification opens the existing **Updates** tab.
 | Project | Purpose |
 |---|---|
 | `Aether.Umbra.PluginApi` | Stable contracts referenced by third-party plugins |
-| `Aether.Umbra.Sdk` | MSBuild SDK that applies and validates the Umbra 2.0 plugin build contract |
+| `Aether.Umbra.Sdk` | MSBuild SDK that applies and validates the Umbra 2.1 plugin build contract |
 | `Aether.Umbra.Framework` | Bundled base runtime, services, plugin manager, repositories, and development tools |
 | `Aether.Umbra.Bootstrap` | Native x86 DirectX 9/Win32 bootstrap loaded into the client |
 | `Aether.Umbra.SamplePlugin` | Buildable API 2.0 example plugin |
@@ -63,7 +63,7 @@ The bundled developer archive contains both `Aether.Umbra.Sdk` and
 restore those packages from the archive's local `nuget` directory:
 
 ```xml
-<Project Sdk="Aether.Umbra.Sdk/2.0.0">
+<Project Sdk="Aether.Umbra.Sdk/2.1.0">
   <PropertyGroup>
     <AssemblyName>Example.Umbra.Plugin</AssemblyName>
   </PropertyGroup>
@@ -177,6 +177,9 @@ compatibility requires the installed version to meet the declared minimum.
 | `commands.register` | `IUmbraCommandManager` | Register and dispatch plugin slash commands |
 | `chat.print` | `IUmbraChat` | Print tagged plugin text through a verified adapter |
 | `chat.submit` | `IUmbraChat` | Submit chat input through a verified adapter |
+| `client.map.read` | `IUmbraMapService` | Read the current verified map pin in world X/Z |
+| `travel.preview` | `IUmbraTravelService` | Request server-resolved landing candidates |
+| `travel.warp` | `IUmbraTravelService` | Execute a preview candidate; also requires `travel.preview` |
 | `client.appearance.read` | `IUmbraActorAppearanceService` | Read immutable observed appearance snapshots |
 
 `GetService<T>()` returns `null` when the required capability was not declared.
@@ -185,6 +188,19 @@ Chat can be partially granted: print without submit, or submit without print.
 The values `ui.draw` and `configuration` are accepted as descriptive manifest
 capabilities, but drawing and the plugin config directory are supplied through
 the base lifecycle rather than a gated service.
+
+### Map travel (development)
+
+The Map Travel plugin and API contracts are implemented, but the native map
+selection adapter and authenticated server travel transport are not connected.
+Service availability remains false until those bindings are supplied. See
+[Map Travel development](UMBRA_MAP_TRAVEL.md) for the boundary and remaining work.
+
+`IUmbraMapService.SelectedPin` contains zone/map/floor identity, world X/Z,
+a session identifier and a selection revision. It does not invent a height.
+`IUmbraTravelService.PreviewAsync` returns server-resolved positions and an
+expiring opaque token. `WarpAsync` accepts that token and a candidate ID, never
+an arbitrary client-provided elevation. Plugins need no SharpNav dependency.
 
 ## Plugin context
 

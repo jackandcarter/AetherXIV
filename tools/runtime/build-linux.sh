@@ -39,12 +39,20 @@ if [[ ! -f "${archive_path}" ]]; then
 fi
 echo "${SOURCE_SHA256}  ${archive_path}" | sha256sum --check
 
-for command in bison flex make gcc i686-w64-mingw32-gcc x86_64-w64-mingw32-gcc; do
+for command in bison flex make gcc i686-w64-mingw32-gcc x86_64-w64-mingw32-gcc pkg-config; do
   if ! command -v "${command}" >/dev/null 2>&1; then
     echo "Required Wine build tool is missing: ${command}" >&2
     exit 3
   fi
 done
+
+# Wine's Vulkan bridge is required for the native-DXVK renderer. Fail
+# during the authoritative runtime build instead of shipping a bundle that can
+# only discover the problem after a game launch.
+if ! pkg-config --exists vulkan || [[ ! -f "$(pkg-config --variable=includedir vulkan 2>/dev/null)/vulkan/vulkan.h" ]]; then
+  echo "Vulkan development files are required to build the Linux Wine runtime (pkg-config vulkan + vulkan/vulkan.h)." >&2
+  exit 4
+fi
 
 rm -rf "${source_parent}" "${build_root}" "${install_root}"
 mkdir -p "${source_parent}" "${build_root}" "${install_root}"
@@ -56,7 +64,9 @@ patch -d "${source_root}" -p1 --forward < "${PATCH_PATH}"
   "${source_root}/configure" \
     --prefix="${install_root}" \
     --enable-archs=i386,x86_64 \
-    --disable-tests
+    --disable-tests \
+    --with-vulkan \
+    --with-pulse
   make -j"$(nproc)"
   make install
 )

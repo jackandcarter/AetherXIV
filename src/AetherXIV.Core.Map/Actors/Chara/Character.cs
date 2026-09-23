@@ -870,12 +870,16 @@ namespace AetherXIV.Core.Map.Actors
             if (!(this is Player player))
                 return;
 
-            // Signals are emitted bare, matching the legacy Meteor contract and
-            // the Limsa/Uldah opening directors. The 2.0 build used to scope
-            // them per-player ("signal:<actorId>") inside the Gridania opening
-            // content only, which split the signal namespace from every other
-            // director; the Gridania director now waits on the same bare names
-            // the other openings use.
+            // Gridania's tutorial director uses player-scoped signals so one
+            // content instance cannot resume another player's coroutine.
+            // Preserve the legacy bare signal contract for non-Gridania paths.
+            if (zone is PrivateAreaContent contentArea &&
+                GridaniaOpeningTutorialPolicy.IsContentArea(contentArea.GetPrivateAreaName()))
+            {
+                lua.LuaEngine.GetInstance().OnSignal(contentArea.GetPlayerSignal(player, signal));
+                return;
+            }
+
             lua.LuaEngine.GetInstance().OnSignal(signal);
         }
 

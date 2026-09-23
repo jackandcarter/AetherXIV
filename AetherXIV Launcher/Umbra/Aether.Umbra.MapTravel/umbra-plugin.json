@@ -1,0 +1,20 @@
+{
+  "id": "dev.aetherxiv.umbra.map-travel",
+  "name": "Map Travel",
+  "version": "0.1.1",
+  "api_version": "2.1",
+  "entry": "Aether.Umbra.MapTravel.dll",
+  "entry_type": "Aether.Umbra.MapTravel.MapTravelPlugin",
+  "minimum_framework_version": "2.1.0",
+  "target_framework": "net10.0-windows",
+  "architecture": "x86",
+  "language": "CSharp",
+  "enabled": true,
+  "capabilities": [
+    "ui.draw",
+    "commands.register",
+    "client.map.read",
+    "travel.preview",
+    "travel.warp"
+  ]
+}

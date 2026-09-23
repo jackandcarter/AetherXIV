@@ -1834,6 +1834,31 @@ namespace AetherXIV.Core.Map
             if (openingQuest == null)
                 return false;
 
+            // An interrupted Gridania opening battle has no durable combat
+            // checkpoint. Never recreate SimpleContent30010 from a stale
+            // private-area record: its actors, director coroutine, and client
+            // tutorial state are all session-scoped. Return the player to the
+            // verified public Yda replay entrance instead. Phase 10 is the
+            // durable post-battle boundary and may use the existing
+            // post-battle recovery path below.
+            if (String.Equals(player.privateArea, "SimpleContent30010", StringComparison.Ordinal)
+                && openingQuest.GetPhase() < 10)
+            {
+                restoredArea = GetZone(166);
+                if (restoredArea == null)
+                    return false;
+
+                player.zoneId = 166;
+                player.privateArea = null;
+                player.privateAreaType = 0;
+                player.oldPositionX = player.positionX = 356.0f;
+                player.oldPositionY = player.positionY = 4.0f;
+                player.oldPositionZ = player.positionZ = -699.5f;
+                player.oldRotation = player.rotation = -2.6f;
+                reason = "incomplete-gridania-opening-reset-to-replay-entrance";
+                return true;
+            }
+
             if (openingQuest.GetPhase() >= 10)
             {
                 restoredArea = GetPrivateArea(postBattleZone, "PrivateAreaMasterPast", postBattleLevel);

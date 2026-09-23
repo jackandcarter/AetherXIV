@@ -2099,6 +2099,9 @@ namespace AetherXIV.Core.Map.Actors
                 "z", positionZ,
                 "rot", rotation);
 
+            if (zone is PrivateAreaContent contentArea)
+                contentArea.MarkContentWarpReady();
+
             // Re-arm the destination zone's quest ENPCs now that the client
             // finished loading and the zone-in actors are instantiated
             // (Garlemald handle_zone_in_complete tail). A sequence whose
@@ -2511,7 +2514,7 @@ namespace AetherXIV.Core.Map.Actors
                 return false;
             }
 
-            work.guildleveId[freeSlot] = (ushort)id;
+            work.ResetGuildleveSlot(freeSlot, (ushort)id);
             SendGameMessage(Server.GetWorldManager().GetActor(), 50152, 0x20, (object)id);
             SendGuildleveClientUpdate(freeSlot);
             TraceGuildleveAcceptance("regional", id, freeSlot, "accepted");
@@ -2552,7 +2555,7 @@ namespace AetherXIV.Core.Map.Actors
             int workSlot = freeSlot + playerWork.questGuildleve.Length;
             playerWork.questGuildleve[freeSlot] = actorId;
             questGuildleve[freeSlot] = actorId;
-            work.guildleveId[workSlot] = checked((ushort)compactId);
+            work.ResetGuildleveSlot(workSlot, checked((ushort)compactId));
 
             SendGameMessage(Server.GetWorldManager().GetActor(), 50152, 0x20, (object)id);
 
@@ -2560,13 +2563,17 @@ namespace AetherXIV.Core.Map.Actors
             propPacketUtil.AddProperty(String.Format("playerWork.questGuildleve[{0}]", freeSlot));
             propPacketUtil.NewTarget("work/guildleve");
             propPacketUtil.AddProperty(String.Format("work.guildleveId[{0}]", workSlot));
+            propPacketUtil.AddProperty(String.Format("work.guildleveDone[{0}]", workSlot));
+            propPacketUtil.AddProperty(String.Format("work.guildleveChecked[{0}]", workSlot));
             QueuePackets(propPacketUtil.Done());
 
             TraceGuildleveAcceptance("local", id, freeSlot, "accepted");
             return true;
         }
 
-        public void MarkGuildleve(uint id, bool abandoned, bool completed)
+        // The positional booleans are the client work flags, not reward-turn-in state.
+        // Captures set checked at activation and done at completion; cleared requires both.
+        public void MarkGuildleve(uint id, bool done, bool checkedLeve)
         {
             if (HasGuildleve(id))
             {
@@ -2574,9 +2581,10 @@ namespace AetherXIV.Core.Map.Actors
                 {
                     if (work.guildleveId[i] == id)
                     {
-                        work.guildleveChecked[i] = completed;
-                        work.guildleveDone[i] = abandoned;
-                        Database.MarkGuildleve(this, id, abandoned, completed);
+                        if (!Database.MarkGuildleve(this, id, done, checkedLeve))
+                            return;
+                        work.guildleveChecked[i] = checkedLeve;
+                        work.guildleveDone[i] = done;
                         SendGuildleveMarkClientUpdate(i);
                     }
                 }
@@ -2591,8 +2599,9 @@ namespace AetherXIV.Core.Map.Actors
                 {
                     if (work.guildleveId[i] == id)
                     {
-                        Database.RemoveGuildleve(this, id);
-                        work.guildleveId[i] = 0;
+                        if (!Database.RemoveGuildleve(this, id))
+                            return;
+                        work.ResetGuildleveSlot(i);
                         SendGuildleveClientUpdate(i);
                         break;
                     }
@@ -2641,8 +2650,8 @@ namespace AetherXIV.Core.Map.Actors
                     Server.GetWorldManager().GetActor(),
                     "",
                     25224,
-                    (object)instance.GetQuestId());
-                SendGameMessage(Server.GetWorldManager().GetActor(), 25224, 0x20, (object)instance.GetQuestId());
+                    (object)(int)instance.GetQuestId());
+                SendGameMessage(Server.GetWorldManager().GetActor(), 25224, 0x20, (object)(int)instance.GetQuestId());
             }
 
             instance.OnAccept();
@@ -2725,7 +2734,7 @@ namespace AetherXIV.Core.Map.Actors
                 questScenario,
                 playerWork.questScenario,
                 "quest-abandoned");
-            SendGameMessage(this, Server.GetWorldManager().GetActor(), 25236, 0x20, (object)quest.GetQuestId());
+            SendGameMessage(this, Server.GetWorldManager().GetActor(), 25236, 0x20, (object)(int)quest.GetQuestId());
             return true;
         }
 
@@ -3359,6 +3368,8 @@ namespace AetherXIV.Core.Map.Actors
         {
             ActorPropertyPacketUtil propPacketUtil = new ActorPropertyPacketUtil("work/guildleve", this);
             propPacketUtil.AddProperty(String.Format("work.guildleveId[{0}]", slot));
+            propPacketUtil.AddProperty(String.Format("work.guildleveDone[{0}]", slot));
+            propPacketUtil.AddProperty(String.Format("work.guildleveChecked[{0}]", slot));
             QueuePackets(propPacketUtil.Done());
         }
 

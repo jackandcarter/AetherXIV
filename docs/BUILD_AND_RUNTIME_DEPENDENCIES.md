@@ -100,6 +100,8 @@ Required:
 - A MinGW-w64 installation that provides `i686-w64-mingw32-g++`.
 - Bison and Flex for the automatic compatibility-runtime build (the Wine recipe
   under `tools/runtime/`).
+- Vulkan development files (`pkg-config`'s `vulkan` module and
+  `vulkan/vulkan.h`) for the Linux Wine Vulkan bridge.
 
 ## SteamOS build host
 
@@ -174,8 +176,15 @@ installation.
 - The checksum-pinned AetherXIV Compatibility Runtime included in the Launcher
   package. The Launcher does not download, detect, or select an alternate local
   Wine provider.
+- For the optional Linux DXVK target, the host must provide a working Vulkan
+  driver and loader. The bundled WoW64 runtime supplies Wine's Vulkan bridge and
+  the x86 DXVK D3D9 DLL; it does not bundle NVIDIA, AMD, or Intel kernel/user
+  space drivers.
 - Working host graphics drivers for the legacy x86 game client. The selected
-  amd64-wow64 Wine build does not require 32-bit Linux libraries.
+  amd64-wow64 Wine build does not require 32-bit Linux libraries for this
+  renderer path: the x86 game uses the x86 DXVK PE DLL, while Wine's x86_64
+  Unix `winevulkan` bridge loads the host x86_64 Vulkan loader. A real D3D9
+  device probe is still required before the Launcher exposes DXVK.
 
 Before prefix creation, the Launcher checks the bundled Linux compatibility
 runtime loader and its principal X11, audio, GStreamer, and Vulkan drivers with
@@ -208,6 +217,8 @@ Use official sources when installing build or runtime dependencies:
 - [MariaDB Community Server downloads](https://mariadb.org/download/)
 - [MariaDB installation guides](https://mariadb.com/docs/server/mariadb-quickstart-guides/installing-mariadb-server-guide)
 - [Avalonia Linux deployment dependencies](https://docs.avaloniaui.net/docs/deployment/linux)
+- [DXVK](https://github.com/doitsujin/DXVK)
+- [Khronos Vulkan Loader](https://github.com/KhronosGroup/Vulkan-Loader)
 
 Platform-specific build sources:
 

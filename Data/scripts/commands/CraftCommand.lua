@@ -52,7 +52,7 @@ confirmLeve()
 			* ?
 			* ?
 
-askContinueLocalLeve(localLeveID, craftedItem, itemsCompleted, craftTotal, attempts)
+askContinueLocalleve(localLeveID, craftedItem, itemsCompleted, craftTotal, attempts)
 	Desc: Opens the dialog to continue crafting for a local leve after an item was completed.
 	Params: * localLeveID			- The id of the current leve in progress.
 			* craftedItem			- The current crafted item id.
@@ -182,7 +182,7 @@ function onEventStarted(player, commandactor, triggerName, arg1, arg2, arg3, arg
     recipeDetail = 0;
     detailWindowState = 0;
     
-	craftJudge = GetStaticActor("CraftJudge");
+	local craftJudge = GetStaticActor("CraftJudge");
     callClientFunction(player, "delegateCommand", craftJudge, "loadTextData", commandactor);
     
     chosenOperation = -1;
@@ -242,7 +242,7 @@ function onEventStarted(player, commandactor, triggerName, arg1, arg2, arg3, arg
                     callClientFunction(player, "delegateCommand", craftJudge, "closeCraftStartWidget", commandactor);
                     isRecipeRecentSent = false;
                     isRecipeAwardSent = false;
-                    currentlyCrafting = startCrafting(player, chosenOperation, isRequested, 80, 100, 50); 
+                    currentlyCrafting = startCrafting(player, commandactor, craftJudge, chosenOperation, isRequested and chosenQuest or nil, 80, 100, 50);
                 end
             end
 
@@ -252,7 +252,7 @@ function onEventStarted(player, commandactor, triggerName, arg1, arg2, arg3, arg
                 isRecipeRecentSent = false;
                 isRecipeAwardSent = false;                    
                 
-                local questConfirmed, returnedQuest = GetCraftQuest(player, craftjudge, commandactor);
+                local questConfirmed, returnedQuest = GetCraftQuest(player, craftJudge, commandactor);
                 chosenQuest = tonumber(returnedQuest);
                 
                 if debugMessage then player:SendMessage(0x20, "", "[DEBUG] Chosen Quest: "..tostring(chosenQuest)); end
@@ -293,7 +293,7 @@ function onEventStarted(player, commandactor, triggerName, arg1, arg2, arg3, arg
         end
     end
     
-    player:ChangeMusic(7); -- Need way to reset music back to the zone's default
+    player:ChangeMusic(player:GetZone().bgmDay); -- Restore the current zone through the existing music path.
     player:ChangeState(0);
     player:EndEvent();
 	
@@ -303,7 +303,7 @@ end
 
 -- Handles the menus to pick a crafter quest or local leve quest that run separate widgets from the Start command.
 -- Returns whether a quest was selected, and what id the quest is.
-function GetCraftQuest(player, craftjudge, commandactor);
+function GetCraftQuest(player, craftJudge, commandactor);
 
     local questOffset = 0xA0F00000;
     local questId = 0;
@@ -369,7 +369,7 @@ end
 
 
 -- No real logic in this function.  Just smoke and mirrors to 'see' the minigame in action at the minimum level.
-function startCrafting(player, hand, quest, startDur, startQly, startHQ)
+function startCrafting(player, commandactor, craftJudge, hand, quest, startDur, startQly, startHQ)
     
     local worldMaster = GetWorldMaster();
     local craftProg = 0;
@@ -400,9 +400,9 @@ function startCrafting(player, hand, quest, startDur, startQly, startHQ)
             callClientFunction(player, "delegateCommand", craftJudge, "closeCraftProgressWidget", commandactor);
             
             if quest then
-                continueLeve = callClientFunction(player, "delegateCommand", craftJudge, "askContinueLocalLeve", 120001, itemId, craftedCount, craftTotal, attempts);
+                continueLeve = callClientFunction(player, "delegateCommand", craftJudge, "askContinueLocalleve", commandactor, quest, itemId, craftedCount, craftTotal, attempts);
 
-                if continueLeve == true then
+                if continueLeve == 1 then
                     craftProg = 0;
                     callClientFunction(player, "delegateCommand", craftJudge, "openCraftProgressWidget", commandactor, startDur, startQly, startHQ);
                 else

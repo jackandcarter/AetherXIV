@@ -121,6 +121,10 @@ require_compatibility_runtime() {
     echo "Linux compatibility runtime has the wrong platformRid: ${COMPATIBILITY_RUNTIME_ROOT}" >&2
     exit 40
   fi
+  # Audit both freshly built and externally supplied runtime packages. This
+  # prevents a stale AETHERXIV_WINE_RUNTIME_ROOT from silently shipping without
+  # Wine's Vulkan bridge or the pinned x86 DXVK D3D9 payload.
+  bash "${ROOT_DIR}/tools/runtime/audit-linux-bundle.sh" "${COMPATIBILITY_RUNTIME_ROOT}"
 }
 
 require_mingw_x86() {

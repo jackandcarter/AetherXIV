@@ -109,8 +109,24 @@ regression.
 
 AetherXIV does not supply Square Enix patches. Select a user-provided folder
 containing `ffxiv_patches`, or the `ffxiv_patches` folder itself. Validate the
-library before **Apply Patches**. Do not interrupt an active patch operation;
-use **Cancel** when available and retain its log if it fails.
+library before **Apply Patches**. The helper selects the remaining boot and game
+patches from the installed version files; older, already completed patch archives
+are not required to resume.
+
+Each archive is applied as a recoverable operation. Files replaced or deleted by
+the active archive are retained until its contents and version checkpoint commit.
+**Cancel** or an apply failure restores that archive's changes. Earlier completed
+archives remain installed. After a launcher crash, choose **Apply Patches** again
+to recover the interrupted archive before continuing. Keep the client closed
+while patching, and do not remove `.aetherxiv-patch-transaction` while it exists.
+If a file lock or permissions problem prevents recovery, close the game, correct
+the access problem, and retry; the helper keeps the recovery backups.
+
+For failures, retain `.aetherxiv-patch.log` from the client folder and the Launcher
+log. The persistent patch log includes the archive, failing file (when available),
+exception details, and rollback outcome. A completed patch verifies the files it
+changes; it does not reconstruct missing base-install files absent from the patch
+archives.
 
 ### FFXIV Settings
 
@@ -200,8 +216,11 @@ persistent-environment guidance path because changing its immutable system
 image would not survive an operating-system update.
 
 The default **Wine default** target leaves graphics selection to the bundled
-compatibility runtime. AetherXIV does not expose a custom Wine command,
-provider selector, or Vulkan graphics target for the legacy DirectX 9 client.
+compatibility runtime. On Linux x64, the Launcher may additionally show
+**DXVK / Vulkan (validated)** after its cached capability snapshot matches the
+runtime payload and a real x86 D3D9 device probe succeeds. The target is hidden
+on macOS, Windows, and unsupported Linux architectures. AetherXIV does not
+expose a custom Wine command or provider selector.
 
 The 2.1 package uses the bundled compatibility runtime for macOS, Linux, and
 SteamOS. Its release branding and exact source revision are recorded in the

@@ -165,6 +165,11 @@ shopInfo = {
 [1600087] = {258, -8, 1, 5093},
 [1600088] = {259, -8, 1, 5099},
 [1600089] = {260, -8, 1, 5105},
+
+-- D'bhonja's five-entry Gridania botanist starter shop.
+-- Pack 5105 is the client-facing 2025001-2025005 range; the sixth slot is
+-- intentionally unused because the retail shop contains five purchases.
+
 [1600090] = {261, -8, 1, 5111},
 [1600092] = {263, -8, 0, 2024},
 [1600093] = {264, -8, 0, 1021},
@@ -422,7 +427,7 @@ shopRange = {  --shopRangeStart, shopRangeEnd
 [5102] = {2024301, 2024304};
 [5103] = {2024401, 2024404};
 [5104] = {2024501, 2024504};
-[5105] = {2025001, 2025006};
+[5105] = {2025001, 2025005};
 [5106] = {2025101, 2025104};
 [5107] = {2025201, 2025204};
 [5108] = {2025301, 2025304};

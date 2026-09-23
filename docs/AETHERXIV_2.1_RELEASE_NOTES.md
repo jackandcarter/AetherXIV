@@ -49,7 +49,9 @@ by itself identify an upstream Wine revision.
   explicit recovery action.
 - **Wine default** is the normal graphics target on compatibility-runtime
   hosts. The previous redundant OpenGL-compatibility value is normalized to
-  Wine default. **OpenGL threaded** remains experimental.
+  Wine default. **OpenGL threaded** remains experimental. Linux x64 builds may
+  show **DXVK / Vulkan (validated)** only after the bundled x86 D3D9 probe
+  succeeds and its cached runtime/host fingerprint still matches.
 - Runtime validation reports unmet host prerequisites before launch. Dependency
   installation is explicit and platform-specific; builds and normal launches do
   not silently elevate privileges.
