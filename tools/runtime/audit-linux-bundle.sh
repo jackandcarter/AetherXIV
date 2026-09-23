@@ -32,6 +32,8 @@ fi
 require_file "lib/wine/i386-windows/winevulkan.dll"
 require_file "lib/wine/x86_64-windows/winevulkan.dll"
 require_file "lib/wine/x86_64-unix/winevulkan.so"
+require_file "lib/wine/x86_64-unix/ntdll.so"
+require_file "lib/wine/x86_64-unix/win32u.so"
 
 # Require both the Windows audio implementation and a Linux output backend.
 # FFXIV 1.23b creates the XAudio2 2.4 AudioReverb COM class.
@@ -46,10 +48,14 @@ if command -v ldd >/dev/null 2>&1; then
     if [[ ! -f "${target}" ]]; then
       continue
     fi
-    unresolved="$(ldd "${target}" 2>&1 | grep -F 'not found' || true)"
-    if [[ -n "${unresolved}" ]]; then
-      echo "ERROR: unresolved host libraries for ${target}:" >&2
-      echo "${unresolved}" >&2
+    # Wine loads these sibling modules itself. Standalone ldd needs the same
+    # directory to resolve ntdll.so and win32u.so; scope this to the audit only.
+    linkage_status=0
+    linkage="$(LD_LIBRARY_PATH="${runtime_root}/lib/wine/x86_64-unix${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" \
+      ldd "${target}" 2>&1)" || linkage_status=$?
+    if ((linkage_status != 0)) || [[ "${linkage}" == *"not found"* ]]; then
+      echo "ERROR: library audit failed for ${target} (ldd exit ${linkage_status}):" >&2
+      echo "${linkage}" >&2
       failures=$((failures + 1))
     else
       echo "OK: host linkage ${target#"${runtime_root}/"}"

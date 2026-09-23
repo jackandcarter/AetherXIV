@@ -148,13 +148,10 @@ for required_path in \
   fi
 done
 
-if ldd "${runtime_root}/bin/wine" "${runtime_root}/bin/wineserver" "${runtime_root}/lib/wine/x86_64-unix/winevulkan.so" | grep -Fq 'not found'; then
-  echo "The packaged Linux runtime has unresolved host libraries." >&2
-  ldd "${runtime_root}/bin/wine" "${runtime_root}/bin/wineserver" >&2 || true
-  exit 9
-fi
-"${runtime_root}/bin/wine" --version | grep -Fq 'wine-11.0'
+# The shared audit resolves Wine's internal Unix libraries from this bundle
+# and reports the complete failing linkage output.
 bash "${ROOT_DIR}/tools/runtime/audit-linux-bundle.sh" "${runtime_root}"
+"${runtime_root}/bin/wine" --version | grep -F 'wine-11.0' >/dev/null
 test -f "${runtime_root}/lib/wine/x86_64-windows/wow64cpu.dll"
 
 (

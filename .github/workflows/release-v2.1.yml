@@ -63,6 +63,9 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Verify Linux runtime audit behavior
+        run: python3 tools/Verification/verify-linux-runtime-audit.py
+
       - name: Verify public release source
         run: ./tools/Development/verify-aetherxiv.sh
 
