@@ -25,10 +25,12 @@ internal sealed class PatchTransaction
     private readonly string root;
     private readonly string journal;
     private int sequence;
+    private readonly CancellationToken cancellationToken;
 
-    public PatchTransaction(string root)
+    public PatchTransaction(string root, CancellationToken cancellationToken = default)
     {
         this.root = root;
+        this.cancellationToken = cancellationToken;
         journal = Path.Combine(root, JournalName);
         Directory.CreateDirectory(journal);
     }
@@ -60,11 +62,11 @@ internal sealed class PatchTransaction
                 else if (record.Kind == "created-file")
                 {
                     if (File.Exists(target))
-                        File.Delete(target);
+                        PatchFileOperations.RetrySharingViolation(() => File.Delete(target));
                 }
                 else if (record.Kind == "file" && File.Exists(backup))
                 {
-                    File.Move(backup, target, true);
+                    PatchFileOperations.RetrySharingViolation(() => File.Move(backup, target, true));
                 }
                 else if (record.Kind == "directory" && Directory.Exists(backup))
                 {
@@ -117,7 +119,7 @@ internal sealed class PatchTransaction
     public void ReplaceFile(string temporaryPath, string path)
     {
         Preserve(path, directory: false);
-        File.Move(temporaryPath, path, true);
+        PatchFileOperations.RetrySharingViolation(() => File.Move(temporaryPath, path, true), cancellationToken);
     }
 
     public void DeleteFile(string path) => Preserve(path, directory: false);
@@ -133,7 +135,7 @@ internal sealed class PatchTransaction
             if (directory)
                 Directory.Move(path, backup);
             else
-                File.Move(path, backup);
+                PatchFileOperations.RetrySharingViolation(() => File.Move(path, backup), cancellationToken);
         }
     }
 

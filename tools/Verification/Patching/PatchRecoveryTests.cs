@@ -194,6 +194,46 @@ public sealed class PatchRecoveryTests : IDisposable
     }
 
     [Fact]
+    public void TerminalDeletionAcceptsDifferentHistoricalSourceSize()
+    {
+        // The old shipped helper required this file to match the historical
+        // source size (100 in Entry), although no delta is applied to it.
+        string path = Path.Combine(root, "obsolete.dat");
+        File.WriteAllText(path, "older source");
+        WritePatch(Entry("obsolete.dat", "", delete: true));
+        LegacyPatchApplier.ApplyPatchFile(root, patch);
+        Assert.False(File.Exists(path));
+        Assert.False(Directory.Exists(Path.Combine(root, ".aetherxiv-patch-transaction")));
+    }
+
+    [WindowsFileLockFact]
+    public async Task PatchingWaitsForTemporaryWindowsFileLock()
+    {
+        string path = Path.Combine(root, "old.dat");
+        File.WriteAllText(path, "original");
+        WritePatch(Entry("old.dat", "replacement"));
+        using var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Task apply = Task.Run(() => LegacyPatchApplier.ApplyPatchFile(root, patch));
+        await Task.Delay(250);
+        held.Dispose();
+        await apply.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal("replacement", File.ReadAllText(path));
+        Assert.False(Directory.Exists(Path.Combine(root, ".aetherxiv-patch-transaction")));
+    }
+
+    [WindowsFileLockFact]
+    public void PersistentWindowsFileLockLeavesOriginalIntact()
+    {
+        string path = Path.Combine(root, "old.dat");
+        File.WriteAllText(path, "original");
+        WritePatch(Entry("old.dat", "replacement"));
+        using var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Assert.Throws<IOException>(() => LegacyPatchApplier.ApplyPatchFile(root, patch));
+        Assert.Equal("original", File.ReadAllText(path));
+        Assert.False(Directory.Exists(Path.Combine(root, ".aetherxiv-patch-transaction")));
+    }
+
+    [Fact]
     public void CreatesEmptyFiles()
     {
         WritePatch(Entry("empty.dat", ""));

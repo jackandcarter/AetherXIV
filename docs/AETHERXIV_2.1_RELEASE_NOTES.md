@@ -214,3 +214,13 @@ separate publication gates.
   1.23b quest, crafting, battle, NPC, or damage-formula parity.
 - Final artifact receipts must identify the exact bundled runtime revision,
   package hashes, signing state, and notarization/signing verification.
+
+## September 23 runtime and patching update
+
+- Linux and SteamOS include pinned DXVK 3.1.1 for D3D9. The launcher exposes the Vulkan renderer after a capability probe, preserves the selected renderer, and retries failed capability checks after their short cache period.
+- Linux Wine builds now require Vulkan and PulseAudio support. Package audits check the Vulkan bridge, XAudio2 2.4/reverb-related modules, audio backend, and shared-library dependencies.
+- Runtime packaging verifies the DXVK binary archive and separately pinned license. Fixed GNU tar broken-pipe validation and bundled Wine library resolution during audits.
+- Client patching no longer rejects terminal deletions because an installed file differs from historical source metadata. Transactional recovery, archive integrity checks, and version checkpoints protect interrupted patching.
+- Temporary Windows sharing/lock violations are retried up to five times with one-second delays. Cancellation remains supported; other I/O errors fail immediately.
+
+The reported Linux XAudio2 reverb startup crash and in-game audio/performance still require desktop validation; successful builds and module audits do not establish those issues are resolved.

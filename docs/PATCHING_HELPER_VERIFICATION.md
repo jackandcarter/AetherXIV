@@ -95,3 +95,39 @@ AETHERXIV_PATCH_SAMPLES="$PWD/bin/patch-verification/samples" \
 The audit emits small local patch samples and `summary.json` under the supplied
 output directory. Keep retail samples out of source control. The two integration
 tests are explicitly skipped unless their environment variables are supplied.
+
+## Follow-up investigation — 2026-09-23
+
+Compared the helper shipped at `22c01af` with the current implementation using
+an independently extracted record from retail `D2010.09.19.0000.patch` and a
+disposable fixture containing an older/different source file. The shipped helper
+fails with:
+
+```text
+File scheduled for deletion differs from the patch source for
+client/chara/pc/c001/equ/e900/dwn_mdl/0001: expected size 1232, got 36.
+```
+
+The current helper applies the same sample successfully. This is a controlled
+reproduction, not the affected user's exact error. It demonstrates that validating
+the historical source size before a terminal deletion was an incompatible added
+restriction. Seventh Umbral's original implementation skips bodyless records;
+it does not impose this source-size check. Current AetherXIV performs terminal
+deletions with rollback protection and without that historical-size restriction.
+The correction is already on branch `2.1` and in the pending Linux test build.
+
+Re-audited all 52 local retail archives: all sizes and CRC32 values match the
+launcher manifest; all 308,090 entries pass the independent chunk/payload audit.
+Added the synthetic regression test
+`TerminalDeletionAcceptsDifferentHistoricalSourceSize`.
+
+The existing tracked suite on branch `2.1` also passed on Linux, Windows and macOS:
+https://github.com/jackandcarter/AetherXIV/actions/runs/35898793077
+Retail files are not supplied to that CI run. No installed client was modified.
+The exact affected-user message is still needed to distinguish this deletion
+failure from archive-size validation or decompressed-output-size failures.
+
+Local opt-in verification finished with **31 passed, 0 failed, 0 skipped**,
+including 278 sampled records spanning every archive and the complete boot/final-game
+archive checkpoint/cancellation/resume tests. This does not constitute a full
+retail-base-to-target installation test.

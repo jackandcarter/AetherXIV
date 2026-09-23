@@ -238,7 +238,7 @@ public static class LegacyPatchApplier
         Action<PatchTransaction>? finish = null)
     {
         PatchTransaction.Recover(root);
-        PatchTransaction transaction = new(root);
+        PatchTransaction transaction = new(root, cancellationToken);
         Log(root, $"Starting {Path.GetFileName(patchPath)} on {System.Runtime.InteropServices.RuntimeInformation.OSDescription}.");
         try
         {
