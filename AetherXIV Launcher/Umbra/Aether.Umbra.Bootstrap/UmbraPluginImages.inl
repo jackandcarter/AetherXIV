@@ -74,7 +74,7 @@ namespace PluginImages
         if (index == count)
         {
             if (count == 128) return false;
-            wcscpy(cache[count].path, path);
+            if (wcscpy_s(cache[count].path, _countof(cache[count].path), path) != 0) return false;
             cache[count++].texture = Load(path);
         }
         if (!cache[index].texture) return false;
