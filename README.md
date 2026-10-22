@@ -3,11 +3,15 @@
 AetherXIV restores the Final Fantasy XIV 1.23b experience through Core, Launcher,
 and the optional Umbra plugin framework.
 
-**2.1.2 · Build 22044 is being staged privately for release review.**
+**Current release: 2.1.2 · Build 22044.**
 See the [full release notes](docs/AETHERXIV_2.1.2_RELEASE_NOTES.md) for restored
 quests, battle and navigation improvements, server maintenance, and known limits.
 
 ## Downloads
+
+Open [Releases](https://github.com/jackandcarter/AetherXIV/releases) for the
+platform binaries. Downloads currently require access to this private repository.
+See [download selection and checksum verification](docs/DOWNLOADS.md) before installing.
 
 The release provides three downloads for each platform:
 
@@ -45,6 +49,24 @@ Launcher packages include the verified Umbra framework and, on macOS/Linux,
 the matching AetherXIV compatibility runtime. Windows runs the client natively.
 Factory is separately installable and is not bundled.
 
+## Documentation
+
+Start with the [documentation index](docs/README.md) or choose your platform:
+
+| Windows | macOS | Linux | SteamOS |
+|---|---|---|---|
+| [Install and dependencies](docs/setup/WINDOWS.md) | [Install and dependencies](docs/setup/MACOS.md) | [Install and dependencies](docs/setup/LINUX.md) | [Install and dependencies](docs/setup/STEAMOS.md) |
+
+- [Core guide](docs/AETHERXIV_CORE_GUIDE.md): services, maintenance, character recovery, backups, and realm status.
+- [Launcher guide](docs/LAUNCHER_GUIDE.md): server profiles, client and runtime validation, graphics, and Umbra.
+- [Database setup and migration](docs/DATABASE_SETUP_AND_MIGRATION.md), [hosted servers](docs/HOSTED_SERVER.md), and [runtime requirements](docs/BUILD_AND_RUNTIME_DEPENDENCIES.md).
+- [Using Umbra](docs/umbra/USING_UMBRA.md) and [Factory](docs/umbra/FACTORY.md).
+- [Plugin SDK quickstart](docs/UMBRA_SDK.md) and [API reference](docs/umbra/PLUGIN_DEVELOPMENT.md), including UI, diagnostics, resource loading, and appearance services.
+- [Troubleshooting and bug reports](docs/DEBUGGING_AND_BUG_REPORTING.md).
+
+Plugin authors can use the public API DLL shipped with Launcher. This repository
+provides SDK documentation and examples; it does not add a separate SDK download.
+
 ## Integrity and support
 
 `SHA256SUMS.txt` covers all 12 application archives and the dependency lock.
@@ -56,6 +78,11 @@ Core or Launcher logs. Remove passwords, account details and other private data
 before sharing logs. Restoration remains ongoing; see the release notes for
 features that are incomplete or disabled by default.
 
-This repository holds release documentation and binary downloads. See the
+This repository holds release documentation and binary downloads. Core, Launcher,
+Umbra, and compatibility-runtime implementation source stays in the private
+development repositories. GitHub's automatic **Source code** archives are snapshots
+of this documentation repository; they do not contain those implementations.
+
+The game client and extracted game assets are not distributed here. See the
 included [license](LICENSE), [third-party notices](THIRD_PARTY_NOTICES.md), and
 [trademark notice](TRADEMARKS.md).
