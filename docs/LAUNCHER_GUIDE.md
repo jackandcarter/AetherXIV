@@ -5,9 +5,19 @@ AetherXIV Launcher validates and configures a user-owned Final Fantasy XIV
 runtimes, and optionally installs Umbra. It is a graphical application and does
 not expose a shell or terminal window during normal launch.
 
+Screenshots below show the macOS interface with earlier `2.1` labels. This guide
+covers 2.1.2 build 22044. Local paths, news, status messages, and version strings
+in the images illustrate that installation; use your own validated paths and
+the status reported by your current release.
+
 ## Home
 
 The Home tab is the normal starting point after setup.
+
+![Launcher Home tab showing the image reel, news, account fields, readiness status, and Log In and Play](images/launcher/home.png)
+
+*Home brings together account login, news, and client/server readiness. In this
+example Launcher Services responds while the game services are offline.*
 
 - The image reel and its captions come from Launcher Services.
 - **Account** accepts the username and password used by the selected server.
@@ -28,6 +38,11 @@ or validation message before changing unrelated settings.
 ## Server
 
 Choose the destination that owns accounts, news, patches, and game services.
+
+![Launcher Server tab showing the Localhost preset and service, host, and port settings](images/launcher/server.png)
+
+*Localhost targets this computer. Preset-controlled fields are locked; choose
+Custom Server Setup when entering another operator's endpoints.*
 
 - **Localhost** targets AetherXIV Core on the same computer.
 - **Demi Dev Unit Developer Server** uses the maintained developer-service
@@ -52,6 +67,11 @@ hostname without `https://`; Lobby and World use their direct TCP ports. Patch
 Base URL can remain empty unless the operator hosts a real patch repository.
 
 ## Client
+
+![Launcher Client tab showing client selection, helper and graphics target, patch library, and validation controls](images/launcher/client.png)
+
+*Select your own client, validate it, and choose a patch library only when needed.
+Helper and graphics choices depend on the platform and validation results.*
 
 ### Select and validate the client
 
@@ -136,6 +156,11 @@ texture quality, background quality, and frame-rate cap. Existing configuration
 files are backed up when settings are saved.
 
 ## Umbra
+
+![Launcher Umbra tab showing framework enablement, safe mode, update-service availability, and Discord Rich Presence](images/launcher/umbra.png)
+
+*Launcher controls framework startup and Safe Mode. Individual plugins are
+installed and managed inside the game.*
 
 - **Enable Umbra for the FFXIV client** adds the verified framework to the
   launch sequence.

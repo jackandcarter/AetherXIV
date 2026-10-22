@@ -6,6 +6,10 @@ bundled framework.
 
 ## Enable the framework
 
+![Launcher Umbra settings for framework startup, safe mode, and Discord Rich Presence](../images/launcher/umbra.png)
+
+*macOS example with earlier 2.1 labels; the instructions here cover Umbra 2.1.2.*
+
 On Launcher's **Umbra** tab, enable Umbra and launch the supported 1.23b client.
 **Safe Mode** starts the framework without third-party plugins. The future
 official framework-update service is separate from the in-game Plugin Manager;

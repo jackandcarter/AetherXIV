@@ -7,9 +7,19 @@ Services without displaying a shell or terminal window.
 For a normal local installation, install MariaDB, open Core, verify the Config
 tab, and select **Start Stack**.
 
+Screenshots below were supplied from macOS and show the earlier `v2.1 / Build
+22043` header. This guide covers 2.1.2 build 22044. Paths, timestamps, backup
+entries, and realm names in the images are examples from that installation;
+your values will differ.
+
 ## Services
 
 The Services tab displays each service's state, process ID, and endpoint.
+
+![Core Services tab showing stopped services, character maintenance, backups, and realm status](images/core/services.png)
+
+*Services, Server Maintenance, Backups and Recovery, and Server Status in one tab.
+This example has the stack stopped and no character list loaded.*
 
 - **Start Stack** starts Map, World, Lobby, then Launcher Services.
 - **Stop Stack** stops the services in reverse order.
@@ -147,6 +157,11 @@ service folders, for example `servers/map/logs/<date>/map.log`.
 This tab manages database-backed content shown by Launchers connected to this
 server.
 
+![Core Launcher Services tab showing the news editor and reel-image captions](images/core/launcher-services.png)
+
+*Refresh Content connects to the configured database before you edit news posts
+or reel-image text. Publish scheduling uses UTC.*
+
 ### News posts
 
 Select **Refresh Content** to connect to the configured database. Create or edit
@@ -170,6 +185,12 @@ header and subtext with independent size and color. **Remove Text** removes the
 database caption, not the image file.
 
 ## Config
+
+![Core Config tab showing service paths, database settings, networking, and dependency verification](images/core/config.png)
+
+*Config groups paths, database settings, bind/advertise endpoints, and dependency
+checks. Packaged releases normally detect their own paths; do not copy the
+development paths shown here.*
 
 ### Paths
 
