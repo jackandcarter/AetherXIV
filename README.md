@@ -79,10 +79,13 @@ before sharing logs. Restoration remains ongoing; see the release notes for
 features that are incomplete or disabled by default.
 
 This repository holds release documentation and binary downloads. Core, Launcher,
-Umbra, and compatibility-runtime implementation source stays in the private
+Umbra, and compatibility-runtime implementation source stays in their respective
 development repositories. GitHub's automatic **Source code** archives are snapshots
 of this documentation repository; they do not contain those implementations.
 
 The game client and extracted game assets are not distributed here. See the
 included [license](LICENSE), [third-party notices](THIRD_PARTY_NOTICES.md), and
 [trademark notice](TRADEMARKS.md).
+
+
+Don't forget to join our Discord! https://discord.gg/sGBVQVVAMG
