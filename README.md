@@ -10,8 +10,7 @@ quests, battle and navigation improvements, server maintenance, and known limits
 ## Downloads
 
 Open [Releases](https://github.com/jackandcarter/AetherXIV/releases) for the
-platform binaries. Downloads currently require access to this private repository.
-See [download selection and checksum verification](docs/DOWNLOADS.md) before installing.
+platform binaries.
 
 The release provides three downloads for each platform:
 
